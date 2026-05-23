@@ -1,0 +1,134 @@
+# ⚠️ Defaults nas env vars (PG_PASS, WAHA_API_KEY) são pra DEV LOCAL apenas.
+#    Em produção, sobrescreva via .env (não commitado) — ver .env.example.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: mtrx-postgres
+    environment:
+      POSTGRES_DB: mtrx
+      POSTGRES_USER: mtrx
+      POSTGRES_PASSWORD: ${PG_PASS:-mtrx}
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mtrx", "-d", "mtrx"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: mtrx-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: mtrx-waha
+    ports:
+      - "3000:3000"
+    environment:
+      TZ: UTC
+      WAHA_DASHBOARD_ENABLED: "true"
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASH_USER:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASH_PASS:-admin}
+      WHATSAPP_API_KEY: ${WAHA_API_KEY:-mtrxsys-dev-key}
+      WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://api:8080/webhooks/waha}
+      WHATSAPP_HOOK_EVENTS: ${WAHA_HOOK_EVENTS:-message,message.any}
+      WHATSAPP_SWAGGER_USERNAME: ${WAHA_SWAGGER_USER:-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA_SWAGGER_PASS:-admin}
+    volumes:
+      - waha-sessions:/app/.sessions
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Api/Dockerfile
+    container_name: mtrx-api
+    ports:
+      - "5080:8080"
+    environment:
+      TZ: UTC
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+      Waha__WebhookCallbackUrl: "http://api:8080/webhooks/waha"
+      Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  dispatcher:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Dispatcher/Dockerfile
+    container_name: mtrx-dispatcher
+    environment:
+      TZ: UTC
+      DOTNET_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./src/mtrxsys-web
+      dockerfile: Dockerfile
+    container_name: mtrx-web
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cli:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Cli/Dockerfile
+    image: mtrxsys-cli:latest
+    environment:
+      TZ: UTC
+      DOTNET_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+    volumes:
+      - ./tmp:/work
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["tools"]
+
+volumes:
+  pgdata:
+  waha-sessions:

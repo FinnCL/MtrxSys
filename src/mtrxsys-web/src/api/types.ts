@@ -1,0 +1,136 @@
+export type WahaStatus = "Unknown" | "Stopped" | "Starting" | "ScanQrCode" | "Working" | "Failed";
+
+export type Stage = "Lead" | "Qualified" | "Proposal" | "Won" | "Lost";
+
+export const ALL_STAGES: Stage[] = ["Lead", "Qualified", "Proposal", "Won", "Lost"];
+
+export type Direction = "Inbound" | "Outbound";
+
+export interface Conversation {
+  id: string;
+  waChatId: string;
+  contactId: string | null;
+  title: string | null;
+  isGroup: boolean;
+  lastMessageAt: string | null;
+  lastMessagePreview: string | null;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  conversationId: string;
+  waMessageId: string;
+  direction: Direction;
+  authorPhone: string | null;
+  body: string;
+  timestamp: string;
+  mediaUrl: string | null;
+}
+
+export interface Contact {
+  id: string;
+  phoneE164: string;
+  name: string | null;
+  groupTag: string | null;
+  theme: string | null;
+  stage: Stage;
+  stageChangedAt: string | null;
+  optInAt: string | null;
+  optOutAt: string | null;
+  lastSentAt: string | null;
+}
+
+export interface ContactNote {
+  id: string;
+  contactId: string;
+  body: string;
+  createdAt: string;
+  createdByUserId: string;
+}
+
+export interface StageChange {
+  id: string;
+  fromStage: Stage | null;
+  toStage: Stage;
+  changedAt: string;
+  changedByUserId: string;
+}
+
+export interface Tag {
+  name: string;
+  color: string | null;
+  createdAt: string;
+}
+
+export interface ContactDetail {
+  contact: Contact;
+  notes: ContactNote[];
+  tags: string[];
+  stageHistory: StageChange[];
+}
+
+export interface ConversationWithMessages {
+  conversation: Conversation;
+  messages: ChatMessage[];
+}
+
+export interface LoginResponse {
+  accessToken: string;
+  expiresAt: string;
+  userId: string;
+  email: string;
+  displayName: string;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  participantsCount: number | null;
+}
+
+export interface ImportFailure {
+  participantId: string;
+  phone: string;
+  reason: string;
+}
+
+export interface ImportResult {
+  total: number;
+  imported: number;
+  duplicated: number;
+  failed: number;
+  failures: ImportFailure[];
+}
+
+export type MessageSlot = "Greeting" | "Intro" | "Hook" | "OptOut";
+
+export interface MessageTemplate {
+  id: string;
+  slot: MessageSlot;
+  contentSpintax: string;
+  active: boolean;
+}
+
+export interface DispatchFilter {
+  stage?: Stage;
+  tagName?: string;
+  groupTag?: string;
+}
+
+export interface DispatchStats {
+  pending: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+}
+
+export interface DispatchJob {
+  id: string;
+  contactId: string;
+  templateId: string;
+  status: "Pending" | "Sent" | "Failed" | "Skipped";
+  scheduledAt: string;
+  sentAt: string | null;
+  errorReason: string | null;
+}

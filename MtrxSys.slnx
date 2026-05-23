@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MtrxSys.Api/MtrxSys.Api.csproj" />
+    <Project Path="src/MtrxSys.Cli/MtrxSys.Cli.csproj" />
+    <Project Path="src/MtrxSys.Core/MtrxSys.Core.csproj" />
+    <Project Path="src/MtrxSys.Dispatcher/MtrxSys.Dispatcher.csproj" />
+    <Project Path="src/MtrxSys.Infrastructure/MtrxSys.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MtrxSys.Core.UnitTests/MtrxSys.Core.UnitTests.csproj" />
+    <Project Path="tests/MtrxSys.Dispatcher.IntegrationTests/MtrxSys.Dispatcher.IntegrationTests.csproj" />
+    <Project Path="tests/MtrxSys.Infrastructure.IntegrationTests/MtrxSys.Infrastructure.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

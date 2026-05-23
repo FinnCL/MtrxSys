@@ -1,0 +1,18 @@
+using MtrxSys.Core.Domain.Contacts;
+
+namespace MtrxSys.Core.Application.Abstractions;
+
+public interface IContactRepository
+{
+    Task<Contact?> GetByIdAsync(Guid id, CancellationToken ct);
+    Task<Contact?> GetByPhoneAsync(string e164, CancellationToken ct);
+    Task AddAsync(Contact contact, CancellationToken ct);
+    Task UpdateAsync(Contact contact, CancellationToken ct);
+    Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);
+}
+
+public sealed record ContactFilter(
+    ContactStage? Stage = null,
+    string? TagName = null,
+    string? GroupTag = null,
+    bool ExcludeOptedOut = true);

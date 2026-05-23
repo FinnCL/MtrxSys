@@ -1,0 +1,10 @@
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/.vs
+**/.idea
+**/.vscode
+**/.env
+**/.env.local
+.git

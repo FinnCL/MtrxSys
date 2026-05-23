@@ -1,0 +1,20 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- NU1903: System.Security.Cryptography.Xml advisory pending patch; transitive only, XML signing paths unused.
+         CA1000: static factory methods on Result<T> are an intentional Clean Arch pattern.
+         CA1716: VB keyword shadowing — irrelevant in a C#-only codebase.
+         CA1822: stubs throwing NotImplementedException trip "could be static"; rule is noisy during scaffolding. -->
+    <!-- CA1848: LoggerMessage source generators trade clarity for perf; not worth at this scale yet. Revisit if logging shows up in profiling.
+         CA1873: pair with CA1848 — uses string.Join/Stopwatch in log args; perf irrelevant at our scale. -->
+    <NoWarn>$(NoWarn);NU1903;CA1000;CA1716;CA1822;CA1848;CA1873</NoWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

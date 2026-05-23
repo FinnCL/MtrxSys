@@ -1,0 +1,47 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.coverage
+*.coveragexml
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# Node / Vite
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+.env.*.local
+
+# Docker
+docker-data/
+
+# OS
+Thumbs.db
+
+# CLI scratch volume
+tmp/
+
+# Secrets
+appsettings.Production.json
+appsettings.*.local.json
+
+# Claude Code state
+.claude/
+
+# Artefatos de sessão WAHA (contém token de pareamento)
+waha-qr.png
+*.qr.png
+
+# Saída de debug local
+test-results.txt
+*-error.log
+api-error.log
