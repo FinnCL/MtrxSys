@@ -40,16 +40,16 @@ export function ContactsScreen() {
       return;
     }
     setExpanded(tag);
-    if (!contactsByGroup[tag]) {
-      setLoadingGroup(tag);
-      try {
-        const list = await api.listContacts({ groupTag: tag });
-        setContactsByGroup((prev) => ({ ...prev, [tag]: list }));
-      } catch (ex) {
-        setError(ex instanceof Error ? ex.message : String(ex));
-      } finally {
-        setLoadingGroup(null);
-      }
+    // Sempre rebusca ao abrir (sem cache antigo), pra refletir status atualizado
+    // — ex.: contato que acabou de responder "sair" já aparece como Descartado.
+    setLoadingGroup(tag);
+    try {
+      const list = await api.listContacts({ groupTag: tag });
+      setContactsByGroup((prev) => ({ ...prev, [tag]: list }));
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setLoadingGroup(null);
     }
   }
 

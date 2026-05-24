@@ -16,6 +16,7 @@ public sealed class WebhookIngestionServiceTests
     private readonly IChatMessageRepository _messages = Substitute.For<IChatMessageRepository>();
     private readonly IContactRepository _contacts = Substitute.For<IContactRepository>();
     private readonly IContactStageChangeRepository _stageChanges = Substitute.For<IContactStageChangeRepository>();
+    private readonly IWahaClient _waha = Substitute.For<IWahaClient>();
     private readonly IUnitOfWork _uow = Substitute.For<IUnitOfWork>();
     private readonly IClock _clock = Substitute.For<IClock>();
 
@@ -28,6 +29,7 @@ public sealed class WebhookIngestionServiceTests
             _messages,
             _contacts,
             _stageChanges,
+            _waha,
             _uow,
             _clock,
             new MtrxSys.Core.Validation.BrazilPhoneValidator(),
@@ -107,6 +109,9 @@ public sealed class WebhookIngestionServiceTests
         await _conversations.Received(1).AddAsync(
             Arg.Is<Conversation>(c => c.WaChatId == "5511999998888@c.us" && !c.IsGroup),
             Arg.Any<CancellationToken>());
+        // Resposta normal (não "sair") NÃO dispara confirmação de saída.
+        await _waha.DidNotReceive().SendTextAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _messages.Received(1).AddAsync(
             Arg.Is<ChatMessage>(m =>
                 m.WaMessageId == "wa-new" &&
@@ -142,6 +147,36 @@ public sealed class WebhookIngestionServiceTests
         await _stageChanges.Received(1).AddAsync(
             Arg.Is<ContactStageChange>(c => c.ToStage == ContactStage.Lost),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Ingest_optout_via_lid_resolves_phone_and_opts_out()
+    {
+        var svc = BuildService();
+        _messages.GetByWaMessageIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((ChatMessage?)null);
+        _conversations.GetByWaChatIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Conversation?)null);
+        _contacts.GetByPhoneAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Contact?)null);
+        _waha.ResolveLidToPhoneE164Async("default", "91672436301905@lid", Arg.Any<CancellationToken>())
+            .Returns("+5511921404487");
+
+        Contact? captured = null;
+        _contacts.When(x => x.AddAsync(Arg.Any<Contact>(), Arg.Any<CancellationToken>()))
+            .Do(ci => captured = ci.Arg<Contact>());
+
+        var evt = new WahaWebhookEvent(
+            "message",
+            "default",
+            new WahaMessagePayload("wa-lid-sair", 1700000000, "91672436301905@lid", null, false, "SAIR", false, null, null));
+
+        await svc.IngestAsync(evt, CancellationToken.None);
+
+        // Resolveu o LID pro telefone real e marcou opt-out + Descartado.
+        captured.Should().NotBeNull();
+        captured!.Phone.E164.Should().Be("+5511921404487");
+        captured.OptOutAt.Should().NotBeNull();
+        captured.Stage.Should().Be(ContactStage.Lost);
+        // E enviou a confirmação de saída (uma vez) pro chat de origem.
+        await _waha.Received(1).SendTextAsync("default", "91672436301905@lid", Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

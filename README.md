@@ -1,6 +1,8 @@
 # MtrxSys
 
-Plataforma CRM no WhatsApp pra captura de leads via grupos, gestão de pipeline e disparo de campanhas com proteções anti-ban (Spintax, delay, typing simulado, warm-up, circuit breaker).
+Ferramenta de WhatsApp pra **salvar contatos de grupos** e **disparar mensagens em massa** com proteções anti-ban (Spintax, rodízio de mensagens, delay, typing simulado, warm-up, circuit breaker). Inclui **opt-out automático** ("SAIR"), classificação automática de quem respondeu e relatório de envios com exportação pra Excel.
+
+> Roda **só em localhost** via Docker Compose. Não foi pensado pra produção.
 
 ## Stack
 
@@ -104,38 +106,61 @@ Criado automaticamente no primeiro startup se a tabela `users` estiver vazia. JW
 
 ## Fluxo de uso
 
-1. **Login** em `http://localhost:5173`
+A UI tem 4 abas (aparecem só depois que o WhatsApp está conectado): **Chat · Grupos · Contatos · Disparo**.
+
+1. **Login** em `http://localhost:5173` (`admin@local` / `admin123!`).
 2. **Onboarding WhatsApp** — se a sessão WAHA não estiver `WORKING`, a UI mostra o QR direto na página (rotaciona a cada 20s). Escanear no celular: Aparelhos conectados → Conectar um aparelho.
-3. **Chat** — conversas chegam em tempo real via webhook (~5s de polling na UI). Botão "Sincronizar" no topbar puxa o histórico das últimas 50 mensagens por conversa.
-4. **Importação de contatos via grupos** — aba "Grupos" lista grupos que você participa; "Importar contatos" cadastra cada participante como `Contact` no CRM, marca com `GroupTag = nome do grupo`.
-5. **Pipeline CRM** — abrir conversa, no painel direito: stages (Lead → Qualified → Proposal → Won/Lost), tags customizáveis, notas livres, histórico de mudança de stage.
-6. **Campanhas** — aba "Campanhas":
-   - Criar template com Spintax: `{Oi|Olá}, {{name|amigo}}, {tudo bem?|td bem?}`
-   - Filtrar destinatários: por `stage`, `tag` ou `groupTag` (combinável)
-   - Disparar — engine de dispatch agenda envios com delay 45-75s entre eles, typing simulado, warmup gradual, circuit breaker
-   - Stats em tempo real: pendentes / enviados / falhas / pulados
+3. **Grupos** — lista os grupos que você participa. "Importar contatos" salva cada participante como `Contact`, marcado com `GroupTag = nome do grupo`. O **próprio número conectado é excluído** automaticamente, e participantes ocultos (`@lid`) sem telefone resolvível são pulados.
+4. **Contatos** — contatos agrupados por grupo (accordion). Mostra Nome / Telefone / Status e, pra quem deu opt-out, um botão **Reativar**. Cada grupo exporta pra **Excel** (.xlsx).
+5. **Disparo** — fluxo em etapas, pensado pra não dar tiro no pé:
+   - **Pote de mensagens (rodízio):** você cadastra várias mensagens; cada contato recebe **uma aleatória** do pote (com Spintax dentro de cada uma). Checkbox seleciona quais entram no rodízio.
+   - **Público:** "todos" ou "só quem respondeu".
+   - **Adicionar para disparar** → mostra **quantos** contatos entram e pede **confirmação** antes de enfileirar.
+   - **Iniciar envios** → o motor começa a enviar. Dá pra **Parar** (pausa) e retomar; ao retomar, continua só os que estão "Na fila".
+   - **Relatório** em tempo real (pendentes / enviados / falhas / pulados) com export pra **Excel** e botão **Renovar lista** (faz backup do relatório completo em .xlsx e zera os resultados pra recomeçar).
+6. **Chat** — serve de "está funcionando?": conversas chegam via webhook (polling de ~10s na UI). Botão "Sincronizar" no topo puxa histórico; além disso há **auto-sync a cada 60s** (não precisa clicar).
+
+### Classificação automática (funil)
+
+O contato anda no funil sozinho conforme o que acontece — os nomes internos (em inglês, esperados pela API) aparecem traduzidos na tela:
+
+| Interno  | Tela        | Quando                                              |
+|----------|-------------|-----------------------------------------------------|
+| Lead     | Novo        | recém-importado / criado                            |
+| Qualified| Respondeu   | o contato respondeu qualquer coisa (≠ "sair")       |
+| Proposal | Negociando  | manual                                              |
+| Won      | Cliente     | manual                                              |
+| Lost     | Descartado  | o contato pediu pra sair ("SAIR" etc.) → opt-out    |
+
+**Opt-out:** se a pessoa responder "sair" (e variações), ela é marcada como opt-out + "Descartado", recebe **uma** mensagem de confirmação e **não entra mais** em disparos. Funciona mesmo quando a resposta chega por `@lid` (número oculto) — o sistema resolve o LID pro telefone real via WAHA. O admin pode desfazer no botão **Reativar** (aba Contatos).
 
 ## Funcionalidades por área
 
-### CRM
+### Contatos / funil
 
 - `Contact` com `Phone E.164`, `Name`, `GroupTag`, `Theme`, `OptInAt`, `OptOutAt`, `LastSentAt`, `Stage` (Lead/Qualified/Proposal/Won/Lost), `StageChangedAt`
-- `ContactNote` (notas livres por contato, com `CreatedByUserId`)
-- `ContactTag` + `ContactTagAssignment` (tags customizáveis)
-- `ContactStageChange` (auditoria de mudanças de stage)
+- Importação por grupo: exclui o próprio número conectado e pula participantes sem telefone resolvível
+- Backfill de nome: contato importado sem nome ganha o nome público quando responde
+- Classificação automática no inbound (resposta → "Respondeu"; "SAIR" → opt-out + "Descartado")
+- `ContactNote` (notas livres), `ContactTag` + `ContactTagAssignment` (tags), `ContactStageChange` (auditoria de stage)
 - `Conversation` (chat agrupado por `waChatId`) + `ChatMessage` (idempotente por `WaMessageId`)
-- Tratamento correto de `@c.us` (telefone real), `@g.us` (grupo), `@lid` (identificador privado do WhatsApp)
+- Tratamento de `@c.us` (telefone real), `@g.us` (grupo) e `@lid` (número oculto) — o `@lid` é **resolvido pro telefone real** via WAHA pra casar com o contato no opt-out
 
 ### Disparo
 
+- **Rodízio de mensagens:** o disparo recebe um pote de templates (`TemplateIds[]`); cada contato sorteia uma mensagem (via `IRandomSource`)
+- **Fluxo em etapas:** preparar (enfileira, pausado) → revisar contagem → iniciar → parar/retomar → limpar fila
+- **Pausa manual (kill switch):** `SystemState.IsManuallyPaused`; o `DispatchEngine` checa no topo de cada ciclo e para
 - `SpintaxExpander` — `{a|b|{c|d}}` recursivo, escape `\{ \| \}`, depth 8, output 4 KB max
 - `MessageComposer` — Spintax + placeholders `{{name|default}}`, `{{phone}}`, `{{group}}`, `{{theme}}`
-- `DelayPolicy` — random uniforme entre `DelayMin/MaxSeconds`
+- `OptOutDetector` — detecta pedidos de saída em respostas curtas, ignorando frases longas
+- `DelayPolicy` — random uniforme entre `DelayMin/MaxSeconds` (45-75s)
 - `TypingSimulator` — typing proporcional ao texto com jitter
-- `WarmupManager` — curva [20, 40, 80, 150, 250, 400, 500] envios/dia
+- `WarmupManager` — curva de envios/dia configurável (`Warmup:Curve`); padrão do Dispatcher: `[20, 40, 80, 150, 250, 400, 500]`
 - `CircuitBreaker` — para em N falhas consecutivas, abre por X minutos
-- `DispatchEngine` — loop: breaker check → warmup check → dequeue → compose → typing → send → audit → delay
+- `DispatchEngine` — loop: pausa manual? → breaker check → warmup check → dequeue → compose → typing → send → audit → delay
 - `SendAuditEntry` — log de cada envio (telefone, texto renderizado, timings)
+- Relatório de envios (`/report`, `/status`) + export pra Excel (.xlsx) e "Renovar lista" (backup + zera)
 
 ### Auth
 
@@ -151,6 +176,8 @@ Criado automaticamente no primeiro startup se a tabela `users` estiver vazia. JW
 - Eventos capturados: `message`, `message.any`
 - Idempotência via lookup por `WaMessageId` antes de inserir
 - Concorrência tolerada via catch específico de `DbUpdateException 23505`
+- Inbound resolve telefone via `@c.us` ou `@lid` (traduzido pra E.164 via WAHA), classifica o contato e, se for opt-out novo, envia **uma** confirmação de saída (entregas duplicadas falham no `SaveChanges` antes do envio → confirmação sai só uma vez)
+- Auto-sync periódico (`WhatsAppAutoSyncService`, padrão 60s): o webhook só dispara em mensagens; entrar num grupo não gera mensagem, então o loop garante que o grupo apareça sem sync manual
 
 ## Configurações importantes (`appsettings.json`)
 
@@ -177,8 +204,8 @@ Veja `.env.example` na raiz. As principais são `WAHA_API_KEY`, `JWT_SIGNING_KEY
 
 - **Localhost only**. Não foi pensado pra produção — sem HTTPS, sem Docker Secrets, sem rate limit.
 - **WAHA Core ignora `WAHA_DASHBOARD_*`** — dashboard nativo do WAHA não loga com `admin/admin`. Use o MtrxSys.
-- **Privacidade do WhatsApp** — contatos com privacidade de número ativada aparecem como `@lid`; o MtrxSys mostra "Contato privado" em vez de inventar um número.
-- **Warmup começa em 20 envios/dia**. Pra liberar mais cedo, ajuste o array `Warmup:Curve` no `appsettings.json`.
+- **Privacidade do WhatsApp** — contatos com privacidade de número ativada aparecem como `@lid`; na importação eles são pulados (sem telefone real), mas em respostas o MtrxSys tenta resolver o LID pro telefone via WAHA pra não perder o opt-out.
+- **Warmup começa em 20 envios/dia**. Pra liberar mais cedo, ajuste o array `Warmup:Curve`. Atenção: a curva fica no `appsettings.json` de **cada serviço**; quem manda no envio é o **Dispatcher** (`src/MtrxSys.Dispatcher/appsettings.json`).
 
 ## Testes
 
@@ -192,5 +219,6 @@ Cobertura unitária:
 - `CircuitBreaker` (estados, transições)
 - `DelayPolicy` (range, bounds passados ao RNG)
 - `MessageComposer` (placeholders, fallback, Spintax + substituição)
-- `WebhookIngestionService` (idempotência, filtros, grupos vs 1:1)
+- `OptOutDetector` (comandos de saída vs frases longas)
+- `WebhookIngestionService` (idempotência, filtros, grupos vs 1:1, opt-out por palavra-chave, opt-out via `@lid` resolvido)
 - `Result<T>` (smoke tests)

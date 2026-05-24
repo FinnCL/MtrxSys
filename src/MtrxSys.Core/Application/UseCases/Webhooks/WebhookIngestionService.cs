@@ -14,6 +14,7 @@ public sealed class WebhookIngestionService(
     IChatMessageRepository messages,
     IContactRepository contacts,
     IContactStageChangeRepository stageChanges,
+    IWahaClient waha,
     IUnitOfWork uow,
     IClock clock,
     BrazilPhoneValidator phones,
@@ -60,40 +61,49 @@ public sealed class WebhookIngestionService(
 
         var now = clock.UtcNow;
         Guid? contactId = null;
+        var newlyOptedOut = false;
+        // Resolve o telefone real do remetente: direto (@c.us) ou traduzindo o LID (@lid,
+        // número oculto pelo WhatsApp) via WAHA. Sem isso, respostas que chegam por LID
+        // (cada vez mais comuns) não casariam com o contato — e o opt-out não funcionaria.
+        string? e164 = null;
         if (kind == WahaChatIdentifier.Kind.Individual)
         {
-            var e164 = WahaChatIdentifier.TryExtractPhoneE164(chatId);
-            if (e164 is not null)
+            e164 = WahaChatIdentifier.TryExtractPhoneE164(chatId);
+        }
+        else if (kind == WahaChatIdentifier.Kind.LinkedId)
+        {
+            e164 = await waha.ResolveLidToPhoneE164Async(dispatchOpts.Value.SessionId, chatId, ct);
+        }
+        if (e164 is not null)
+        {
+            var phone = phones.NormalizeTrusted(e164);
+            // O nome público (NotifyName) só vale quando é a pessoa que mandou (inbound).
+            var inboundName = p.FromMe == true ? null : p.NotifyName;
+            var contact = await contacts.GetByPhoneAsync(phone.E164, ct);
+            if (contact is null)
             {
-                var phone = phones.NormalizeTrusted(e164);
-                // O nome público (NotifyName) só vale quando é a pessoa que mandou (inbound).
-                var inboundName = p.FromMe == true ? null : p.NotifyName;
-                var contact = await contacts.GetByPhoneAsync(phone.E164, ct);
-                if (contact is null)
-                {
-                    contact = Contact.Create(
-                        id: Guid.NewGuid(),
-                        phone: phone,
-                        name: inboundName,
-                        groupTag: null,
-                        theme: null,
-                        optInAt: now);
-                    await contacts.AddAsync(contact, ct);
-                }
-                else
-                {
-                    // Backfill: se o contato veio sem nome (ex.: importado de grupo) e agora
-                    // respondeu, preenche com o nome público dele.
-                    contact.FillNameIfEmpty(inboundName);
-                    await contacts.UpdateAsync(contact, ct);
-                }
-                contactId = contact.Id;
+                contact = Contact.Create(
+                    id: Guid.NewGuid(),
+                    phone: phone,
+                    name: inboundName,
+                    groupTag: null,
+                    theme: null,
+                    optInAt: now);
+                await contacts.AddAsync(contact, ct);
+            }
+            else
+            {
+                // Backfill: se o contato veio sem nome (ex.: importado de grupo) e agora
+                // respondeu, preenche com o nome público dele.
+                contact.FillNameIfEmpty(inboundName);
+                await contacts.UpdateAsync(contact, ct);
+            }
+            contactId = contact.Id;
 
-                // Classificação automática quando o CONTATO respondeu (mensagem recebida).
-                if (p.FromMe != true)
-                {
-                    await ApplyInboundClassificationAsync(contact, p.Body, now, ct);
-                }
+            // Classificação automática quando o CONTATO respondeu (mensagem recebida).
+            if (p.FromMe != true)
+            {
+                newlyOptedOut = await ApplyInboundClassificationAsync(contact, p.Body, now, ct);
             }
         }
 
@@ -142,30 +152,54 @@ public sealed class WebhookIngestionService(
         conversation.TouchLastMessage(timestamp, p.Body);
 
         await uow.SaveChangesAsync(ct);
+
+        // Confirmação de saída — enviada SÓ aqui (após o commit). Entregas duplicadas do
+        // webhook falham no SaveChanges (waMessageId único) e não chegam aqui, então a
+        // confirmação sai uma única vez. É uma resposta (baixo risco de ban).
+        if (newlyOptedOut)
+        {
+#pragma warning disable CA1031
+            try
+            {
+                await waha.SendTextAsync(dispatchOpts.Value.SessionId, chatId, OptOutConfirmationMessage, ct);
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Falha ao enviar confirmação de opt-out para {ChatId}", chatId);
+            }
+#pragma warning restore CA1031
+        }
     }
+
+    private const string OptOutConfirmationMessage =
+        "Pronto! Você não vai mais receber nossas mensagens. Obrigado.";
 
     // Move o contato no funil com base na resposta recebida:
     // - pediu pra sair ("SAIR" etc.) → opt-out + "Descartado" (Lost);
     // - respondeu qualquer outra coisa e ainda estava em "Novo" (Lead) → "Respondeu" (Qualified).
     // Não rebaixa quem já avançou (ex.: Cliente continua Cliente).
-    private async Task ApplyInboundClassificationAsync(Contact contact, string? body, DateTimeOffset now, CancellationToken ct)
+    // Retorna true se ESTE processamento acabou de marcar o opt-out (transição nova) —
+    // usado pra enviar a confirmação uma única vez.
+    private async Task<bool> ApplyInboundClassificationAsync(Contact contact, string? body, DateTimeOffset now, CancellationToken ct)
     {
         if (OptOutDetector.IsOptOut(body))
         {
-            if (contact.OptOutAt is null)
+            var newlyOptedOut = contact.OptOutAt is null;
+            if (newlyOptedOut)
             {
                 contact.OptOut(now);
                 await contacts.UpdateAsync(contact, ct);
                 log.LogInformation("Contato {ContactId} pediu opt-out via resposta", contact.Id);
             }
             await MoveStageAsync(contact, ContactStage.Lost, now, ct);
-            return;
+            return newlyOptedOut;
         }
 
         if (contact.Stage == ContactStage.Lead)
         {
             await MoveStageAsync(contact, ContactStage.Qualified, now, ct);
         }
+        return false;
     }
 
     private async Task MoveStageAsync(Contact contact, ContactStage to, DateTimeOffset now, CancellationToken ct)
