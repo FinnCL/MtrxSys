@@ -57,6 +57,14 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
 
         // Carrega os contatos referenciados num lote só e mapeia em memória
         // (evita join de tipo owned + left join, que o EF traduz mal).
+        return await BuildReportAsync(jobs, ct);
+    }
+
+    public Task<int> ClearPendingAsync(CancellationToken ct) =>
+        db.DispatchJobs.Where(j => j.Status == DispatchStatus.Pending).ExecuteDeleteAsync(ct);
+
+    private async Task<IReadOnlyList<DispatchReportItem>> BuildReportAsync(List<DispatchJob> jobs, CancellationToken ct)
+    {
         var contactIds = jobs.Select(j => j.ContactId).Distinct().ToList();
         var contacts = await db.Contacts
             .Where(c => contactIds.Contains(c.Id))

@@ -22,6 +22,7 @@ public sealed class DispatchEngine(
     WarmupManager warmup,
     ISendAuditRepository audit,
     IDispatchMetrics metrics,
+    ISystemStateRepository systemState,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
 {
@@ -35,6 +36,13 @@ public sealed class DispatchEngine(
 
         while (!ct.IsCancellationRequested)
         {
+            // Freio de mão: operador pausou os envios pelo botão "Parar envios".
+            if ((await systemState.GetAsync(ct)).IsManuallyPaused)
+            {
+                log.LogInformation("Envios pausados manualmente; ciclo parado.");
+                break;
+            }
+
             if (await breaker.IsOpenAsync(ct))
             {
                 metrics.RecordCircuitOpen();

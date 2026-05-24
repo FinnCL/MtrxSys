@@ -3,6 +3,8 @@ namespace MtrxSys.Core.Application.Abstractions;
 public interface IWahaClient
 {
     Task<WahaSessionStatus> GetSessionStatusAsync(string sessionId, CancellationToken ct);
+    /// <summary>Telefone E.164 do número conectado na sessão ("me"), ou null se indisponível.</summary>
+    Task<string?> GetOwnPhoneE164Async(string sessionId, CancellationToken ct);
     Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct);
     Task<byte[]> GetQrPngAsync(string sessionId, CancellationToken ct);
     Task<string> GetQrRawAsync(string sessionId, CancellationToken ct);

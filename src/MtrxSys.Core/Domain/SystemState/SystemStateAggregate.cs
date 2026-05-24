@@ -6,8 +6,14 @@ public sealed class SystemStateAggregate : Entity<int>
 {
     public const int SingletonId = 1;
 
+    // Sentinela usado quando o operador pausa os envios manualmente (botão "Parar envios").
+    // Diferencia da pausa automática do circuit breaker, que grava o motivo da falha.
+    public const string ManualPauseReason = "MANUAL";
+
     public CircuitBreakerState Circuit { get; private set; } = CircuitBreakerState.Closed;
     public string? PausedReason { get; private set; }
+
+    public bool IsManuallyPaused => PausedReason == ManualPauseReason;
 
     private SystemStateAggregate() { }
 

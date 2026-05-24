@@ -9,6 +9,7 @@ public interface IContactRepository
     Task AddAsync(Contact contact, CancellationToken ct);
     Task UpdateAsync(Contact contact, CancellationToken ct);
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);
+    Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct);
     Task<IReadOnlyList<ContactGroupTag>> ListGroupTagsAsync(CancellationToken ct);
 }
 

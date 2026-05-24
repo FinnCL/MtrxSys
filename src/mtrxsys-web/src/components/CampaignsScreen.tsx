@@ -36,6 +36,8 @@ export function CampaignsScreen() {
   const [dispatching, setDispatching] = useState(false);
   const [dispatchMsg, setDispatchMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [audienceCount, setAudienceCount] = useState<number | null>(null);
 
   const reportStatusRef = useRef<"" | DispatchJobStatus>("");
   reportStatusRef.current = reportStatus;
@@ -54,17 +56,39 @@ export function CampaignsScreen() {
   // Dados "ao vivo" (mudam conforme o dispatcher processa) — atualizados no timer.
   const loadLive = useCallback(async () => {
     try {
-      const [s, r] = await Promise.all([
+      const [s, r, st] = await Promise.all([
         api.dispatchStats(),
         api.dispatchReport(reportStatusRef.current || undefined),
+        api.dispatchStatus(),
       ]);
       setStats(s);
       setReport(r);
+      setPaused(st.paused);
       setError(null);
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
     }
   }, []);
+
+  // Quantos contatos receberiam, com o público/grupo escolhido (mesmo filtro do disparo).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { count } = await api.audienceCount({
+          engagedOnly: audience === "responded" ? true : undefined,
+          groupTag: group.trim() || undefined,
+        });
+        if (!cancelled) setAudienceCount(count);
+      } catch {
+        if (!cancelled) setAudienceCount(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [audience, group]);
+
 
   useEffect(() => {
     void loadLists();
@@ -123,23 +147,29 @@ export function CampaignsScreen() {
   }
 
   const selectedIds = messages.filter((m) => !excludedIds.has(m.id)).map((m) => m.id);
+  const pendingCount = stats?.pending ?? 0;
 
-  async function onDispatch() {
+  // Etapa 2: prepara a fila — pausa e enfileira os contatos (entram "Na fila", nada sai ainda).
+  async function onPrepare() {
     if (selectedIds.length === 0) {
-      setDispatchMsg("Marque ao menos uma mensagem antes de disparar.");
+      setDispatchMsg("Marque ao menos uma mensagem antes de preparar.");
+      return;
+    }
+    if (audienceCount === 0) {
+      setDispatchMsg("Nenhum contato pra esse público. Importe contatos ou mude o filtro.");
       return;
     }
     setDispatching(true);
     setDispatchMsg(null);
     try {
+      await api.pauseDispatch(); // garante que nada sai enquanto você revisa
+      setPaused(true);
       const result = await api.dispatch(selectedIds, {
         engagedOnly: audience === "responded" ? true : undefined,
         groupTag: group.trim() || undefined,
       });
       setDispatchMsg(
-        result.scheduled > 0
-          ? `${result.scheduled} mensagens na fila, sorteadas entre suas ${result.templatesUsed} mensagem(ns). Vão sair aos poucos, com intervalos.`
-          : "Nenhum contato encontrado pra esse público. Importe contatos ou mude o filtro.",
+        `${result.scheduled} contato(s) na fila. Revise em "Resultado dos envios" e clique "Iniciar envios".`,
       );
       await loadLive();
     } catch (ex) {
@@ -149,13 +179,53 @@ export function CampaignsScreen() {
     }
   }
 
-  const sendLabel = dispatching
-    ? "Enviando..."
+  // Etapa 3: libera a fila preparada — o dispatcher começa a enviar.
+  async function onStart() {
+    if (!window.confirm(`Iniciar o envio para ${pendingCount} contato(s) na fila?`)) {
+      return;
+    }
+    try {
+      await api.resumeDispatch();
+      setPaused(false);
+      setDispatchMsg("Envios iniciados — vão sair aos poucos, com intervalos.");
+      await loadLive();
+    } catch (ex) {
+      setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);
+    }
+  }
+
+  // Cancela o que foi preparado (apaga os "Na fila"), sem enviar.
+  async function onClear() {
+    if (!window.confirm("Limpar a fila? Os contatos preparados não serão enviados.")) {
+      return;
+    }
+    try {
+      await api.clearQueue();
+      setDispatchMsg("Fila limpa.");
+      await loadLive();
+    } catch (ex) {
+      setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);
+    }
+  }
+
+  async function onStop() {
+    try {
+      await api.pauseDispatch();
+      setPaused(true);
+      setDispatchMsg("Envios parados.");
+      await loadLive();
+    } catch (ex) {
+      setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);
+    }
+  }
+
+  const prepareLabel = dispatching
+    ? "Preparando..."
     : audience === "responded"
-      ? "Disparar pros que responderam"
+      ? "Adicionar para disparar (quem respondeu)"
       : group.trim()
-        ? "Disparar pro grupo"
-        : "Disparar pra todos";
+        ? "Adicionar para disparar (grupo)"
+        : "Adicionar para disparar (todos)";
 
   return (
     <main className="campaigns-screen">
@@ -184,6 +254,7 @@ export function CampaignsScreen() {
           ))}
         </div>
       )}
+
 
       <section className="campaigns-section">
         <h3>1 · Suas mensagens ({messages.length})</h3>
@@ -230,7 +301,7 @@ export function CampaignsScreen() {
         )}
         <div className="message-add">
           <label className="message-add-label" htmlFor="new-message">
-            Escrever nova mensagem {messages.length > 0 ? "(adiciona outra ao rodízio)" : ""}
+            Escrever nova mensagem {messages.length > 0 ? "(adiciona às suas mensagens)" : ""}
           </label>
           <textarea
             id="new-message"
@@ -241,7 +312,7 @@ export function CampaignsScreen() {
             rows={4}
           />
           <button type="button" onClick={() => void addMessage()} disabled={adding || !draft.trim()}>
-            {adding ? "Adicionando..." : "+ Adicionar ao rodízio"}
+            {adding ? "Adicionando..." : "+ Adicionar mensagem"}
           </button>
         </div>
       </section>
@@ -276,18 +347,50 @@ export function CampaignsScreen() {
 
       <section className="campaigns-section">
         <h3>3 · Disparar</h3>
-        <button
-          type="button"
-          className="dispatch-btn"
-          onClick={() => void onDispatch()}
-          disabled={dispatching || selectedIds.length === 0}
-        >
-          {sendLabel}
-        </button>
+        {pendingCount === 0 ? (
+          <>
+            <p className={`audience-count${audienceCount === 0 ? " zero" : ""}`}>
+              {audienceCount === null
+                ? "Calculando alvo..."
+                : audienceCount === 0
+                  ? "Nenhum contato pra esse público. Importe na aba Grupos ou mude o filtro."
+                  : `Vai preparar ${audienceCount} contato(s) pra disparo.`}
+            </p>
+            <button
+              type="button"
+              className="dispatch-btn"
+              onClick={() => void onPrepare()}
+              disabled={dispatching || selectedIds.length === 0 || audienceCount === 0}
+            >
+              {prepareLabel}
+            </button>
+          </>
+        ) : paused ? (
+          <>
+            <p className="prepared-banner">
+              {pendingCount} contato(s) na fila — revise em "Resultado dos envios" e inicie quando quiser.
+            </p>
+            <div className="dispatch-actions">
+              <button type="button" className="dispatch-btn" onClick={() => void onStart()}>
+                Iniciar envios
+              </button>
+              <button type="button" className="clear-btn" onClick={() => void onClear()}>
+                Limpar fila
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="sending-banner">Enviando — {pendingCount} restante(s). Saindo aos poucos.</p>
+            <button type="button" className="pause-btn" onClick={() => void onStop()}>
+              Parar envios
+            </button>
+          </>
+        )}
         {dispatchMsg && <p className="dispatch-msg">{dispatchMsg}</p>}
       </section>
 
-      <section className="campaigns-section">
+      <section className="campaigns-section report-section">
         <div className="report-head">
           <h3>
             Resultado dos envios{reportStatus ? ` · ${DISPATCH_STATUS_LABELS[reportStatus]}` : ""}

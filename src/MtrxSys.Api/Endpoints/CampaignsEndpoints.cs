@@ -2,6 +2,7 @@ using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Messages;
+using MtrxSys.Core.Domain.SystemState;
 
 namespace MtrxSys.Api.Endpoints;
 
@@ -117,6 +118,53 @@ public static class CampaignsEndpoints
         {
             var stats = await repo.GetStatsAsync(ct);
             return Results.Ok(stats);
+        });
+
+        dispatch.MapGet("/status", async (ISystemStateRepository state, CancellationToken ct) =>
+        {
+            var s = await state.GetAsync(ct);
+            return Results.Ok(new { paused = s.IsManuallyPaused });
+        });
+
+        dispatch.MapPost("/pause", async (ISystemStateRepository state, IUnitOfWork uow, CancellationToken ct) =>
+        {
+            var s = await state.GetAsync(ct);
+            s.Pause(SystemStateAggregate.ManualPauseReason);
+            await state.UpdateAsync(s, ct);
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(new { paused = true });
+        });
+
+        dispatch.MapPost("/resume", async (ISystemStateRepository state, IUnitOfWork uow, CancellationToken ct) =>
+        {
+            var s = await state.GetAsync(ct);
+            s.Resume();
+            s.UpdateCircuit(CircuitBreakerState.Closed); // limpa também eventual pausa do circuit breaker
+            await state.UpdateAsync(s, ct);
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(new { paused = false });
+        });
+
+        dispatch.MapPost("/clear", async (IDispatchJobRepository repo, CancellationToken ct) =>
+        {
+            var cleared = await repo.ClearPendingAsync(ct);
+            return Results.Ok(new { cleared });
+        });
+
+        dispatch.MapGet("/audience-count", async (
+            bool? engagedOnly,
+            string? groupTag,
+            IContactRepository contacts,
+            CancellationToken ct) =>
+        {
+            var filter = new ContactFilter(
+                Stage: null,
+                TagName: null,
+                GroupTag: string.IsNullOrWhiteSpace(groupTag) ? null : groupTag,
+                ExcludeOptedOut: true,
+                EngagedOnly: engagedOnly ?? false);
+            var count = await contacts.CountByFilterAsync(filter, ct);
+            return Results.Ok(new { count });
         });
 
         dispatch.MapGet("/report", async (

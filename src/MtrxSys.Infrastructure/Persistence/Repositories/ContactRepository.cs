@@ -24,9 +24,14 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         return Task.CompletedTask;
     }
 
-    public async Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct)
+    public async Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct) =>
+        await ApplyFilter(db.Contacts.AsQueryable(), filter).OrderBy(c => c.Phone.E164).ToListAsync(ct);
+
+    public Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct) =>
+        ApplyFilter(db.Contacts.AsQueryable(), filter).CountAsync(ct);
+
+    private IQueryable<Contact> ApplyFilter(IQueryable<Contact> q, ContactFilter filter)
     {
-        var q = db.Contacts.AsQueryable();
         if (filter.Stage is { } stage)
         {
             q = q.Where(c => c.Stage == stage);
@@ -52,7 +57,7 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
                 .Select(a => a.ContactId);
             q = q.Where(c => contactIds.Contains(c.Id));
         }
-        return await q.OrderBy(c => c.Phone.E164).ToListAsync(ct);
+        return q;
     }
 
     public async Task<IReadOnlyList<ContactGroupTag>> ListGroupTagsAsync(CancellationToken ct)

@@ -7,7 +7,6 @@ import type {
   Conversation,
   ConversationWithMessages,
   DispatchFilter,
-  DispatchJob,
   DispatchReportItem,
   DispatchStats,
   Group,
@@ -170,11 +169,22 @@ export const api = {
       body: JSON.stringify({ templateIds, filter }),
     }),
   dispatchStats: () => request<DispatchStats>("/api/dispatch/stats"),
-  dispatchJobs: (limit = 50) => request<DispatchJob[]>(`/api/dispatch/jobs?limit=${limit}`),
   dispatchReport: (status?: string, limit = 1000) => {
     const q = new URLSearchParams();
     if (status) q.set("status", status);
     q.set("limit", String(limit));
     return request<DispatchReportItem[]>(`/api/dispatch/report?${q.toString()}`);
+  },
+  dispatchStatus: () => request<{ paused: boolean }>("/api/dispatch/status"),
+  // (o antigo dispatchJobs foi removido — substituído por dispatchReport)
+  pauseDispatch: () => request<{ paused: boolean }>("/api/dispatch/pause", { method: "POST" }),
+  resumeDispatch: () => request<{ paused: boolean }>("/api/dispatch/resume", { method: "POST" }),
+  clearQueue: () => request<{ cleared: number }>("/api/dispatch/clear", { method: "POST" }),
+  audienceCount: (params: { engagedOnly?: boolean; groupTag?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.engagedOnly) q.set("engagedOnly", "true");
+    if (params.groupTag) q.set("groupTag", params.groupTag);
+    const qs = q.toString();
+    return request<{ count: number }>(`/api/dispatch/audience-count${qs ? `?${qs}` : ""}`);
   },
 };

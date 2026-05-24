@@ -25,6 +25,26 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         return ParseStatus(body?.Status);
     }
 
+    public async Task<string?> GetOwnPhoneE164Async(string sessionId, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Get, $"api/sessions/{Esc(sessionId)}");
+        using var resp = await http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            return null;
+        }
+        var body = await resp.Content.ReadFromJsonAsync<SessionDto>(Json, ct);
+        var id = body?.Me?.Id; // ex.: "5511999999999@c.us"
+        if (string.IsNullOrEmpty(id))
+        {
+            return null;
+        }
+        var at = id.IndexOf('@', StringComparison.Ordinal);
+        var raw = at > 0 ? id[..at] : id;
+        var digits = new string([.. raw.Where(char.IsDigit)]);
+        return string.IsNullOrEmpty(digits) ? null : "+" + digits;
+    }
+
     public async Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct)
     {
         using var req = NewRequest(HttpMethod.Post, $"api/sessions/{Esc(sessionId)}/start");
@@ -257,7 +277,8 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         return WahaSessionStatus.Unknown;
     }
 
-    private sealed record SessionDto(string? Name, string? Status);
+    private sealed record SessionDto(string? Name, string? Status, MeDto? Me);
+    private sealed record MeDto(string? Id, string? PushName);
     private sealed record QrRawDto(string? Value);
     private sealed record ChatLastMessageDto(string? Body, long? Timestamp);
     private sealed record ChatOverviewDto(string? Id, string? Name, ChatLastMessageDto? LastMessage);

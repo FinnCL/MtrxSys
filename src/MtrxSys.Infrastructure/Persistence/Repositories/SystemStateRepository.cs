@@ -8,7 +8,11 @@ internal sealed class SystemStateRepository(MtrxDbContext db) : ISystemStateRepo
 {
     public async Task<SystemStateAggregate> GetAsync(CancellationToken ct)
     {
-        var state = await db.SystemState.FirstOrDefaultAsync(s => s.Id == SystemStateAggregate.SingletonId, ct);
+        // FindAsync checa primeiro as entidades já rastreadas no contexto e só consulta o
+        // banco se não achar. Isso evita recriar/adicionar a mesma chave quando GetAsync é
+        // chamado mais de uma vez no mesmo ciclo (ex.: IsOpenAsync + RecordSuccessAsync),
+        // que antes estourava "another instance with the same key is already being tracked".
+        var state = await db.SystemState.FindAsync([SystemStateAggregate.SingletonId], ct);
         if (state is null)
         {
             state = SystemStateAggregate.CreateInitial();

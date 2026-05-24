@@ -18,6 +18,8 @@ public sealed class ImportGroupMembersUseCase(
     {
         var sessionId = opts.Value.SessionId;
         var members = await waha.ListGroupParticipantsAsync(sessionId, groupId, ct);
+        // Número conectado ("me") — não importamos o próprio número como contato/destinatário.
+        var ownNumber = await waha.GetOwnPhoneE164Async(sessionId, ct);
 
         var imported = 0;
         var duplicated = 0;
@@ -30,6 +32,10 @@ public sealed class ImportGroupMembersUseCase(
             try
             {
                 var phone = phones.NormalizeTrusted(member.PhoneE164);
+                if (ownNumber is not null && phone.E164 == ownNumber)
+                {
+                    continue; // pula o próprio número do remetente
+                }
                 var existing = await contacts.GetByPhoneAsync(phone.E164, ct);
                 if (existing is not null)
                 {

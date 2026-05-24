@@ -10,6 +10,8 @@ public interface IDispatchJobRepository
     Task<DispatchStats> GetStatsAsync(CancellationToken ct);
     Task<IReadOnlyList<DispatchJob>> ListRecentAsync(int limit, CancellationToken ct);
     Task<IReadOnlyList<DispatchReportItem>> ListReportAsync(DispatchStatus? status, int limit, CancellationToken ct);
+    /// <summary>Remove os jobs "Na fila" (Pending) — cancela o que foi preparado e ainda não saiu.</summary>
+    Task<int> ClearPendingAsync(CancellationToken ct);
 }
 
 public sealed record DispatchStats(int Pending, int Sent, int Failed, int Skipped);

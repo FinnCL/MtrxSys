@@ -179,6 +179,9 @@ input[type="checkbox"], input[type="radio"] {
 .chip-btn { cursor: pointer; border: 1px solid transparent; }
 .chip-btn:hover { filter: brightness(1.18); }
 .chip-btn.active { border-color: var(--fg); }
+/* separa visualmente o resultado (com o botão de baixar) da área de disparo acima,
+   pra o "Baixar relatório" não ficar colado no "Parar envios" */
+.report-section { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 24px; }
 .report-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .report-export { background: var(--bg-3); color: var(--fg); padding: 6px 14px; font-size: 13px; }
 .report-export:hover:not(:disabled) { background: var(--accent); }
@@ -370,6 +373,22 @@ input[type="checkbox"], input[type="radio"] {
 .audience-row { display: flex; gap: 12px; flex-wrap: wrap; max-width: 640px; }
 .audience-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); flex: 1; min-width: 200px; }
 .dispatch-btn { padding: 12px 28px; font-size: 15px; font-weight: 600; }
+
+.dispatch-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; max-width: 640px; }
+/* afasta o "Parar/Retomar" do "Disparar" pra evitar clique errado */
+.dispatch-actions .pause-btn,
+.dispatch-actions .resume-btn { margin-left: auto; }
+.pause-btn { background: var(--danger); color: #fff; padding: 6px 16px; }
+.pause-btn:hover { background: #b8485a; }
+.resume-btn { background: #22c55e; color: #08210f; padding: 6px 16px; font-weight: 600; }
+.resume-btn:hover { filter: brightness(1.1); }
+.paused-banner { color: var(--danger); font-size: 13px; font-weight: 600; }
+.clear-btn { background: var(--bg-3); color: var(--fg); padding: 12px 20px; }
+.clear-btn:hover { background: var(--danger); }
+.prepared-banner { color: #f59e0b; font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+.sending-banner { color: #22c55e; font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+.audience-count { font-size: 13px; margin: 0 0 10px; color: var(--fg); }
+.audience-count.zero { color: var(--danger); }
 .dispatch-msg { margin-top: 12px; font-size: 14px; }
 .pool-label { margin: 0 0 6px; color: #22c55e; font-weight: 600; }
 .message-pool { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
