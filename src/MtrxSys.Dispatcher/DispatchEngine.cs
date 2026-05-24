@@ -2,6 +2,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Domain.Contacts;
+using MtrxSys.Core.Domain.Conversations;
 using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Messaging;
 using MtrxSys.Core.Safety;
@@ -21,6 +23,8 @@ public sealed class DispatchEngine(
     CircuitBreaker breaker,
     WarmupManager warmup,
     ISendAuditRepository audit,
+    IConversationRepository conversations,
+    IChatMessageRepository messages,
     IDispatchMetrics metrics,
     ISystemStateRepository systemState,
     IOptions<DispatchOptions> dispatchOpts,
@@ -110,11 +114,20 @@ public sealed class DispatchEngine(
                         delayMs: (int)delayBefore.TotalMilliseconds,
                         occurredAt: now),
                     ct);
+                // Commita o registro do envio PRIMEIRO: a mensagem já saiu no WhatsApp
+                // (irreversível), então marcar enviado/auditoria/breaker não pode depender
+                // de nada opcional que venha depois.
                 await uow.SaveChangesAsync(ct);
 
                 metrics.RecordSendSuccess((int)delayBefore.TotalMilliseconds, typingMs);
                 sent++;
                 log.LogInformation("Sent {JobId} to {Phone}", job.Id, contact.Phone.E164);
+
+                // Grava a mensagem no chat do sistema (antes dependia só do "eco" instável do
+                // webhook). É MELHOR-ESFORÇO: o envio já está garantido, então uma falha aqui
+                // (ex.: concorrência na conversa, ou o eco gravou primeiro) só é logada — nunca
+                // marca o job como falho nem abre o circuit breaker.
+                await TryRecordOutboundMessageAsync(contact, text, waMessageId, now, ct);
 
                 await Task.Delay(delayBefore, ct);
             }
@@ -136,6 +149,78 @@ public sealed class DispatchEngine(
         }
 
         return new DispatchCycleResult(processed, sent, failed, skipped);
+    }
+
+    // Envolve a gravação no chat: nunca propaga exceção. Se falhar (concorrência na conversa,
+    // erro de DB, ou o eco do webhook gravou primeiro), descarta as alterações pendentes — pra
+    // não contaminar o DbContext compartilhado do ciclo — e segue. O envio já está commitado.
+    private async Task TryRecordOutboundMessageAsync(
+        Contact contact, string text, string waMessageId, DateTimeOffset now, CancellationToken ct)
+    {
+        try
+        {
+            await RecordOutboundMessageAsync(contact, text, waMessageId, now, ct);
+            await uow.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // melhor-esforço: o envio já ocorreu; não pode derrubar o ciclo
+        catch (Exception ex)
+        {
+            uow.DiscardChanges();
+            log.LogWarning(ex, "Envio OK mas não registrei a mensagem no chat (contato {ContactId}); "
+                + "o eco do webhook ainda pode cobrir.", contact.Id);
+        }
+#pragma warning restore CA1031
+    }
+
+    // Persiste a mensagem enviada na conversa do contato. Resolve a conversa pelo ContactId
+    // (não pelo chatId), assim o disparo cai na MESMA conversa das respostas — que podem
+    // chegar por @lid — em vez de criar uma conversa @c.us paralela. Cria a conversa se ainda
+    // não existir. O de-dupe por "core" do id evita duplicar quando o eco do WAHA chegar.
+    private async Task RecordOutboundMessageAsync(
+        Contact contact, string text, string waMessageId, DateTimeOffset now, CancellationToken ct)
+    {
+        // Mesmo "core" de id usado pelo webhook (token final), pra de-dupe determinístico.
+        var coreId = WahaChatIdentifier.ExtractMessageCore(waMessageId);
+        if (string.IsNullOrEmpty(coreId))
+        {
+            coreId = $"dispatch_{Guid.NewGuid():N}"; // WAHA não devolveu id; gera um estável.
+        }
+
+        // O eco do webhook venceu a corrida e já gravou esta mensagem? Então não duplica.
+        if (await messages.GetByWaMessageIdAsync(coreId, ct) is not null)
+        {
+            return;
+        }
+
+        var conversation = await conversations.GetByContactIdAsync(contact.Id, ct);
+        if (conversation is null)
+        {
+            var chatId = WahaChatIdentifier.ExtractDigits(contact.Phone.E164) + WahaChatIdentifier.IndividualSuffix;
+            conversation = Conversation.Create(
+                id: Guid.NewGuid(),
+                waChatId: chatId,
+                contactId: contact.Id,
+                title: string.IsNullOrWhiteSpace(contact.Name) ? contact.Phone.E164 : contact.Name,
+                isGroup: false,
+                createdAt: now);
+            await conversations.AddAsync(conversation, ct);
+        }
+
+        await messages.AddAsync(
+            ChatMessage.Create(
+                id: Guid.NewGuid(),
+                conversationId: conversation.Id,
+                waMessageId: coreId,
+                direction: MessageDirection.Outbound,
+                authorPhone: null,
+                body: text,
+                timestamp: now),
+            ct);
+        conversation.TouchLastMessage(now, text);
     }
 }
 

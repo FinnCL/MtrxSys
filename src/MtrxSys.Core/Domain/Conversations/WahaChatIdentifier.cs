@@ -56,6 +56,30 @@ public static class WahaChatIdentifier
         return "+" + digits;
     }
 
+    // Extrai o "core" do id de mensagem do WhatsApp — o token logo após o segmento do chatId
+    // (o que contém '@'). Formato serializado do WAHA:
+    //   inbound:  "false_5571..@lid_3EB0AB12"            → core "3EB0AB12"
+    //   outbound: "true_5571..@lid_3EB0AB12_out"         → core "3EB0AB12" (ignora o sufixo "_out")
+    //   já-core:  "3EB0AB12"                              → "3EB0AB12"
+    // Esse core é o mesmo no envio (@c.us) e no eco (@lid), servindo de chave estável de
+    // de-dupe entre o disparo e o webhook. Pegar o último token erraria por causa do "_out".
+    public static string ExtractMessageCore(string? waMessageId)
+    {
+        if (string.IsNullOrEmpty(waMessageId))
+        {
+            return string.Empty;
+        }
+        var parts = waMessageId.Split('_');
+        for (var i = 0; i < parts.Length - 1; i++)
+        {
+            if (parts[i].Contains('@', StringComparison.Ordinal))
+            {
+                return parts[i + 1];
+            }
+        }
+        return waMessageId; // sem segmento serializado: já é o core (id retornado pelo envio).
+    }
+
     public static string ExtractDigits(string chatIdOrParticipant)
     {
         if (string.IsNullOrEmpty(chatIdOrParticipant))

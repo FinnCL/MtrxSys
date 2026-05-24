@@ -43,10 +43,14 @@ public sealed class WebhookIngestionService(
         }
 
         var p = evt.Payload;
-        var existing = await messages.GetByWaMessageIdAsync(p.Id!, ct);
+        // De-dupe pelo "core" do id (token final), que é igual no envio (@c.us) e no eco
+        // (@lid). Assim o eco de uma mensagem que o disparo já gravou é reconhecido como
+        // duplicado — antes os ids serializados divergiam e duplicava no chat.
+        var coreId = WahaChatIdentifier.ExtractMessageCore(p.Id);
+        var existing = await messages.GetByWaMessageIdAsync(coreId, ct);
         if (existing is not null)
         {
-            log.LogDebug("Duplicate message {WaId}, skipping", p.Id);
+            log.LogDebug("Duplicate message {WaId} (core {Core}), skipping", p.Id, coreId);
             return;
         }
 
@@ -108,6 +112,13 @@ public sealed class WebhookIngestionService(
         }
 
         var conversation = await conversations.GetByWaChatIdAsync(chatId, ct);
+        if (conversation is null && contactId is not null && kind != WahaChatIdentifier.Kind.Group)
+        {
+            // Reaproveita a conversa que o disparo (ou um inbound anterior) já criou pra este
+            // contato, mesmo que sob outro identificador (@c.us vs @lid). Sem isso, o eco de um
+            // disparo chegando por @lid criaria uma 2ª conversa do mesmo contato.
+            conversation = await conversations.GetByContactIdAsync(contactId.Value, ct);
+        }
         var conversationTitle = ResolveConversationTitle(kind, p.NotifyName);
         if (conversation is null)
         {
@@ -141,7 +152,7 @@ public sealed class WebhookIngestionService(
         var message = ChatMessage.Create(
             id: Guid.NewGuid(),
             conversationId: conversation.Id,
-            waMessageId: p.Id!,
+            waMessageId: coreId,
             direction: direction,
             authorPhone: authorPhone,
             body: p.Body ?? string.Empty,

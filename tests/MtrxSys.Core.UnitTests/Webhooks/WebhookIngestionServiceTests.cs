@@ -180,6 +180,63 @@ public sealed class WebhookIngestionServiceTests
     }
 
     [Fact]
+    public async Task Ingest_skips_outbound_echo_when_core_already_persisted()
+    {
+        // O disparo já gravou a mensagem usando o "core" do id. O eco do WAHA chega serializado
+        // por @lid e com sufixo "_out" — deve ser reconhecido como duplicado pelo core e ignorado
+        // (antes os ids divergiam e a mensagem aparecia em dobro no chat).
+        var svc = BuildService();
+        const string core = "3EB0FBA09A783EF71B9EED";
+        var existing = ChatMessage.Create(
+            Guid.NewGuid(), Guid.NewGuid(), core,
+            MessageDirection.Outbound, null, "oi", DateTimeOffset.UtcNow);
+        _messages.GetByWaMessageIdAsync(core, Arg.Any<CancellationToken>()).Returns(existing);
+
+        var evt = new WahaWebhookEvent(
+            "message.any",
+            "default",
+            new WahaMessagePayload(
+                Id: $"true_157239574847645@lid_{core}_out",
+                Timestamp: 1700000000, From: "557193477235@c.us", To: "557186576422@c.us",
+                FromMe: true, Body: "oi", HasMedia: false, Media: null, Participant: null));
+
+        await svc.IngestAsync(evt, CancellationToken.None);
+
+        await _messages.DidNotReceive().AddAsync(Arg.Any<ChatMessage>(), Arg.Any<CancellationToken>());
+        await _uow.DidNotReceive().SaveChangesAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Ingest_reuses_existing_contact_conversation_instead_of_creating_duplicate()
+    {
+        // Mensagem chega por um chatId ainda não visto, mas o contato já tem conversa (ex.: criada
+        // pelo disparo via @c.us). Deve reaproveitar essa conversa, não criar uma 2ª pro mesmo
+        // contato.
+        var svc = BuildService();
+        var phone = new MtrxSys.Core.Validation.BrazilPhoneValidator().NormalizeTrusted("+5511999998888");
+        var contact = Contact.Create(Guid.NewGuid(), phone, "Fulano", null, null, _clock.UtcNow);
+        var existingConv = Conversation.Create(
+            Guid.NewGuid(), "5511999998888@c.us", contact.Id, "Fulano", isGroup: false, createdAt: _clock.UtcNow);
+
+        _messages.GetByWaMessageIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((ChatMessage?)null);
+        _contacts.GetByPhoneAsync("+5511999998888", Arg.Any<CancellationToken>()).Returns(contact);
+        _conversations.GetByWaChatIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Conversation?)null);
+        _conversations.GetByContactIdAsync(contact.Id, Arg.Any<CancellationToken>()).Returns(existingConv);
+
+        var evt = new WahaWebhookEvent(
+            "message",
+            "default",
+            new WahaMessagePayload("wa-reply", 1700000000, "5511999998888@c.us", null, false, "voltei", false, null, null));
+
+        await svc.IngestAsync(evt, CancellationToken.None);
+
+        await _conversations.DidNotReceive().AddAsync(Arg.Any<Conversation>(), Arg.Any<CancellationToken>());
+        await _messages.Received(1).AddAsync(
+            Arg.Is<ChatMessage>(m => m.ConversationId == existingConv.Id && m.Body == "voltei"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Ingest_group_message_uses_participant_for_author()
     {
         var svc = BuildService();

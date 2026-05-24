@@ -13,6 +13,12 @@ internal sealed class ConversationRepository(MtrxDbContext db) : IConversationRe
     public Task<Conversation?> GetByWaChatIdAsync(string waChatId, CancellationToken ct) =>
         db.Conversations.FirstOrDefaultAsync(c => c.WaChatId == waChatId, ct);
 
+    public Task<Conversation?> GetByContactIdAsync(Guid contactId, CancellationToken ct) =>
+        db.Conversations
+            .Where(c => c.ContactId == contactId && !c.IsGroup)
+            .OrderByDescending(c => c.LastMessageAt ?? c.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
     public async Task<IReadOnlyList<Conversation>> ListAsync(int limit, int offset, CancellationToken ct) =>
         await db.Conversations
             .OrderByDescending(c => c.LastMessageAt ?? c.CreatedAt)
