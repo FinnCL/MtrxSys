@@ -1,17 +1,27 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api/client";
-import { ALL_STAGES, STAGE_LABELS, type ContactDetail, type Stage } from "../api/types";
+import type { ContactDetail, Stage } from "../api/types";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface Props {
   contactId: string;
 }
 
+// Rótulo de status alinhado às abas do Chat. É só-leitura: o sistema classifica sozinho
+// (respondeu → Respondeu; "SAIR" → Saiu). Sem funil manual pra evitar cliques/ruído.
+const STATUS_LABEL: Record<Stage, string> = {
+  Lead: "Sem resposta",
+  Qualified: "Respondeu",
+  Proposal: "Negociando",
+  Won: "Cliente",
+  Lost: "Descartado",
+};
+
 export function ContactPanel({ contactId }: Props) {
   const [data, setData] = useState<ContactDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
-  const [newTag, setNewTag] = useState("");
-  const [savingStage, setSavingStage] = useState(false);
+  const [confirmReactivate, setConfirmReactivate] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,17 +42,17 @@ export function ContactPanel({ contactId }: Props) {
     };
   }, [contactId]);
 
-  async function changeStage(newStage: Stage) {
-    if (!data) return;
-    setSavingStage(true);
+  async function refresh() {
+    setData(await api.getContact(contactId));
+  }
+
+  async function reactivate() {
+    setConfirmReactivate(false);
     try {
-      await api.patchContact(contactId, { stage: newStage });
-      const refreshed = await api.getContact(contactId);
-      setData(refreshed);
+      await api.reactivateContact(contactId);
+      await refresh();
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
-    } finally {
-      setSavingStage(false);
     }
   }
 
@@ -52,31 +62,8 @@ export function ContactPanel({ contactId }: Props) {
     if (!body) return;
     try {
       await api.addNote(contactId, body);
-      const refreshed = await api.getContact(contactId);
-      setData(refreshed);
+      await refresh();
       setNoteDraft("");
-    } catch (ex) {
-      setError(ex instanceof Error ? ex.message : String(ex));
-    }
-  }
-
-  async function addTag(name: string) {
-    if (!name.trim()) return;
-    try {
-      await api.patchContact(contactId, { addTags: [name.trim()] });
-      const refreshed = await api.getContact(contactId);
-      setData(refreshed);
-      setNewTag("");
-    } catch (ex) {
-      setError(ex instanceof Error ? ex.message : String(ex));
-    }
-  }
-
-  async function removeTag(name: string) {
-    try {
-      await api.patchContact(contactId, { removeTags: [name] });
-      const refreshed = await api.getContact(contactId);
-      setData(refreshed);
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
     }
@@ -85,58 +72,35 @@ export function ContactPanel({ contactId }: Props) {
   if (error) return <aside className="contact-panel"><p className="error">{error}</p></aside>;
   if (!data) return <aside className="contact-panel"><p>Carregando...</p></aside>;
 
+  const optedOut = data.contact.optOutAt != null;
+
   return (
     <aside className="contact-panel">
       <h2>{data.contact.name ?? data.contact.phoneE164}</h2>
       <div className="contact-phone">{data.contact.phoneE164}</div>
 
       <section className="panel-section">
-        <h3>Funil</h3>
-        <div className="stage-picker">
-          {ALL_STAGES.map((s) => (
+        <h3>Status</h3>
+        <div className="status-readonly">
+          <span className={`stage-badge stage-${(optedOut ? "lost" : data.contact.stage.toLowerCase())}`}>
+            {optedOut ? "Saiu" : STATUS_LABEL[data.contact.stage]}
+          </span>
+          {optedOut && (
             <button
-              key={s}
               type="button"
-              disabled={savingStage}
-              className={`stage-chip${data.contact.stage === s ? " active" : ""}`}
-              onClick={() => changeStage(s)}
+              className="reactivate-btn"
+              title="Religar: volta a receber mensagens"
+              onClick={() => setConfirmReactivate(true)}
             >
-              {STAGE_LABELS[s]}
+              Reativar
             </button>
-          ))}
+          )}
         </div>
         {data.contact.stageChangedAt && (
           <div className="stage-meta">
-            Mudou em {new Date(data.contact.stageChangedAt).toLocaleString()}
+            Atualizado em {new Date(data.contact.stageChangedAt).toLocaleString()}
           </div>
         )}
-      </section>
-
-      <section className="panel-section">
-        <h3>Tags</h3>
-        <div className="tags">
-          {data.tags.map((t) => (
-            <span key={t} className="tag-chip">
-              {t}
-              <button type="button" onClick={() => void removeTag(t)} title="remover">×</button>
-            </span>
-          ))}
-          {data.tags.length === 0 && <span className="muted">—</span>}
-        </div>
-        <form
-          className="tag-add"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void addTag(newTag);
-          }}
-        >
-          <input
-            value={newTag}
-            onChange={(e) => setNewTag(e.target.value)}
-            placeholder="nova tag"
-          />
-          <button type="submit">+</button>
-        </form>
       </section>
 
       <section className="panel-section">
@@ -163,18 +127,24 @@ export function ContactPanel({ contactId }: Props) {
         </form>
       </section>
 
-      {data.stageHistory.length > 0 && (
-        <section className="panel-section">
-          <h3>Histórico</h3>
-          <ul className="history">
-            {data.stageHistory.map((c) => (
-              <li key={c.id}>
-                <span>{c.fromStage ? STAGE_LABELS[c.fromStage] : "(novo)"} → {STAGE_LABELS[c.toStage]}</span>
-                <span className="muted">{new Date(c.changedAt).toLocaleString()}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {confirmReactivate && (
+        <ConfirmDialog
+          title="Reativar contato?"
+          message={
+            <>
+              Este contato pediu para <strong>sair</strong> (opt-out). Ao reativar, ele volta para a
+              base e <strong>poderá receber mensagens de disparo novamente</strong>.
+              <br />
+              <br />
+              Tem certeza de que deseja fazer isso?
+            </>
+          }
+          confirmLabel="Sim, reativar"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void reactivate()}
+          onCancel={() => setConfirmReactivate(false)}
+        />
       )}
     </aside>
   );

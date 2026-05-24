@@ -12,15 +12,28 @@ public static class ConversationsEndpoints
         var group = app.MapGroup("/api/conversations");
 
         group.MapGet("/", async (
+            string? status,
+            string? search,
             int? limit,
             int? offset,
             IConversationRepository repo,
             CancellationToken ct) =>
         {
+            // Paginação no servidor: cada chamada traz só uma página (~50) já filtrada por
+            // status/busca. Escala sem teto — não importa quantas conversas existam no total.
             var take = Math.Clamp(limit ?? 50, 1, 200);
             var skip = Math.Max(offset ?? 0, 0);
-            var items = await repo.ListAsync(take, skip, ct);
+            var items = await repo.ListByStatusAsync(status, search, take, skip, ct);
             return Results.Ok(items.Select(ToDto));
+        });
+
+        group.MapGet("/counts", async (
+            string? search,
+            IConversationRepository repo,
+            CancellationToken ct) =>
+        {
+            var counts = await repo.CountByStatusAsync(search, ct);
+            return Results.Ok(counts);
         });
 
         group.MapGet("/{id:guid}/messages", async (

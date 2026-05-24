@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { STAGE_LABELS, type Contact, type ContactGroupTag } from "../api/types";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 export function ContactsScreen() {
   const [groups, setGroups] = useState<ContactGroupTag[]>([]);
@@ -9,6 +10,7 @@ export function ContactsScreen() {
   const [loadingGroup, setLoadingGroup] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<{ id: string; tag: string; label: string } | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -25,6 +27,7 @@ export function ContactsScreen() {
   }, []);
 
   async function reactivate(id: string, tag: string) {
+    setConfirmTarget(null);
     try {
       await api.reactivateContact(id);
       const list = await api.listContacts({ groupTag: tag });
@@ -109,7 +112,13 @@ export function ContactsScreen() {
                                     type="button"
                                     className="reactivate-btn"
                                     title="Religar: volta a receber mensagens"
-                                    onClick={() => void reactivate(c.id, g.groupTag)}
+                                    onClick={() =>
+                                      setConfirmTarget({
+                                        id: c.id,
+                                        tag: g.groupTag,
+                                        label: c.name || c.phoneE164,
+                                      })
+                                    }
                                   >
                                     Reativar
                                   </button>
@@ -130,6 +139,26 @@ export function ContactsScreen() {
             );
           })}
         </div>
+      )}
+
+      {confirmTarget && (
+        <ConfirmDialog
+          title="Reativar contato?"
+          message={
+            <>
+              <strong>{confirmTarget.label}</strong> pediu para sair (opt-out). Ao reativar, ele volta
+              para a base e <strong>poderá receber mensagens de disparo novamente</strong>.
+              <br />
+              <br />
+              Tem certeza de que deseja fazer isso?
+            </>
+          }
+          confirmLabel="Sim, reativar"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void reactivate(confirmTarget.id, confirmTarget.tag)}
+          onCancel={() => setConfirmTarget(null)}
+        />
       )}
     </main>
   );

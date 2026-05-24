@@ -16,6 +16,10 @@ export const STAGE_LABELS: Record<Stage, string> = {
 
 export type Direction = "Inbound" | "Outbound";
 
+// Status (filtro das abas do Chat). A classificação é automática no backend (respondeu →
+// "responded"; opt-out → "optedOut"; ainda sem resposta → "awaitingReply").
+export type ConversationStatus = "awaitingReply" | "responded" | "optedOut";
+
 export interface Conversation {
   id: string;
   waChatId: string;
@@ -25,6 +29,14 @@ export interface Conversation {
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
   createdAt: string;
+}
+
+// Contagem por status (vinda de /api/conversations/counts) para os números das abas.
+export interface ConversationCounts {
+  awaitingReply: number;
+  responded: number;
+  optedOut: number;
+  all: number;
 }
 
 export interface ChatMessage {

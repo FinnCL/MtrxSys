@@ -5,6 +5,8 @@ import type {
   ContactGroupTag,
   ContactNote,
   Conversation,
+  ConversationCounts,
+  ConversationStatus,
   ConversationWithMessages,
   DispatchFilter,
   DispatchReportItem,
@@ -113,8 +115,16 @@ export const api = {
     const blob = await resp.blob();
     return URL.createObjectURL(blob);
   },
-  listConversations: (limit = 50, offset = 0) =>
-    request<Conversation[]>(`/api/conversations?limit=${limit}&offset=${offset}`),
+  listConversations: (opts: { status?: ConversationStatus; search?: string; limit?: number; offset?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.status) q.set("status", opts.status);
+    if (opts.search) q.set("search", opts.search);
+    q.set("limit", String(opts.limit ?? 50));
+    q.set("offset", String(opts.offset ?? 0));
+    return request<Conversation[]>(`/api/conversations?${q.toString()}`);
+  },
+  getConversationCounts: (search?: string) =>
+    request<ConversationCounts>(`/api/conversations/counts${search ? `?search=${encodeURIComponent(search)}` : ""}`),
   getConversationMessages: (id: string, limit = 50, offset = 0) =>
     request<ConversationWithMessages>(`/api/conversations/${id}/messages?limit=${limit}&offset=${offset}`),
   sendMessage: (conversationId: string, text: string) =>
