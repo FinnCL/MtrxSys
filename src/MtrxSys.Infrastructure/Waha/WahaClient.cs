@@ -96,12 +96,16 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
 
     public async Task<IReadOnlyList<WahaParticipant>> ListGroupParticipantsAsync(string sessionId, string groupId, CancellationToken ct)
     {
-        using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/groups/{Esc(groupId)}/participants");
+        // A WAHA (engine WEBJS) resolve o grupo via getChatById, que exige o JID completo.
+        // No app circula só o número do grupo (sem sufixo), então garantimos o @g.us aqui;
+        // sem isso o getChatById não encontra o grupo e a WAHA devolve 500.
+        var groupJid = groupId.Contains('@', StringComparison.Ordinal) ? groupId : groupId + "@g.us";
+        using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/groups/{Esc(groupJid)}/participants");
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<List<ParticipantDto>>(Json, ct) ?? [];
         return body
-            .Where(p => p.Id is not null)
+            .Where(p => p.Id is not null && IsRealContactId(p.Id))
             .Select(p => new WahaParticipant(
                 Id: p.Id!.RawId ?? p.Id.User ?? "",
                 PhoneE164: "+" + (p.Id.User ?? string.Empty),
@@ -258,6 +262,19 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
     private sealed record ChatLastMessageDto(string? Body, long? Timestamp);
     private sealed record ChatOverviewDto(string? Id, string? Name, ChatLastMessageDto? LastMessage);
     private sealed record MessageDto(string? Id, string? From, string? Author, bool? FromMe, string? Body, long? Timestamp);
+    // Participante "real" = número de telefone de verdade. Ignora número oculto (@lid) e
+    // pseudo-ids sem dígito real, que virariam contato-lixo (ex.: "+<lid>", "+0").
+    private static bool IsRealContactId(GroupIdDto id)
+    {
+        if (string.Equals(id.Server, "lid", StringComparison.OrdinalIgnoreCase)
+            || (id.RawId?.Contains("@lid", StringComparison.OrdinalIgnoreCase) ?? false))
+        {
+            return false;
+        }
+        var user = id.User;
+        return !string.IsNullOrWhiteSpace(user) && user.Any(ch => char.IsDigit(ch) && ch != '0');
+    }
+
     private sealed record GroupIdDto(string? Server, string? User, string? RawId);
     private sealed record GroupDto(GroupIdDto? Id, string? Name, List<ParticipantDto>? Participants);
     private sealed record ParticipantDto(GroupIdDto? Id, string? PushName, string? Role);

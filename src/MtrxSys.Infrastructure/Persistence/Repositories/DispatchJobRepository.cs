@@ -42,4 +42,37 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
             .OrderByDescending(j => j.SentAt ?? j.ScheduledAt)
             .Take(limit)
             .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<DispatchReportItem>> ListReportAsync(DispatchStatus? status, int limit, CancellationToken ct)
+    {
+        var jobsQuery = db.DispatchJobs.AsQueryable();
+        if (status is { } s)
+        {
+            jobsQuery = jobsQuery.Where(j => j.Status == s);
+        }
+        var jobs = await jobsQuery
+            .OrderByDescending(j => j.SentAt ?? j.ScheduledAt)
+            .Take(limit)
+            .ToListAsync(ct);
+
+        // Carrega os contatos referenciados num lote só e mapeia em memória
+        // (evita join de tipo owned + left join, que o EF traduz mal).
+        var contactIds = jobs.Select(j => j.ContactId).Distinct().ToList();
+        var contacts = await db.Contacts
+            .Where(c => contactIds.Contains(c.Id))
+            .ToListAsync(ct);
+        var byId = contacts.ToDictionary(c => c.Id);
+
+        return jobs.Select(j =>
+        {
+            byId.TryGetValue(j.ContactId, out var c);
+            return new DispatchReportItem(
+                Phone: c?.Phone.E164,
+                Name: c?.Name,
+                Status: j.Status.ToString(),
+                ScheduledAt: j.ScheduledAt,
+                SentAt: j.SentAt,
+                ErrorReason: j.ErrorReason);
+        }).ToList();
+    }
 }

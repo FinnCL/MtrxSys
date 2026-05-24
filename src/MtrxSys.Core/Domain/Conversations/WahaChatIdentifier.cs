@@ -48,7 +48,12 @@ public static class WahaChatIdentifier
             return null;
         }
         var digits = ExtractDigits(chatId!);
-        return string.IsNullOrEmpty(digits) ? null : "+" + digits;
+        // Rejeita pseudo-números sem dígito real (ex.: "0@c.us" → "+0"), que viram contato-lixo.
+        if (string.IsNullOrEmpty(digits) || digits.All(c => c == '0'))
+        {
+            return null;
+        }
+        return "+" + digits;
     }
 
     public static string ExtractDigits(string chatIdOrParticipant)

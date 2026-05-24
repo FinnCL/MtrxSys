@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api/client";
-import { ALL_STAGES, type ContactDetail, type Stage } from "../api/types";
+import { ALL_STAGES, STAGE_LABELS, type ContactDetail, type Stage } from "../api/types";
 
 interface Props {
   contactId: string;
@@ -91,7 +91,7 @@ export function ContactPanel({ contactId }: Props) {
       <div className="contact-phone">{data.contact.phoneE164}</div>
 
       <section className="panel-section">
-        <h3>Pipeline</h3>
+        <h3>Funil</h3>
         <div className="stage-picker">
           {ALL_STAGES.map((s) => (
             <button
@@ -101,7 +101,7 @@ export function ContactPanel({ contactId }: Props) {
               className={`stage-chip${data.contact.stage === s ? " active" : ""}`}
               onClick={() => changeStage(s)}
             >
-              {s}
+              {STAGE_LABELS[s]}
             </button>
           ))}
         </div>
@@ -169,7 +169,7 @@ export function ContactPanel({ contactId }: Props) {
           <ul className="history">
             {data.stageHistory.map((c) => (
               <li key={c.id}>
-                <span>{c.fromStage ?? "(novo)"} → {c.toStage}</span>
+                <span>{c.fromStage ? STAGE_LABELS[c.fromStage] : "(novo)"} → {STAGE_LABELS[c.toStage]}</span>
                 <span className="muted">{new Date(c.changedAt).toLocaleString()}</span>
               </li>
             ))}

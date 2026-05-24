@@ -4,6 +4,8 @@ using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
+using MtrxSys.Core.Safety;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Core.Application.UseCases.Webhooks;
 
@@ -11,8 +13,10 @@ public sealed class WebhookIngestionService(
     IConversationRepository conversations,
     IChatMessageRepository messages,
     IContactRepository contacts,
+    IContactStageChangeRepository stageChanges,
     IUnitOfWork uow,
     IClock clock,
+    BrazilPhoneValidator phones,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<WebhookIngestionService> log) : IWebhookIngestionService
 {
@@ -61,19 +65,35 @@ public sealed class WebhookIngestionService(
             var e164 = WahaChatIdentifier.TryExtractPhoneE164(chatId);
             if (e164 is not null)
             {
-                var contact = await contacts.GetByPhoneAsync(e164, ct);
+                var phone = phones.NormalizeTrusted(e164);
+                // O nome público (NotifyName) só vale quando é a pessoa que mandou (inbound).
+                var inboundName = p.FromMe == true ? null : p.NotifyName;
+                var contact = await contacts.GetByPhoneAsync(phone.E164, ct);
                 if (contact is null)
                 {
                     contact = Contact.Create(
                         id: Guid.NewGuid(),
-                        phone: PhoneNumber.FromValidatedE164(e164),
-                        name: p.NotifyName,
+                        phone: phone,
+                        name: inboundName,
                         groupTag: null,
                         theme: null,
                         optInAt: now);
                     await contacts.AddAsync(contact, ct);
                 }
+                else
+                {
+                    // Backfill: se o contato veio sem nome (ex.: importado de grupo) e agora
+                    // respondeu, preenche com o nome público dele.
+                    contact.FillNameIfEmpty(inboundName);
+                    await contacts.UpdateAsync(contact, ct);
+                }
                 contactId = contact.Id;
+
+                // Classificação automática quando o CONTATO respondeu (mensagem recebida).
+                if (p.FromMe != true)
+                {
+                    await ApplyInboundClassificationAsync(contact, p.Body, now, ct);
+                }
             }
         }
 
@@ -122,6 +142,49 @@ public sealed class WebhookIngestionService(
         conversation.TouchLastMessage(timestamp, p.Body);
 
         await uow.SaveChangesAsync(ct);
+    }
+
+    // Move o contato no funil com base na resposta recebida:
+    // - pediu pra sair ("SAIR" etc.) → opt-out + "Descartado" (Lost);
+    // - respondeu qualquer outra coisa e ainda estava em "Novo" (Lead) → "Respondeu" (Qualified).
+    // Não rebaixa quem já avançou (ex.: Cliente continua Cliente).
+    private async Task ApplyInboundClassificationAsync(Contact contact, string? body, DateTimeOffset now, CancellationToken ct)
+    {
+        if (OptOutDetector.IsOptOut(body))
+        {
+            if (contact.OptOutAt is null)
+            {
+                contact.OptOut(now);
+                await contacts.UpdateAsync(contact, ct);
+                log.LogInformation("Contato {ContactId} pediu opt-out via resposta", contact.Id);
+            }
+            await MoveStageAsync(contact, ContactStage.Lost, now, ct);
+            return;
+        }
+
+        if (contact.Stage == ContactStage.Lead)
+        {
+            await MoveStageAsync(contact, ContactStage.Qualified, now, ct);
+        }
+    }
+
+    private async Task MoveStageAsync(Contact contact, ContactStage to, DateTimeOffset now, CancellationToken ct)
+    {
+        var previous = contact.ChangeStage(to, now);
+        if (previous is null)
+        {
+            return;
+        }
+        await contacts.UpdateAsync(contact, ct);
+        await stageChanges.AddAsync(
+            ContactStageChange.Create(
+                id: Guid.NewGuid(),
+                contactId: contact.Id,
+                fromStage: previous,
+                toStage: to,
+                changedAt: now,
+                changedByUserId: Guid.Empty),
+            ct);
     }
 
     private static string? ResolveConversationTitle(WahaChatIdentifier.Kind kind, string? notifyName) =>

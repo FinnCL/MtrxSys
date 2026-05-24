@@ -32,7 +32,26 @@ public sealed class Contact : Entity<Guid>
 
     public void RegisterSend(DateTimeOffset at) => LastSentAt = at;
 
+    /// <summary>Preenche o nome só se ainda estiver vazio (ex.: backfill com o PushName de uma resposta).</summary>
+    public void FillNameIfEmpty(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(Name) && !string.IsNullOrWhiteSpace(name))
+        {
+            Name = name;
+        }
+    }
+
     public void OptOut(DateTimeOffset at) => OptOutAt = at;
+
+    /// <summary>
+    /// Religa o contato: limpa o opt-out e volta pra "Novo" (Lead). Retorna o estágio
+    /// anterior se mudou (pra registrar no histórico), ou null se já estava em "Novo".
+    /// </summary>
+    public ContactStage? Reactivate(DateTimeOffset at)
+    {
+        OptOutAt = null;
+        return ChangeStage(ContactStage.Lead, at);
+    }
 
     public ContactStage? ChangeStage(ContactStage newStage, DateTimeOffset at)
     {

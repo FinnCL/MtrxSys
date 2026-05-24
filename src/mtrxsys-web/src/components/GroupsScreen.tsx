@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { Group, ImportResult } from "../api/types";
+import { downloadContactsXlsx } from "../utils/exportContacts";
 
 interface GroupRow {
   group: Group;
@@ -47,6 +48,15 @@ export function GroupsScreen() {
       setRows((prev) =>
         prev.map((r, i) => (i === idx ? { ...r, importing: false, result } : r)),
       );
+      // Baixa automaticamente a planilha com os contatos salvos desse grupo.
+      try {
+        const saved = await api.listContacts({ groupTag: tagSuggestion });
+        if (saved.length > 0) {
+          downloadContactsXlsx(saved, tagSuggestion);
+        }
+      } catch {
+        // download é um extra — não atrapalha o fluxo de importação se falhar
+      }
     } catch (ex) {
       setRows((prev) =>
         prev.map((r, i) =>
@@ -82,7 +92,7 @@ export function GroupsScreen() {
               </span>
               {row.result && (
                 <span className="import-summary">
-                  ✓ {row.result.imported} importados · {row.result.duplicated} duplicados
+                  {row.result.imported} importados · {row.result.duplicated} duplicados
                   {row.result.failed > 0 && ` · ${row.result.failed} falharam`}
                 </span>
               )}

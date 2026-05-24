@@ -9,10 +9,14 @@ public interface IContactRepository
     Task AddAsync(Contact contact, CancellationToken ct);
     Task UpdateAsync(Contact contact, CancellationToken ct);
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);
+    Task<IReadOnlyList<ContactGroupTag>> ListGroupTagsAsync(CancellationToken ct);
 }
 
 public sealed record ContactFilter(
     ContactStage? Stage = null,
     string? TagName = null,
     string? GroupTag = null,
-    bool ExcludeOptedOut = true);
+    bool ExcludeOptedOut = true,
+    bool EngagedOnly = false);
+
+public sealed record ContactGroupTag(string GroupTag, int Count);

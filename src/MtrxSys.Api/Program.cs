@@ -21,6 +21,9 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<MtrxSys.Core.Application.Abstractions.ICurrentUserAccessor, MtrxSys.Api.Startup.HttpCurrentUserAccessor>();
 builder.Services.AddOptions<MtrxSys.Api.Options.WebhookOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Api.Options.WebhookOptions.SectionName));
+builder.Services.AddOptions<MtrxSys.Core.Application.Options.SyncOptions>()
+    .Bind(builder.Configuration.GetSection(MtrxSys.Core.Application.Options.SyncOptions.SectionName));
+builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WhatsAppAutoSyncService>();
 builder.Services.AddCors(opts => opts.AddDefaultPolicy(p =>
     p.AllowAnyHeader().AllowAnyMethod().WithOrigins("http://localhost:5173")));
 

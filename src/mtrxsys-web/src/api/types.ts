@@ -4,6 +4,16 @@ export type Stage = "Lead" | "Qualified" | "Proposal" | "Won" | "Lost";
 
 export const ALL_STAGES: Stage[] = ["Lead", "Qualified", "Proposal", "Won", "Lost"];
 
+// Rótulos em PT-BR para exibição. Os valores acima continuam em inglês porque é
+// o que a API espera; só o texto que aparece na tela é traduzido.
+export const STAGE_LABELS: Record<Stage, string> = {
+  Lead: "Novo",
+  Qualified: "Respondeu",
+  Proposal: "Negociando",
+  Won: "Cliente",
+  Lost: "Descartado",
+};
+
 export type Direction = "Inbound" | "Outbound";
 
 export interface Conversation {
@@ -89,6 +99,11 @@ export interface Group {
   participantsCount: number | null;
 }
 
+export interface ContactGroupTag {
+  groupTag: string;
+  count: number;
+}
+
 export interface ImportFailure {
   participantId: string;
   phone: string;
@@ -116,6 +131,7 @@ export interface DispatchFilter {
   stage?: Stage;
   tagName?: string;
   groupTag?: string;
+  engagedOnly?: boolean;
 }
 
 export interface DispatchStats {
@@ -123,6 +139,17 @@ export interface DispatchStats {
   sent: number;
   failed: number;
   skipped: number;
+}
+
+export type DispatchJobStatus = "Pending" | "Sent" | "Failed" | "Skipped";
+
+export interface DispatchReportItem {
+  phone: string | null;
+  name: string | null;
+  status: DispatchJobStatus;
+  scheduledAt: string;
+  sentAt: string | null;
+  errorReason: string | null;
 }
 
 export interface DispatchJob {

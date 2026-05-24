@@ -9,6 +9,39 @@ public static class ContactsEndpoints
     {
         var group = app.MapGroup("/api/contacts");
 
+        group.MapGet("/", async (
+            string? stage,
+            string? groupTag,
+            IContactRepository contacts,
+            CancellationToken ct) =>
+        {
+            ContactStage? parsedStage = null;
+            if (!string.IsNullOrWhiteSpace(stage))
+            {
+                if (!Enum.TryParse<ContactStage>(stage, ignoreCase: true, out var s))
+                {
+                    return Results.Problem($"unknown stage '{stage}'", statusCode: 400);
+                }
+                parsedStage = s;
+            }
+            // ExcludeOptedOut: false — na listagem o usuário quer ver tudo, inclusive "Descartado".
+            var filter = new ContactFilter(
+                Stage: parsedStage,
+                TagName: null,
+                GroupTag: string.IsNullOrWhiteSpace(groupTag) ? null : groupTag,
+                ExcludeOptedOut: false);
+            var list = await contacts.ListByFilterAsync(filter, ct);
+            return Results.Ok(list.Select(ToDto));
+        });
+
+        group.MapGet("/group-tags", async (
+            IContactRepository contacts,
+            CancellationToken ct) =>
+        {
+            var tags = await contacts.ListGroupTagsAsync(ct);
+            return Results.Ok(tags.Select(t => new { groupTag = t.GroupTag, count = t.Count }));
+        });
+
         group.MapGet("/{id:guid}", async (
             Guid id,
             IContactRepository contacts,
@@ -110,6 +143,39 @@ public static class ContactsEndpoints
                 }
             }
 
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(ToDto(contact));
+        });
+
+        group.MapPost("/{id:guid}/reactivate", async (
+            Guid id,
+            IContactRepository contacts,
+            IContactStageChangeRepository changes,
+            ICurrentUserAccessor user,
+            IClock clock,
+            IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            var contact = await contacts.GetByIdAsync(id, ct);
+            if (contact is null)
+            {
+                return Results.NotFound();
+            }
+            var now = clock.UtcNow;
+            var previous = contact.Reactivate(now);
+            await contacts.UpdateAsync(contact, ct);
+            if (previous is not null)
+            {
+                await changes.AddAsync(
+                    ContactStageChange.Create(
+                        id: Guid.NewGuid(),
+                        contactId: contact.Id,
+                        fromStage: previous,
+                        toStage: ContactStage.Lead,
+                        changedAt: now,
+                        changedByUserId: user.UserId ?? Guid.Empty),
+                    ct);
+            }
             await uow.SaveChangesAsync(ct);
             return Results.Ok(ToDto(contact));
         });

@@ -37,6 +37,22 @@ public static class CampaignsEndpoints
             return Results.Created($"/api/templates/{template.Id}", ToTemplateDto(template));
         });
 
+        templates.MapDelete("/{id:guid}", async (
+            Guid id,
+            IMessageTemplateRepository repo,
+            IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            var t = await repo.GetByIdAsync(id, ct);
+            if (t is null)
+            {
+                return Results.NotFound();
+            }
+            t.Deactivate();
+            await uow.SaveChangesAsync(ct);
+            return Results.NoContent();
+        });
+
         var dispatch = app.MapGroup("/api/dispatch");
 
         dispatch.MapPost("/", async (
@@ -44,19 +60,31 @@ public static class CampaignsEndpoints
             IContactRepository contacts,
             IDispatchJobRepository jobs,
             IMessageTemplateRepository templates,
+            IRandomSource rng,
             IUnitOfWork uow,
             IClock clock,
             CancellationToken ct) =>
         {
-            if (req.TemplateId == Guid.Empty)
+            // Aceita uma lista de templates (rodízio) ou um único (compatível com chamadas antigas).
+            var requestedIds = req.TemplateIds is { Length: > 0 } many
+                ? many
+                : req.TemplateId != Guid.Empty ? [req.TemplateId] : Array.Empty<Guid>();
+            if (requestedIds.Length == 0)
             {
-                return Results.Problem("templateId is required", statusCode: 400);
+                return Results.Problem("informe ao menos um template", statusCode: 400);
             }
-            var template = await templates.GetByIdAsync(req.TemplateId, ct);
-            if (template is null)
+
+            var pool = new List<MessageTemplate>();
+            foreach (var id in requestedIds.Distinct())
             {
-                return Results.NotFound(new { error = "template not found" });
+                var t = await templates.GetByIdAsync(id, ct);
+                if (t is null)
+                {
+                    return Results.NotFound(new { error = $"template {id} não encontrado" });
+                }
+                pool.Add(t);
             }
+
             ContactStage? stage = null;
             if (!string.IsNullOrWhiteSpace(req.Filter?.Stage))
             {
@@ -70,22 +98,53 @@ public static class CampaignsEndpoints
                 Stage: stage,
                 TagName: req.Filter?.TagName,
                 GroupTag: req.Filter?.GroupTag,
-                ExcludeOptedOut: true);
+                ExcludeOptedOut: true,
+                EngagedOnly: req.Filter?.EngagedOnly ?? false);
             var targets = await contacts.ListByFilterAsync(filter, ct);
             var now = clock.UtcNow;
             foreach (var c in targets)
             {
-                var job = DispatchJob.Schedule(Guid.NewGuid(), c.Id, template.Id, now);
+                // Rodízio: cada contato recebe uma mensagem sorteada do pote.
+                var tpl = pool[rng.NextInt(0, pool.Count)];
+                var job = DispatchJob.Schedule(Guid.NewGuid(), c.Id, tpl.Id, now);
                 await jobs.AddAsync(job, ct);
             }
             await uow.SaveChangesAsync(ct);
-            return Results.Ok(new { scheduled = targets.Count });
+            return Results.Ok(new { scheduled = targets.Count, templatesUsed = pool.Count });
         });
 
         dispatch.MapGet("/stats", async (IDispatchJobRepository repo, CancellationToken ct) =>
         {
             var stats = await repo.GetStatsAsync(ct);
             return Results.Ok(stats);
+        });
+
+        dispatch.MapGet("/report", async (
+            string? status,
+            int? limit,
+            IDispatchJobRepository repo,
+            CancellationToken ct) =>
+        {
+            DispatchStatus? parsed = null;
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                if (!Enum.TryParse<DispatchStatus>(status, ignoreCase: true, out var s))
+                {
+                    return Results.Problem($"unknown status '{status}'", statusCode: 400);
+                }
+                parsed = s;
+            }
+            var take = Math.Clamp(limit ?? 1000, 1, 5000);
+            var items = await repo.ListReportAsync(parsed, take, ct);
+            return Results.Ok(items.Select(i => new
+            {
+                phone = i.Phone,
+                name = i.Name,
+                status = i.Status,
+                scheduledAt = i.ScheduledAt,
+                sentAt = i.SentAt,
+                errorReason = i.ErrorReason,
+            }));
         });
 
         dispatch.MapGet("/jobs", async (int? limit, IDispatchJobRepository repo, CancellationToken ct) =>
@@ -111,7 +170,7 @@ public static class CampaignsEndpoints
         new(t.Id, t.Slot.ToString(), t.ContentSpintax, t.Active);
 
     public sealed record CreateTemplateRequest(string ContentSpintax, string? Slot);
-    public sealed record DispatchRequest(Guid TemplateId, DispatchFilterRequest? Filter);
-    public sealed record DispatchFilterRequest(string? Stage, string? TagName, string? GroupTag);
+    public sealed record DispatchRequest(Guid TemplateId, Guid[]? TemplateIds, DispatchFilterRequest? Filter);
+    public sealed record DispatchFilterRequest(string? Stage, string? TagName, string? GroupTag, bool? EngagedOnly);
     public sealed record TemplateDto(Guid Id, string Slot, string ContentSpintax, bool Active);
 }

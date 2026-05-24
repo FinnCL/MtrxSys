@@ -92,6 +92,9 @@ services:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
       Waha__BaseUrl: "http://waha:3000"
       Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+      # O dispatcher não serve HTTP, mas herda a validação de JwtOptions via AddInfrastructure.
+      # Sem a chave ele falha no startup (ValidateOnStart) e entra em crash-loop (exit 139).
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
     depends_on:
       postgres:
         condition: service_healthy

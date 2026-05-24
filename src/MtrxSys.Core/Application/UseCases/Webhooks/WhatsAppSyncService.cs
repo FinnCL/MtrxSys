@@ -4,6 +4,7 @@ using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Core.Application.UseCases.Webhooks;
 
@@ -14,6 +15,7 @@ public sealed class WhatsAppSyncService(
     IContactRepository contacts,
     IUnitOfWork uow,
     IClock clock,
+    BrazilPhoneValidator phones,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<WhatsAppSyncService> log)
 {
@@ -71,12 +73,13 @@ public sealed class WhatsAppSyncService(
             var e164 = WahaChatIdentifier.TryExtractPhoneE164(chat.Id);
             if (e164 is not null)
             {
-                var contact = await contacts.GetByPhoneAsync(e164, ct);
+                var phone = phones.NormalizeTrusted(e164);
+                var contact = await contacts.GetByPhoneAsync(phone.E164, ct);
                 if (contact is null)
                 {
                     contact = Contact.Create(
                         id: Guid.NewGuid(),
-                        phone: PhoneNumber.FromValidatedE164(e164),
+                        phone: phone,
                         name: chat.Name,
                         groupTag: null,
                         theme: null,

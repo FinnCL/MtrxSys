@@ -2,11 +2,13 @@ import type {
   ChatMessage,
   Contact,
   ContactDetail,
+  ContactGroupTag,
   ContactNote,
   Conversation,
   ConversationWithMessages,
   DispatchFilter,
   DispatchJob,
+  DispatchReportItem,
   DispatchStats,
   Group,
   ImportResult,
@@ -121,6 +123,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ text }),
     }),
+  listContacts: (params: { stage?: Stage; groupTag?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.stage) q.set("stage", params.stage);
+    if (params.groupTag) q.set("groupTag", params.groupTag);
+    const qs = q.toString();
+    return request<Contact[]>(`/api/contacts${qs ? `?${qs}` : ""}`);
+  },
+  listContactGroupTags: () => request<ContactGroupTag[]>("/api/contacts/group-tags"),
+  reactivateContact: (id: string) =>
+    request<Contact>(`/api/contacts/${id}/reactivate`, { method: "POST" }),
   getContact: (id: string) => request<ContactDetail>(`/api/contacts/${id}`),
   patchContact: (id: string, payload: { stage?: Stage; addTags?: string[]; removeTags?: string[] }) =>
     request<Contact>(`/api/contacts/${id}`, {
@@ -150,11 +162,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ contentSpintax, slot }),
     }),
-  dispatch: (templateId: string, filter: DispatchFilter) =>
-    request<{ scheduled: number }>("/api/dispatch", {
+  deleteTemplate: (id: string) =>
+    request<void>(`/api/templates/${id}`, { method: "DELETE" }),
+  dispatch: (templateIds: string[], filter: DispatchFilter) =>
+    request<{ scheduled: number; templatesUsed: number }>("/api/dispatch", {
       method: "POST",
-      body: JSON.stringify({ templateId, filter }),
+      body: JSON.stringify({ templateIds, filter }),
     }),
   dispatchStats: () => request<DispatchStats>("/api/dispatch/stats"),
   dispatchJobs: (limit = 50) => request<DispatchJob[]>(`/api/dispatch/jobs?limit=${limit}`),
+  dispatchReport: (status?: string, limit = 1000) => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    q.set("limit", String(limit));
+    return request<DispatchReportItem[]>(`/api/dispatch/report?${q.toString()}`);
+  },
 };

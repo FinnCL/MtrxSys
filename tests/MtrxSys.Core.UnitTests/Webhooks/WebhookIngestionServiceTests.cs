@@ -15,6 +15,7 @@ public sealed class WebhookIngestionServiceTests
     private readonly IConversationRepository _conversations = Substitute.For<IConversationRepository>();
     private readonly IChatMessageRepository _messages = Substitute.For<IChatMessageRepository>();
     private readonly IContactRepository _contacts = Substitute.For<IContactRepository>();
+    private readonly IContactStageChangeRepository _stageChanges = Substitute.For<IContactStageChangeRepository>();
     private readonly IUnitOfWork _uow = Substitute.For<IUnitOfWork>();
     private readonly IClock _clock = Substitute.For<IClock>();
 
@@ -26,8 +27,10 @@ public sealed class WebhookIngestionServiceTests
             _conversations,
             _messages,
             _contacts,
+            _stageChanges,
             _uow,
             _clock,
+            new MtrxSys.Core.Validation.BrazilPhoneValidator(),
             opts,
             NullLogger<WebhookIngestionService>.Instance);
     }
@@ -95,7 +98,11 @@ public sealed class WebhookIngestionServiceTests
         await svc.IngestAsync(evt, CancellationToken.None);
 
         await _contacts.Received(1).AddAsync(
-            Arg.Is<Contact>(c => c.Phone.E164 == "+5511999998888" && c.Stage == ContactStage.Lead),
+            Arg.Is<Contact>(c => c.Phone.E164 == "+5511999998888"),
+            Arg.Any<CancellationToken>());
+        // Mensagem recebida promove o contato de "Novo" (Lead) para "Respondeu" (Qualified).
+        await _stageChanges.Received(1).AddAsync(
+            Arg.Is<ContactStageChange>(c => c.FromStage == ContactStage.Lead && c.ToStage == ContactStage.Qualified),
             Arg.Any<CancellationToken>());
         await _conversations.Received(1).AddAsync(
             Arg.Is<Conversation>(c => c.WaChatId == "5511999998888@c.us" && !c.IsGroup),
@@ -108,6 +115,33 @@ public sealed class WebhookIngestionServiceTests
                 m.Body == "olá"),
             Arg.Any<CancellationToken>());
         await _uow.Received(1).SaveChangesAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Ingest_inbound_optout_keyword_opts_out_and_marks_lost()
+    {
+        var svc = BuildService();
+        _messages.GetByWaMessageIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((ChatMessage?)null);
+        _conversations.GetByWaChatIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Conversation?)null);
+        _contacts.GetByPhoneAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Contact?)null);
+
+        Contact? captured = null;
+        _contacts.When(x => x.AddAsync(Arg.Any<Contact>(), Arg.Any<CancellationToken>()))
+            .Do(ci => captured = ci.Arg<Contact>());
+
+        var evt = new WahaWebhookEvent(
+            "message",
+            "default",
+            new WahaMessagePayload("wa-out", 1700000000, "5511999990000@c.us", null, false, "SAIR", false, null, null));
+
+        await svc.IngestAsync(evt, CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.OptOutAt.Should().NotBeNull();
+        captured.Stage.Should().Be(ContactStage.Lost);
+        await _stageChanges.Received(1).AddAsync(
+            Arg.Is<ContactStageChange>(c => c.ToStage == ContactStage.Lost),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]

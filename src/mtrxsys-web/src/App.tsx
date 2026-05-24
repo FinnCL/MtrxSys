@@ -6,13 +6,14 @@ import { ChatThread } from "./components/ChatThread";
 import { ContactPanel } from "./components/ContactPanel";
 import { WhatsAppOnboarding } from "./components/WhatsAppOnboarding";
 import { GroupsScreen } from "./components/GroupsScreen";
+import { ContactsScreen } from "./components/ContactsScreen";
 import { CampaignsScreen } from "./components/CampaignsScreen";
 import { api } from "./api/client";
 import type { Conversation } from "./api/types";
 import { emptyContactPaneMessage } from "./utils/chatLabels";
 import "./App.css";
 
-type ViewTab = "chat" | "groups" | "campaigns";
+type ViewTab = "chat" | "groups" | "contacts" | "campaigns";
 
 function Shell() {
   const { user, ready, logout } = useAuth();
@@ -83,10 +84,17 @@ function Shell() {
             </button>
             <button
               type="button"
+              className={`tab-btn${view === "contacts" ? " active" : ""}`}
+              onClick={() => setView("contacts")}
+            >
+              Contatos
+            </button>
+            <button
+              type="button"
               className={`tab-btn${view === "campaigns" ? " active" : ""}`}
               onClick={() => setView("campaigns")}
             >
-              Campanhas
+              Disparo
             </button>
           </nav>
         )}
@@ -112,6 +120,8 @@ function Shell() {
         <WhatsAppOnboarding onWorking={() => setWahaWorking(true)} />
       ) : view === "groups" ? (
         <GroupsScreen />
+      ) : view === "contacts" ? (
+        <ContactsScreen />
       ) : view === "campaigns" ? (
         <CampaignsScreen />
       ) : (

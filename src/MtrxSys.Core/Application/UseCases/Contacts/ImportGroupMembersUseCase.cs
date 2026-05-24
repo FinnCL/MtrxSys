@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Contacts;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Core.Application.UseCases.Contacts;
 
@@ -10,6 +11,7 @@ public sealed class ImportGroupMembersUseCase(
     IContactRepository contacts,
     IUnitOfWork uow,
     IClock clock,
+    BrazilPhoneValidator phones,
     IOptions<DispatchOptions> opts)
 {
     public async Task<ImportResult> ExecuteAsync(string groupId, string? groupTag, CancellationToken ct)
@@ -27,14 +29,14 @@ public sealed class ImportGroupMembersUseCase(
 
             try
             {
-                var existing = await contacts.GetByPhoneAsync(member.PhoneE164, ct);
+                var phone = phones.NormalizeTrusted(member.PhoneE164);
+                var existing = await contacts.GetByPhoneAsync(phone.E164, ct);
                 if (existing is not null)
                 {
                     duplicated++;
                     continue;
                 }
 
-                var phone = PhoneNumber.FromValidatedE164(member.PhoneE164);
                 var contact = Contact.Create(
                     id: Guid.NewGuid(),
                     phone: phone,
