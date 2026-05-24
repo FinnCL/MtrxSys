@@ -180,6 +180,7 @@ export const api = {
   pauseDispatch: () => request<{ paused: boolean }>("/api/dispatch/pause", { method: "POST" }),
   resumeDispatch: () => request<{ paused: boolean }>("/api/dispatch/resume", { method: "POST" }),
   clearQueue: () => request<{ cleared: number }>("/api/dispatch/clear", { method: "POST" }),
+  resetResults: () => request<{ cleared: number }>("/api/dispatch/reset", { method: "POST" }),
   audienceCount: (params: { engagedOnly?: boolean; groupTag?: string } = {}) => {
     const q = new URLSearchParams();
     if (params.engagedOnly) q.set("engagedOnly", "true");

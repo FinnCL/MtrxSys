@@ -148,6 +148,7 @@ export function CampaignsScreen() {
 
   const selectedIds = messages.filter((m) => !excludedIds.has(m.id)).map((m) => m.id);
   const pendingCount = stats?.pending ?? 0;
+  const totalJobs = stats ? stats.pending + stats.sent + stats.failed + stats.skipped : 0;
 
   // Etapa 2: prepara a fila — pausa e enfileira os contatos (entram "Na fila", nada sai ainda).
   async function onPrepare() {
@@ -205,6 +206,29 @@ export function CampaignsScreen() {
       await loadLive();
     } catch (ex) {
       setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);
+    }
+  }
+
+  // Renova a lista: baixa o histórico atual em Excel (backup) e zera todos os resultados.
+  async function onRenew() {
+    if (
+      !window.confirm(
+        "Renovar a lista? Vou baixar o histórico atual em Excel e zerar todos os resultados (enviadas, falhas, fila). Continuar?",
+      )
+    ) {
+      return;
+    }
+    try {
+      // Backup COMPLETO (ignora o filtro de status da tela) — o reset apaga tudo.
+      const all = await api.dispatchReport(undefined, 5000);
+      if (all.length > 0) {
+        downloadDispatchReportXlsx(all);
+      }
+      await api.resetResults();
+      setDispatchMsg("Lista renovada — resultados zerados (histórico salvo no Excel).");
+      await loadLive();
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
     }
   }
 
@@ -395,14 +419,25 @@ export function CampaignsScreen() {
           <h3>
             Resultado dos envios{reportStatus ? ` · ${DISPATCH_STATUS_LABELS[reportStatus]}` : ""}
           </h3>
-          <button
-            type="button"
-            className="report-export"
-            onClick={() => downloadDispatchReportXlsx(report)}
-            disabled={report.length === 0}
-          >
-            Baixar relatório (Excel)
-          </button>
+          <div className="report-actions">
+            <button
+              type="button"
+              className="report-export"
+              onClick={() => downloadDispatchReportXlsx(report)}
+              disabled={report.length === 0}
+            >
+              Baixar relatório (Excel)
+            </button>
+            <button
+              type="button"
+              className="report-renew"
+              onClick={() => void onRenew()}
+              disabled={totalJobs === 0}
+              title="Baixa o histórico em Excel e zera os resultados pra começar uma nova campanha"
+            >
+              Renovar lista
+            </button>
+          </div>
         </div>
         <p className="muted small">
           {reportStatus

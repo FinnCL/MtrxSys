@@ -63,6 +63,9 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
     public Task<int> ClearPendingAsync(CancellationToken ct) =>
         db.DispatchJobs.Where(j => j.Status == DispatchStatus.Pending).ExecuteDeleteAsync(ct);
 
+    public Task<int> ClearAllAsync(CancellationToken ct) =>
+        db.DispatchJobs.ExecuteDeleteAsync(ct);
+
     private async Task<IReadOnlyList<DispatchReportItem>> BuildReportAsync(List<DispatchJob> jobs, CancellationToken ct)
     {
         var contactIds = jobs.Select(j => j.ContactId).Distinct().ToList();

@@ -151,6 +151,12 @@ public static class CampaignsEndpoints
             return Results.Ok(new { cleared });
         });
 
+        dispatch.MapPost("/reset", async (IDispatchJobRepository repo, CancellationToken ct) =>
+        {
+            var cleared = await repo.ClearAllAsync(ct);
+            return Results.Ok(new { cleared });
+        });
+
         dispatch.MapGet("/audience-count", async (
             bool? engagedOnly,
             string? groupTag,
