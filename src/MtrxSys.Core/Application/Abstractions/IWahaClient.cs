@@ -8,6 +8,10 @@ public interface IWahaClient
     /// <summary>Resolve um LID (@lid, número oculto) para o telefone E.164 real, ou null se não der.</summary>
     Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct);
     Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct);
+    /// <summary>Reinicia a sessão (stop+start). Necessário pra recuperar do estado FAILED, onde um simples start é rejeitado.</summary>
+    Task RestartSessionAsync(string sessionId, CancellationToken ct);
+    /// <summary>Desconecta o número da sessão (logout no WhatsApp). Depois é preciso parear de novo via QR.</summary>
+    Task LogoutSessionAsync(string sessionId, CancellationToken ct);
     Task<byte[]> GetQrPngAsync(string sessionId, CancellationToken ct);
     Task<string> GetQrRawAsync(string sessionId, CancellationToken ct);
 
@@ -19,6 +23,8 @@ public interface IWahaClient
     Task<WahaGroup> JoinGroupByInviteAsync(string sessionId, string inviteCodeOrUrl, CancellationToken ct);
 
     Task<string> SendTextAsync(string sessionId, string phoneOrChatId, string text, CancellationToken ct);
+    /// <summary>Envia uma imagem (bytes + mimetype) com legenda opcional. Retorna o id da mensagem no WhatsApp.</summary>
+    Task<string> SendImageAsync(string sessionId, string phoneOrChatId, byte[] imageData, string mimeType, string caption, CancellationToken ct);
     Task StartTypingAsync(string sessionId, string phoneOrChatId, CancellationToken ct);
     Task StopTypingAsync(string sessionId, string phoneOrChatId, CancellationToken ct);
 

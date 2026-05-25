@@ -11,6 +11,14 @@ export function ContactsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<{ id: string; tag: string; label: string } | null>(null);
+  // Ação de manutenção pendente de confirmação (proteção anti-miss-click via modal).
+  const [pending, setPending] = useState<
+    | { kind: "revert"; id: string; tag: string; label: string }
+    | { kind: "delete"; tag: string }
+    | null
+  >(null);
+  const [busy, setBusy] = useState(false);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -34,6 +42,38 @@ export function ContactsScreen() {
       setContactsByGroup((prev) => ({ ...prev, [tag]: list }));
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
+    }
+  }
+
+  // Executa a ação de manutenção só após confirmação no modal (anti-miss-click).
+  async function confirmPending() {
+    if (!pending) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (pending.kind === "revert") {
+        await api.patchContact(pending.id, { stage: "Lead" });
+        setActionMsg(`"${pending.label}" não está mais como "Respondeu".`);
+        const listNow = await api.listContacts({ groupTag: pending.tag });
+        setContactsByGroup((prev) => ({ ...prev, [pending.tag]: listNow }));
+      } else {
+        const r = await api.deleteGroupContacts(pending.tag);
+        setActionMsg(`${r.deleted} contato(s) do grupo "${pending.tag}" excluído(s).`);
+        // O grupo fica vazio → some da lista; limpa o cache local e recarrega os grupos.
+        const tag = pending.tag;
+        setExpanded((e) => (e === tag ? null : e));
+        setContactsByGroup((prev) => {
+          const next = { ...prev };
+          delete next[tag];
+          return next;
+        });
+        setGroups(await api.listContactGroupTags());
+      }
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setBusy(false);
+      setPending(null);
     }
   }
 
@@ -64,6 +104,7 @@ export function ContactsScreen() {
       </header>
 
       {error && <p className="error">{error}</p>}
+      {actionMsg && <p className="muted small">{actionMsg}</p>}
 
       {loading ? (
         <p className="muted">Carregando...</p>
@@ -122,6 +163,23 @@ export function ContactsScreen() {
                                   >
                                     Reativar
                                   </button>
+                                ) : c.stage === "Qualified" ? (
+                                  <button
+                                    type="button"
+                                    className="reactivate-btn"
+                                    disabled={busy}
+                                    title='Tira o status "Respondeu" deste contato'
+                                    onClick={() =>
+                                      setPending({
+                                        kind: "revert",
+                                        id: c.id,
+                                        tag: g.groupTag,
+                                        label: c.name || c.phoneE164,
+                                      })
+                                    }
+                                  >
+                                    Reverter
+                                  </button>
                                 ) : (
                                   <span className="muted">—</span>
                                 )}
@@ -133,6 +191,18 @@ export function ContactsScreen() {
                     ) : (
                       <p className="muted small">Sem contatos neste grupo.</p>
                     )}
+                    {/* Excluir só aparece com o grupo aberto — camada extra anti-miss-click. */}
+                    <div className="group-delete-row">
+                      <button
+                        type="button"
+                        className="group-delete-link"
+                        disabled={busy}
+                        title="Exclui os contatos deste grupo (e suas conversas/disparos). Não dá pra desfazer."
+                        onClick={() => setPending({ kind: "delete", tag: g.groupTag })}
+                      >
+                        Excluir contatos deste grupo
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -158,6 +228,32 @@ export function ContactsScreen() {
           danger
           onConfirm={() => void reactivate(confirmTarget.id, confirmTarget.tag)}
           onCancel={() => setConfirmTarget(null)}
+        />
+      )}
+
+      {pending && (
+        <ConfirmDialog
+          title={pending.kind === "revert" ? 'Reverter "Respondeu"?' : "Excluir contatos do grupo?"}
+          message={
+            pending.kind === "revert" ? (
+              <>
+                Tira o status <strong>"Respondeu"</strong> de <strong>{pending.label}</strong>. <strong>Não apaga
+                nada</strong> e é reversível: se a pessoa responder de novo, volta para "Respondeu".
+              </>
+            ) : (
+              <>
+                Apaga os contatos de <strong>“{pending.tag}”</strong>, com as conversas e disparos deles.
+                <br />
+                <br />
+                Só no sistema; o <strong>WhatsApp do celular não é afetado</strong>. Não dá pra desfazer.
+              </>
+            )
+          }
+          confirmLabel={pending.kind === "revert" ? "Sim, reverter" : "Sim, excluir"}
+          cancelLabel="Cancelar"
+          danger={pending.kind === "delete"}
+          onConfirm={() => void confirmPending()}
+          onCancel={() => setPending(null)}
         />
       )}
     </main>

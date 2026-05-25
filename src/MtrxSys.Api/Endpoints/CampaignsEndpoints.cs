@@ -1,8 +1,12 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
+using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Messages;
 using MtrxSys.Core.Domain.SystemState;
+using MtrxSys.Core.Safety;
 
 namespace MtrxSys.Api.Endpoints;
 
@@ -32,10 +36,53 @@ public static class CampaignsEndpoints
             {
                 slot = MessageSlot.Greeting;
             }
-            var template = MessageTemplate.Create(Guid.NewGuid(), slot, req.ContentSpintax, active: true);
+
+            byte[]? imageData = null;
+            string? imageMimeType = null;
+            if (!string.IsNullOrWhiteSpace(req.ImageBase64))
+            {
+                if (!AllowedImageMimeTypes.Contains(req.ImageMimeType ?? string.Empty))
+                {
+                    return Results.Problem("imagem deve ser PNG, JPEG ou WebP", statusCode: 400);
+                }
+                try
+                {
+                    imageData = Convert.FromBase64String(req.ImageBase64);
+                }
+                catch (FormatException)
+                {
+                    return Results.Problem("imageBase64 inválido", statusCode: 400);
+                }
+                if (imageData.Length == 0)
+                {
+                    return Results.Problem("imagem vazia", statusCode: 400);
+                }
+                if (imageData.Length > MaxImageBytes)
+                {
+                    return Results.Problem($"imagem excede o limite de {MaxImageBytes / (1024 * 1024)} MB", statusCode: 400);
+                }
+                imageMimeType = req.ImageMimeType;
+            }
+
+            var template = MessageTemplate.Create(
+                Guid.NewGuid(), slot, req.ContentSpintax, active: true,
+                imageData: imageData, imageMimeType: imageMimeType);
             await repo.AddAsync(template, ct);
             await uow.SaveChangesAsync(ct);
             return Results.Created($"/api/templates/{template.Id}", ToTemplateDto(template));
+        });
+
+        templates.MapGet("/{id:guid}/image", async (
+            Guid id,
+            IMessageTemplateRepository repo,
+            CancellationToken ct) =>
+        {
+            var t = await repo.GetByIdAsync(id, ct);
+            if (t is null || !t.HasImage)
+            {
+                return Results.NotFound();
+            }
+            return Results.File(t.ImageData!, t.ImageMimeType ?? "application/octet-stream");
         });
 
         templates.MapDelete("/{id:guid}", async (
@@ -64,8 +111,27 @@ public static class CampaignsEndpoints
             IRandomSource rng,
             IUnitOfWork uow,
             IClock clock,
+            IWahaClient waha,
+            IOptions<DispatchOptions> dispatchOpts,
+            ISystemStateRepository state,
+            ILoggerFactory logFactory,
             CancellationToken ct) =>
         {
+            // Backstop anti-ban: reconcilia o aquecimento com o chip conectado ANTES de
+            // enfileirar. Fecha a brecha do reconcile-na-conexão (que pode ler o número antes
+            // do WAHA populá-lo). Melhor-esforço: um erro aqui não pode travar o disparo.
+            try
+            {
+                await ReconcileWarmupPhoneAsync(waha, dispatchOpts.Value.SessionId, state, clock, uow, ct);
+            }
+#pragma warning disable CA1031
+            catch (Exception ex)
+            {
+                logFactory.CreateLogger("DispatchPrepare")
+                    .LogWarning(ex, "Falha ao reconciliar o número do aquecimento antes do disparo; seguindo.");
+            }
+#pragma warning restore CA1031
+
             // Aceita uma lista de templates (rodízio) ou um único (compatível com chamadas antigas).
             var requestedIds = req.TemplateIds is { Length: > 0 } many
                 ? many
@@ -157,6 +223,84 @@ public static class CampaignsEndpoints
             return Results.Ok(new { cleared });
         });
 
+        dispatch.MapGet("/warmup", async (
+            WarmupManager warmup, ISystemStateRepository state, CancellationToken ct) =>
+        {
+            var s = await warmup.GetSnapshotAsync(ct);
+            var phone = (await state.GetAsync(ct)).WarmupPhone;
+            return Results.Ok(new
+            {
+                phone,
+                startedOn = s.StartedOn,
+                // dayIndex é base-0 no domínio; expõe base-1 pra UI ("dia 1 de 7").
+                day = s.DayIndex + 1,
+                totalDays = s.Curve.Length,
+                todayLimit = s.TodayLimit,       // teto da curva
+                bonusToday = s.BonusToday,       // extra liberado manualmente hoje
+                effectiveLimit = s.EffectiveLimit, // o que realmente vale agora
+                unlimitedToday = s.UnlimitedToday,
+                atCap = s.AtCap,
+                sentToday = s.SentToday,
+                remaining = s.Remaining,
+                nextLimit = s.NextLimit,
+                plateauLimit = s.PlateauLimit,
+                curve = s.Curve,
+            });
+        });
+
+        // Reinicia o aquecimento a partir de hoje (curva volta ao dia 0). Pra chip novo.
+        dispatch.MapPost("/warmup/restart", async (
+            ISystemStateRepository state, IClock clock, IUnitOfWork uow, CancellationToken ct) =>
+        {
+            var s = await state.GetAsync(ct);
+            s.RestartWarmup(DateOnly.FromDateTime(clock.UtcNow.UtcDateTime));
+            await state.UpdateAsync(s, ct);
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(new { startedOn = s.WarmupStartedOn });
+        });
+
+        // Reconcilia o aquecimento com o número conectado no WhatsApp. Se o número mudou
+        // (chip novo escaneado pelo QR), reinicia o aquecimento sozinho. Chamado quando a
+        // sessão fica "Working". Devolve { changed, phone } pra UI avisar.
+        dispatch.MapPost("/warmup/reconcile", async (
+            IWahaClient waha,
+            IOptions<DispatchOptions> dispatchOpts,
+            ISystemStateRepository state,
+            IClock clock,
+            IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            var (changed, phone) = await ReconcileWarmupPhoneAsync(
+                waha, dispatchOpts.Value.SessionId, state, clock, uow, ct);
+            return Results.Ok(new { changed, phone });
+        });
+
+        // Libera envios acima do teto do aquecimento SÓ PRA HOJE (decisão do operador no
+        // modal). { all: true } solta o teto inteiro; senão { extra: N } adiciona N. Expira
+        // à meia-noite. O dispatcher retoma a fila sozinho no próximo ciclo.
+        dispatch.MapPost("/warmup/release", async (
+            ReleaseWarmupRequest req,
+            ISystemStateRepository state, IClock clock, IUnitOfWork uow, CancellationToken ct) =>
+        {
+            var today = DateOnly.FromDateTime(clock.UtcNow.UtcDateTime);
+            var s = await state.GetAsync(ct);
+            if (req.All)
+            {
+                s.ReleaseWarmupAll(today);
+            }
+            else
+            {
+                if (req.Extra is not > 0)
+                {
+                    return Results.Problem("informe 'extra' > 0 ou 'all': true", statusCode: 400);
+                }
+                s.ReleaseWarmupBonus(today, req.Extra.Value);
+            }
+            await state.UpdateAsync(s, ct);
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(new { bonusToday = s.WarmupBonusToday, unlimited = s.WarmupBonusToday >= SystemStateAggregate.UnlimitedBonus });
+        });
+
         dispatch.MapGet("/audience-count", async (
             bool? engagedOnly,
             string? groupTag,
@@ -220,11 +364,34 @@ public static class CampaignsEndpoints
         return app;
     }
 
-    private static TemplateDto ToTemplateDto(MessageTemplate t) =>
-        new(t.Id, t.Slot.ToString(), t.ContentSpintax, t.Active);
+    // Reconcilia o aquecimento com o número conectado e persiste. Retorna se detectou troca
+    // de chip (e reiniciou). Usado na conexão (frontend) e como backstop antes de disparar —
+    // garante que o aquecimento bate com o chip atual mesmo se a 1ª leitura do "me" falhou.
+    private static async Task<(bool Changed, string? Phone)> ReconcileWarmupPhoneAsync(
+        IWahaClient waha, string sessionId, ISystemStateRepository state,
+        IClock clock, IUnitOfWork uow, CancellationToken ct)
+    {
+        var phone = await waha.GetOwnPhoneE164Async(sessionId, ct);
+        var s = await state.GetAsync(ct);
+        var changed = s.ReconcileWarmupPhone(phone, DateOnly.FromDateTime(clock.UtcNow.UtcDateTime));
+        // Persiste sempre: o primeiro registro do número também muta (e retorna false).
+        // Sem mudança real, o SaveChanges é no-op (não emite SQL).
+        await state.UpdateAsync(s, ct);
+        await uow.SaveChangesAsync(ct);
+        return (changed, s.WarmupPhone);
+    }
 
-    public sealed record CreateTemplateRequest(string ContentSpintax, string? Slot);
+    // Guardas da imagem: tipos permitidos e teto de tamanho (localhost, imagem de promo).
+    private const int MaxImageBytes = 2 * 1024 * 1024;
+    private static readonly HashSet<string> AllowedImageMimeTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "image/png", "image/jpeg", "image/webp" };
+
+    private static TemplateDto ToTemplateDto(MessageTemplate t) =>
+        new(t.Id, t.Slot.ToString(), t.ContentSpintax, t.Active, t.HasImage);
+
+    public sealed record CreateTemplateRequest(string ContentSpintax, string? Slot, string? ImageBase64, string? ImageMimeType);
     public sealed record DispatchRequest(Guid TemplateId, Guid[]? TemplateIds, DispatchFilterRequest? Filter);
+    public sealed record ReleaseWarmupRequest(int? Extra, bool All);
     public sealed record DispatchFilterRequest(string? Stage, string? TagName, string? GroupTag, bool? EngagedOnly);
-    public sealed record TemplateDto(Guid Id, string Slot, string ContentSpintax, bool Active);
+    public sealed record TemplateDto(Guid Id, string Slot, string ContentSpintax, bool Active, bool HasImage);
 }

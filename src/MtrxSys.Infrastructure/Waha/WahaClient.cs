@@ -72,6 +72,27 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         resp.EnsureSuccessStatusCode();
     }
 
+    public async Task RestartSessionAsync(string sessionId, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Post, $"api/sessions/{Esc(sessionId)}/restart");
+        using var resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    public async Task LogoutSessionAsync(string sessionId, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Post, $"api/sessions/{Esc(sessionId)}/logout");
+        using var resp = await http.SendAsync(req, ct);
+        // Idempotente: se a sessão já está parada/não existe, considera concluído.
+        if (resp.StatusCode is HttpStatusCode.NotFound
+            or HttpStatusCode.UnprocessableEntity
+            or HttpStatusCode.Conflict)
+        {
+            return;
+        }
+        resp.EnsureSuccessStatusCode();
+    }
+
     public async Task<byte[]> GetQrPngAsync(string sessionId, CancellationToken ct)
     {
         using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/auth/qr?format=image");
@@ -176,6 +197,36 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         var body = await resp.Content.ReadFromJsonAsync<SendResponseDto>(Json, ct);
         return body?.Id?.Id ?? body?.Id?.Serialized ?? string.Empty;
     }
+
+    public async Task<string> SendImageAsync(
+        string sessionId, string phoneOrChatId, byte[] imageData, string mimeType, string caption, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Post, "api/sendImage");
+        req.Content = JsonContent.Create(new
+        {
+            chatId = ToChatId(phoneOrChatId),
+            caption,
+            file = new
+            {
+                data = Convert.ToBase64String(imageData),
+                mimetype = mimeType,
+                filename = "image" + ExtensionFor(mimeType),
+            },
+            session = sessionId,
+        }, options: Json);
+        using var resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<SendResponseDto>(Json, ct);
+        return body?.Id?.Id ?? body?.Id?.Serialized ?? string.Empty;
+    }
+
+    private static string ExtensionFor(string mimeType) => mimeType switch
+    {
+        "image/png" => ".png",
+        "image/jpeg" => ".jpg",
+        "image/webp" => ".webp",
+        _ => ".bin",
+    };
 
     public Task StartTypingAsync(string sessionId, string phoneOrChatId, CancellationToken ct) =>
         PostPresenceAsync(sessionId, phoneOrChatId, "api/startTyping", ct);

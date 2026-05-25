@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MtrxSys.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MtrxSys.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(MtrxDbContext))]
-    partial class MtrxDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260525001600_AddTemplateImage")]
+    partial class AddTemplateImage
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -455,25 +458,6 @@ namespace MtrxSys.Infrastructure.Persistence.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)")
                         .HasColumnName("paused_reason");
-
-                    b.Property<int>("WarmupBonusToday")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0)
-                        .HasColumnName("warmup_bonus_today");
-
-                    b.Property<DateOnly?>("WarmupOverrideDate")
-                        .HasColumnType("date")
-                        .HasColumnName("warmup_override_date");
-
-                    b.Property<string>("WarmupPhone")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("warmup_phone");
-
-                    b.Property<DateOnly?>("WarmupStartedOn")
-                        .HasColumnType("date")
-                        .HasColumnName("warmup_started_on");
 
                     b.Property<uint>("xmin")
                         .IsConcurrencyToken()

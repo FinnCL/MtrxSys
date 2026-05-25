@@ -4,7 +4,10 @@ services:
       context: ./src/mtrxsys-web
       dockerfile: Dockerfile
       target: dev
-    ports:
+    # !override SUBSTITUI a lista de ports herdada do docker-compose.yml em vez de
+    # somar (o merge de listas é aditivo). Sem isso, a 5173 do host seria publicada
+    # duas vezes (herdando "5173:80") → "port is already allocated".
+    ports: !override
       - "5173:5173"
     volumes:
       - ./src/mtrxsys-web:/app

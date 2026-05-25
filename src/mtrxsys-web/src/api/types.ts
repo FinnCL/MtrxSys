@@ -137,6 +137,7 @@ export interface MessageTemplate {
   slot: MessageSlot;
   contentSpintax: string;
   active: boolean;
+  hasImage: boolean;
 }
 
 export interface DispatchFilter {
@@ -151,6 +152,24 @@ export interface DispatchStats {
   sent: number;
   failed: number;
   skipped: number;
+}
+
+// Estado do aquecimento do chip (vindo de /api/dispatch/warmup). day é base-1.
+export interface WarmupStatus {
+  phone: string | null;     // número que o aquecimento acompanha
+  startedOn: string;
+  day: number;
+  totalDays: number;
+  todayLimit: number;       // teto da curva
+  bonusToday: number;       // extra liberado manualmente hoje
+  effectiveLimit: number;   // teto que realmente vale agora (curva + bônus)
+  unlimitedToday: boolean;  // "disparar todos" ativado hoje
+  atCap: boolean;           // bateu o teto efetivo
+  sentToday: number;
+  remaining: number;
+  nextLimit: number | null;
+  plateauLimit: number;
+  curve: number[];
 }
 
 export type DispatchJobStatus = "Pending" | "Sent" | "Failed" | "Skipped";

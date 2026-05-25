@@ -180,6 +180,20 @@ public static class ContactsEndpoints
             return Results.Ok(ToDto(contact));
         });
 
+        // Exclui os contatos de UM grupo (com conversas/mensagens/disparos ligados a eles).
+        group.MapPost("/delete-by-group", async (
+            DeleteByGroupRequest req,
+            IContactRepository contacts,
+            CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.GroupTag))
+            {
+                return Results.Problem("groupTag é obrigatório", statusCode: 400);
+            }
+            var deleted = await contacts.DeleteByGroupTagAsync(req.GroupTag.Trim(), ct);
+            return Results.Ok(new { deleted });
+        });
+
         group.MapPost("/{id:guid}/notes", async (
             Guid id,
             CreateNoteRequest req,
@@ -237,6 +251,8 @@ public static class ContactsEndpoints
     public sealed record PatchContactRequest(string? Stage, IReadOnlyList<string>? AddTags, IReadOnlyList<string>? RemoveTags);
 
     public sealed record CreateNoteRequest(string Body);
+
+    public sealed record DeleteByGroupRequest(string GroupTag);
 
     public sealed record ContactDto(
         Guid Id,

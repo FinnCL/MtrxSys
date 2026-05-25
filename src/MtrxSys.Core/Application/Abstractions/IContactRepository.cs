@@ -11,6 +11,8 @@ public interface IContactRepository
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);
     Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct);
     Task<IReadOnlyList<ContactGroupTag>> ListGroupTagsAsync(CancellationToken ct);
+    /// <summary>Exclui os contatos de um grupo (e suas conversas/mensagens/disparos), sem deixar órfãos.</summary>
+    Task<int> DeleteByGroupTagAsync(string groupTag, CancellationToken ct);
 }
 
 public sealed record ContactFilter(

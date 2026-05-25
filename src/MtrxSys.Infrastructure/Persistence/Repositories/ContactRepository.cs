@@ -27,6 +27,31 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
     public async Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct) =>
         await ApplyFilter(db.Contacts.AsQueryable(), filter).OrderBy(c => c.Phone.E164).ToListAsync(ct);
 
+    // Exclui os contatos de um grupo SEM deixar órfãos: primeiro apaga disparos e conversas
+    // (cascateiam as mensagens) ligados a esses contatos, depois os contatos (que cascateiam
+    // notas, tags e histórico). Toca outras tabelas de propósito — é uma operação de manutenção.
+    // Tudo numa transação: cada ExecuteDelete commitaria sozinho, então sem isso uma falha no
+    // meio deixaria estado parcial (ex.: disparos apagados mas contatos não).
+    public async Task<int> DeleteByGroupTagAsync(string groupTag, CancellationToken ct)
+    {
+        var ids = await db.Contacts
+            .Where(c => c.GroupTag == groupTag)
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+        if (ids.Count == 0)
+        {
+            return 0;
+        }
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.DispatchJobs.Where(j => ids.Contains(j.ContactId)).ExecuteDeleteAsync(ct);
+        await db.Conversations
+            .Where(c => c.ContactId.HasValue && ids.Contains(c.ContactId.Value))
+            .ExecuteDeleteAsync(ct);
+        await db.Contacts.Where(c => c.GroupTag == groupTag).ExecuteDeleteAsync(ct);
+        await tx.CommitAsync(ct);
+        return ids.Count;
+    }
+
     public Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct) =>
         ApplyFilter(db.Contacts.AsQueryable(), filter).CountAsync(ct);
 

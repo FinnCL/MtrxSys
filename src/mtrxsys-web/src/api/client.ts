@@ -19,6 +19,7 @@ import type {
   Stage,
   Tag,
   WahaStatus,
+  WarmupStatus,
 } from "./types";
 
 const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:5080";
@@ -95,6 +96,7 @@ export const api = {
     }),
   wahaStatus: () => request<{ status: WahaStatus; session: string }>("/api/waha/status"),
   wahaStart: () => request<{ status: WahaStatus }>("/api/waha/start", { method: "POST" }),
+  wahaLogout: () => request<{ status: WahaStatus }>("/api/waha/logout", { method: "POST" }),
   wahaSync: (messagesPerChat?: number) =>
     request<{
       chatsTouched: number;
@@ -142,6 +144,12 @@ export const api = {
   listContactGroupTags: () => request<ContactGroupTag[]>("/api/contacts/group-tags"),
   reactivateContact: (id: string) =>
     request<Contact>(`/api/contacts/${id}/reactivate`, { method: "POST" }),
+  // Exclui os contatos de um grupo (e suas conversas/disparos).
+  deleteGroupContacts: (groupTag: string) =>
+    request<{ deleted: number }>("/api/contacts/delete-by-group", {
+      method: "POST",
+      body: JSON.stringify({ groupTag }),
+    }),
   getContact: (id: string) => request<ContactDetail>(`/api/contacts/${id}`),
   patchContact: (id: string, payload: { stage?: Stage; addTags?: string[]; removeTags?: string[] }) =>
     request<Contact>(`/api/contacts/${id}`, {
@@ -166,11 +174,33 @@ export const api = {
       body: JSON.stringify({ groupTag: groupTag ?? null }),
     }),
   listTemplates: () => request<MessageTemplate[]>("/api/templates"),
-  createTemplate: (contentSpintax: string, slot: MessageSlot = "Greeting") =>
+  createTemplate: (
+    contentSpintax: string,
+    slot: MessageSlot = "Greeting",
+    image?: { base64: string; mimeType: string },
+  ) =>
     request<MessageTemplate>("/api/templates", {
       method: "POST",
-      body: JSON.stringify({ contentSpintax, slot }),
+      body: JSON.stringify({
+        contentSpintax,
+        slot,
+        imageBase64: image?.base64,
+        imageMimeType: image?.mimeType,
+      }),
     }),
+  // Miniatura do template: busca os bytes com auth (o endpoint exige Bearer, então
+  // <img src> direto daria 401) e devolve um object URL. Espelha wahaQrBlobUrl.
+  templateImageBlobUrl: async (id: string): Promise<string> => {
+    const token = getToken();
+    const resp = await fetch(`${baseUrl}/api/templates/${id}/image`, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    if (!resp.ok) {
+      throw new ApiError(resp.status, resp.statusText);
+    }
+    const blob = await resp.blob();
+    return URL.createObjectURL(blob);
+  },
   deleteTemplate: (id: string) =>
     request<void>(`/api/templates/${id}`, { method: "DELETE" }),
   dispatch: (templateIds: string[], filter: DispatchFilter) =>
@@ -186,6 +216,20 @@ export const api = {
     return request<DispatchReportItem[]>(`/api/dispatch/report?${q.toString()}`);
   },
   dispatchStatus: () => request<{ paused: boolean }>("/api/dispatch/status"),
+  warmupStatus: () => request<WarmupStatus>("/api/dispatch/warmup"),
+  restartWarmup: () =>
+    request<{ startedOn: string }>("/api/dispatch/warmup/restart", { method: "POST" }),
+  // Reconcilia o aquecimento com o número conectado; reinicia sozinho se o chip mudou.
+  reconcileWarmup: () =>
+    request<{ changed: boolean; phone: string | null }>("/api/dispatch/warmup/reconcile", {
+      method: "POST",
+    }),
+  // Libera envios acima do teto só pra hoje: { all: true } solta tudo, ou { extra: N }.
+  releaseWarmup: (body: { extra?: number; all?: boolean }) =>
+    request<{ bonusToday: number; unlimited: boolean }>("/api/dispatch/warmup/release", {
+      method: "POST",
+      body: JSON.stringify({ extra: body.extra ?? null, all: body.all ?? false }),
+    }),
   // (o antigo dispatchJobs foi removido — substituído por dispatchReport)
   pauseDispatch: () => request<{ paused: boolean }>("/api/dispatch/pause", { method: "POST" }),
   resumeDispatch: () => request<{ paused: boolean }>("/api/dispatch/resume", { method: "POST" }),

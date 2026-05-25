@@ -15,7 +15,7 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
 export function LoginScreen() {
   const { login } = useAuth();
   const [email, setEmail] = useState("admin@local");
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState("admin123!");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

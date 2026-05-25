@@ -28,7 +28,17 @@ public static class WahaEndpoints
             CancellationToken ct) =>
         {
             var sessionId = dispatch.Value.SessionId;
-            await waha.EnsureSessionStartedAsync(sessionId, ct);
+            // De FAILED, o WAHA rejeita um simples /start (422) — só recupera com restart
+            // (stop+start). Senão, garante a sessão iniciada normalmente.
+            var current = await waha.GetSessionStatusAsync(sessionId, ct);
+            if (current == WahaSessionStatus.Failed)
+            {
+                await waha.RestartSessionAsync(sessionId, ct);
+            }
+            else
+            {
+                await waha.EnsureSessionStartedAsync(sessionId, ct);
+            }
 
             var hookUrl = wahaOpts.Value.WebhookCallbackUrl;
             if (!string.IsNullOrWhiteSpace(hookUrl))
@@ -48,6 +58,18 @@ public static class WahaEndpoints
             }
 
             var status = await waha.GetSessionStatusAsync(sessionId, ct);
+            return Results.Ok(new { status = status.ToString() });
+        });
+
+        // Desconecta o número da sessão (logout no WhatsApp). Depois o status cai pra
+        // parado/scan e a tela de conexão reaparece pra parear outro celular.
+        group.MapPost("/logout", async (
+            IWahaClient waha,
+            IOptions<DispatchOptions> dispatch,
+            CancellationToken ct) =>
+        {
+            await waha.LogoutSessionAsync(dispatch.Value.SessionId, ct);
+            var status = await waha.GetSessionStatusAsync(dispatch.Value.SessionId, ct);
             return Results.Ok(new { status = status.ToString() });
         });
 

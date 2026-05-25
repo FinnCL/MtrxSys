@@ -56,8 +56,11 @@ public sealed class DispatchEngine(
 
             if (!await warmup.CanSendAsync(ct))
             {
+                var snap = await warmup.GetSnapshotAsync(ct);
                 metrics.RecordWarmupBlocked();
-                log.LogInformation("Warmup daily limit reached ({Limit}); stopping cycle.", warmup.TodayLimit());
+                log.LogInformation(
+                    "Warmup daily limit reached ({Sent}/{Limit}, day {Day}); stopping cycle.",
+                    snap.SentToday, snap.TodayLimit, snap.DayIndex);
                 break;
             }
 
@@ -96,7 +99,11 @@ public sealed class DispatchEngine(
                 var text = composer.Compose(template, contact);
                 var delayBefore = delay.NextDelay();
                 var typingMs = await typing.SimulateAsync(sessionId, contact.Phone.E164, text, ct);
-                var waMessageId = await waha.SendTextAsync(sessionId, contact.Phone.E164, text, ct);
+                // Template com imagem → envia a imagem com o texto composto como legenda
+                // (mantém spintax, placeholders e a linha "SAIR"). Senão, texto puro como antes.
+                var waMessageId = template.HasImage
+                    ? await waha.SendImageAsync(sessionId, contact.Phone.E164, template.ImageData!, template.ImageMimeType ?? "image/jpeg", text, ct)
+                    : await waha.SendTextAsync(sessionId, contact.Phone.E164, text, ct);
 
                 var now = clock.UtcNow;
                 job.MarkSent(waMessageId, now);

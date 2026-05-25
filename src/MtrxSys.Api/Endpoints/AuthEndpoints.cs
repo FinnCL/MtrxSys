@@ -19,7 +19,7 @@ public static class AuthEndpoints
         {
             if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
             {
-                return Results.Problem("email and password are required", statusCode: 400);
+                return Results.Problem("Informe o email e a senha.", statusCode: 400);
             }
 
             var user = await users.GetByEmailAsync(req.Email, ct);

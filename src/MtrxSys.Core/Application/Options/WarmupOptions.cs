@@ -4,6 +4,9 @@ public sealed class WarmupOptions
 {
     public const string SectionName = "Warmup";
 
-    public int[] Curve { get; set; } = [20, 40, 80, 150, 250, 400, 500];
+    // Vazio por padrão DE PROPÓSITO: o binder de configuração do .NET ANEXA itens a um
+    // array já populado (não substitui), então um default não-vazio se concatenaria com
+    // o do appsettings. Quando vazio, o WarmupManager usa uma curva-padrão segura.
+    public int[] Curve { get; set; } = [];
     public DateOnly? StartedOnUtc { get; set; }
 }

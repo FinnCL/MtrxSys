@@ -126,6 +126,9 @@ input[type="checkbox"], input[type="radio"] {
 .topbar .who { margin-left: auto; }
 .topbar .sync-btn { background: var(--bg-3); color: var(--fg); padding: 4px 12px; font-size: 13px; }
 .topbar .sync-btn:hover:not(:disabled) { background: var(--accent); }
+/* Desconectar WhatsApp: ação sensível (para os disparos), em tom de alerta e à parte do "Sair". */
+.topbar .disconnect-btn { background: transparent; color: var(--danger); border: 1px solid var(--danger); padding: 4px 12px; font-size: 13px; }
+.topbar .disconnect-btn:hover { background: var(--danger); color: #fff; }
 .topbar .sync-msg { color: var(--muted); font-size: 12px; }
 
 .tabs { display: flex; gap: 4px; margin-left: 24px; }
@@ -166,6 +169,13 @@ input[type="checkbox"], input[type="radio"] {
 .import-summary { color: #22c55e; font-size: 12px; margin-top: 4px; }
 .import-btn { background: var(--bg-3); color: var(--fg); padding: 6px 14px; font-size: 13px; flex-shrink: 0; }
 .import-btn:hover:not(:disabled) { background: var(--accent); }
+/* Excluir contatos do grupo: link discreto, só dentro do grupo aberto (evita miss-click). */
+.group-delete-row { display: flex; justify-content: flex-end; margin-top: 10px; }
+.group-delete-link {
+  background: transparent; border: none; cursor: pointer;
+  color: var(--muted); font-size: 12px; padding: 2px 4px;
+}
+.group-delete-link:hover:not(:disabled) { color: var(--danger); background: transparent; text-decoration: underline; }
 .topbar button { background: transparent; color: var(--muted); padding: 4px 8px; }
 .topbar button:hover { color: var(--fg); background: var(--bg-3); }
 
@@ -403,7 +413,71 @@ input[type="checkbox"], input[type="radio"] {
 .stage-badge.stage-lost { background: #6b7280; color: #fff; }
 
 /* ---- Disparo ---- */
-.message-box { width: 100%; max-width: 640px; font-family: inherit; }
+.message-box {
+  width: 100%;
+  max-width: 640px;
+  height: 160px;        /* altura fixa — comporta a saudação padrão sem rolar */
+  resize: none;         /* sem alça de redimensionar: tamanho sempre consistente */
+  font-family: inherit;
+  line-height: 1.5;
+  overflow-y: auto;     /* rola internamente se o texto passar da altura */
+}
+/* Painel de aquecimento do chip (acima do "Disparar"). */
+.warmup-panel { max-width: 640px; }
+.warmup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.warmup-head h3 { margin: 0; }
+.warmup-phone { color: var(--muted); font-weight: 400; font-size: 14px; }
+
+/* Válvula de teste: isolada num rodapé separado por uma linha, discreta mas visível. */
+.test-wipe-footer {
+  margin-top: 64px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.test-wipe-link {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 14px;
+}
+.test-wipe-link:hover:not(:disabled) { color: #fff; background: var(--accent); border-color: var(--accent); }
+.warmup-restart { background: var(--bg-3); color: var(--fg); padding: 6px 14px; font-size: 13px; flex-shrink: 0; }
+.warmup-restart:hover { background: #f59e0b; color: #1a1205; }
+.warmup-bar { height: 10px; background: var(--bg-3); border-radius: 6px; overflow: hidden; margin: 10px 0 8px; }
+.warmup-bar > span { display: block; height: 100%; background: #f59e0b; border-radius: 6px; transition: width 0.4s ease; }
+.warmup-line { font-size: 14px; margin: 0 0 8px; color: var(--fg); }
+.warmup-bonus { color: #f59e0b; font-weight: 600; }
+
+/* Modal de teto atingido (liberar mais envios). */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.modal-card {
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 22px 24px; max-width: 460px; width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.modal-card h3 { margin: 0 0 12px; }
+.cap-stats { font-size: 14px; margin: 0 0 10px; }
+.cap-risk { font-size: 13px; font-weight: 600; border-radius: 6px; padding: 8px 12px; margin: 0 0 12px; }
+.cap-risk.risk-high { background: rgba(217, 83, 102, 0.15); color: var(--danger); border: 1px solid var(--danger); }
+.cap-risk.risk-mid { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
+.cap-risk.risk-low { background: var(--bg-3); color: var(--muted); }
+.cap-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.cap-extra { display: flex; gap: 8px; }
+.cap-extra input { flex: 1; }
+.cap-all-btn { background: var(--danger); color: #fff; padding: 10px 16px; font-weight: 600; }
+.cap-all-btn:hover:not(:disabled) { background: #b8485a; }
+
 .audience-row { display: flex; gap: 12px; flex-wrap: wrap; max-width: 640px; }
 .audience-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); flex: 1; min-width: 200px; }
 .dispatch-btn { padding: 12px 28px; font-size: 15px; font-weight: 600; }
@@ -450,6 +524,43 @@ input[type="checkbox"], input[type="radio"] {
 }
 .message-add-label { font-size: 12px; font-weight: 600; color: var(--accent); }
 .message-add > button { align-self: flex-start; padding: 8px 16px; }
+
+/* Miniatura da imagem no pote de mensagens. */
+.message-thumb { flex-shrink: 0; width: 48px; height: 48px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); }
+
+/* Bloco de upload de imagem na nova mensagem. */
+.message-image { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--border); padding-top: 12px; }
+.message-image-label { font-size: 12px; font-weight: 600; color: var(--accent); }
+/* Input de arquivo no padrão dos demais campos: borda/raio iguais aos inputs,
+   e o botão nativo estilizado como botão secundário (igual a .report-export). */
+.message-image input[type="file"] {
+  max-width: 640px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.message-image input[type="file"]:hover { border-color: var(--accent); }
+.message-image input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  background: var(--bg-3);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.message-image input[type="file"]::file-selector-button:hover { background: var(--accent); }
+.image-preview { position: relative; display: inline-flex; align-items: flex-start; gap: 6px; }
+.image-preview img { max-width: 160px; max-height: 160px; border-radius: 6px; border: 1px solid var(--border); }
+
+/* Aviso suave anti-ban. */
+.muted.small.warn { color: var(--danger); }
 
 /* ============================================================
    Responsividade — breakpoints do menor ao maior
