@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import { STAGE_LABELS, type Contact, type ContactGroupTag } from "../api/types";
+import { type Contact, type ContactGroupTag } from "../api/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { StatusBadge } from "./StatusBadge";
 
 export function ContactsScreen() {
   const [groups, setGroups] = useState<ContactGroupTag[]>([]);
@@ -143,9 +144,7 @@ export function ContactsScreen() {
                               <td>{c.name || <span className="muted">—</span>}</td>
                               <td className="mono">{c.phoneE164}</td>
                               <td>
-                                <span className={`stage-badge stage-${c.stage.toLowerCase()}`}>
-                                  {STAGE_LABELS[c.stage]}
-                                </span>
+                                <StatusBadge contact={c} />
                               </td>
                               <td>
                                 {c.optOutAt ? (
@@ -197,10 +196,10 @@ export function ContactsScreen() {
                         type="button"
                         className="group-delete-link"
                         disabled={busy}
-                        title="Exclui os contatos deste grupo (e suas conversas/disparos). Não dá pra desfazer."
+                        title="Descarta os contatos deste grupo: somem das listas, do disparo e do chat, mas continuam no banco (opt-out preservado)."
                         onClick={() => setPending({ kind: "delete", tag: g.groupTag })}
                       >
-                        Excluir contatos deste grupo
+                        Descartar contatos deste grupo
                       </button>
                     </div>
                   </div>
@@ -233,7 +232,7 @@ export function ContactsScreen() {
 
       {pending && (
         <ConfirmDialog
-          title={pending.kind === "revert" ? 'Reverter "Respondeu"?' : "Excluir contatos do grupo?"}
+          title={pending.kind === "revert" ? 'Reverter "Respondeu"?' : "Descartar contatos do grupo?"}
           message={
             pending.kind === "revert" ? (
               <>
@@ -242,14 +241,15 @@ export function ContactsScreen() {
               </>
             ) : (
               <>
-                Apaga os contatos de <strong>“{pending.tag}”</strong>, com as conversas e disparos deles.
+                Os contatos de <strong>“{pending.tag}”</strong> somem das listas, do disparo e do chat.
                 <br />
                 <br />
-                Só no sistema; o <strong>WhatsApp do celular não é afetado</strong>. Não dá pra desfazer.
+                <strong>Não são apagados do banco</strong> (o opt-out de quem saiu é preservado) e o{" "}
+                <strong>WhatsApp do celular não é afetado</strong>.
               </>
             )
           }
-          confirmLabel={pending.kind === "revert" ? "Sim, reverter" : "Sim, excluir"}
+          confirmLabel={pending.kind === "revert" ? "Sim, reverter" : "Sim, descartar"}
           cancelLabel="Cancelar"
           danger={pending.kind === "delete"}
           onConfirm={() => void confirmPending()}

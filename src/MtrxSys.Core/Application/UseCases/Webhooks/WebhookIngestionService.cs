@@ -43,6 +43,22 @@ public sealed class WebhookIngestionService(
         }
 
         var p = evt.Payload;
+        // Ignora eventos sem conteúdo real: corpo vazio E sem mídia. O WhatsApp emite mensagens
+        // de protocolo/sistema (comuns via @lid) assim — elas NÃO são resposta do contato, então
+        // não podem marcar "Respondeu" nem virar bolha vazia no chat. Texto ou mídia (resposta só
+        // com imagem/áudio) passam normalmente.
+        if (string.IsNullOrWhiteSpace(p.Body) && p.HasMedia != true && p.Media is null)
+        {
+            log.LogDebug("Webhook sem conteúdo (protocolo/sistema), ignorando. id={Id}", p.Id);
+            return;
+        }
+        // Ignora a conta de sistema do WhatsApp (0@c.us) e status@broadcast: são avisos/
+        // notificações (ex.: "WhatsApp Business"), não conversa de contato.
+        if (WahaChatIdentifier.IsSystem(p.From))
+        {
+            log.LogDebug("Webhook de conta de sistema ({From}), ignorando", p.From);
+            return;
+        }
         // De-dupe pelo "core" do id (token final), que é igual no envio (@c.us) e no eco
         // (@lid). Assim o eco de uma mensagem que o disparo já gravou é reconhecido como
         // duplicado — antes os ids serializados divergiam e duplicava no chat.
@@ -64,6 +80,9 @@ public sealed class WebhookIngestionService(
         }
 
         var now = clock.UtcNow;
+        // WAHA às vezes embute a imagem como base64 no próprio corpo (ex.: avisos com foto).
+        // Não guardamos dezenas de KB de base64 no chat nem na prévia — vira "[imagem]".
+        var bodyText = CleanBody(p.Body);
         Guid? contactId = null;
         var newlyOptedOut = false;
         // Resolve o telefone real do remetente: direto (@c.us) ou traduzindo o LID (@lid,
@@ -107,7 +126,7 @@ public sealed class WebhookIngestionService(
             // Classificação automática quando o CONTATO respondeu (mensagem recebida).
             if (p.FromMe != true)
             {
-                newlyOptedOut = await ApplyInboundClassificationAsync(contact, p.Body, now, ct);
+                newlyOptedOut = await ApplyInboundClassificationAsync(contact, bodyText, now, ct);
             }
         }
 
@@ -155,12 +174,12 @@ public sealed class WebhookIngestionService(
             waMessageId: coreId,
             direction: direction,
             authorPhone: authorPhone,
-            body: p.Body ?? string.Empty,
+            body: bodyText,
             timestamp: timestamp,
             mediaUrl: p.Media?.Url);
         await messages.AddAsync(message, ct);
 
-        conversation.TouchLastMessage(timestamp, p.Body);
+        conversation.TouchLastMessage(timestamp, bodyText);
 
         await uow.SaveChangesAsync(ct);
 
@@ -252,4 +271,22 @@ public sealed class WebhookIngestionService(
         }
         return null;
     }
+
+    // Troca corpo que é base64 de imagem (WAHA às vezes embute a foto no texto) por um rótulo,
+    // pra não poluir o chat/prévia nem guardar dezenas de KB no campo de texto.
+    private static string CleanBody(string? body)
+    {
+        if (string.IsNullOrEmpty(body))
+        {
+            return string.Empty;
+        }
+        return body.Length > 512 && LooksLikeBase64Image(body) ? "[imagem]" : body;
+    }
+
+    private static bool LooksLikeBase64Image(string s) =>
+        s.StartsWith("/9j/", StringComparison.Ordinal)              // JPEG
+        || s.StartsWith("iVBORw0KGgo", StringComparison.Ordinal)    // PNG
+        || s.StartsWith("R0lGOD", StringComparison.Ordinal)         // GIF
+        || s.StartsWith("UklGR", StringComparison.Ordinal)          // WEBP
+        || s.StartsWith("data:image", StringComparison.Ordinal);
 }

@@ -1,20 +1,6 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { api, getToken, setToken } from "../api/client";
-
-interface AuthUser {
-  userId: string;
-  email: string;
-  displayName: string;
-}
-
-interface AuthState {
-  user: AuthUser | null;
-  ready: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
-}
-
-const AuthCtx = createContext<AuthState | null>(null);
+import { AuthCtx, type AuthState, type AuthUser } from "./useAuth";
 
 const USER_KEY = "mtrx_user";
 
@@ -29,18 +15,10 @@ function readStoredUser(): AuthUser | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    if (getToken()) {
-      const stored = readStoredUser();
-      if (stored) {
-        setUser(stored);
-      }
-    }
-    setReady(true);
-  }, []);
+  // Inicialização preguiçosa: lê o usuário salvo já na 1ª render. Sem useEffect → sem
+  // setState dentro de efeito e sem o "Carregando" piscar (o token é síncrono).
+  const [user, setUser] = useState<AuthUser | null>(() => (getToken() ? readStoredUser() : null));
+  const [ready] = useState(true);
 
   const value = useMemo<AuthState>(
     () => ({
@@ -63,10 +41,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
-}
-
-export function useAuth(): AuthState {
-  const ctx = useContext(AuthCtx);
-  if (!ctx) throw new Error("useAuth must be used inside AuthProvider");
-  return ctx;
 }

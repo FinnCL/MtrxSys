@@ -14,6 +14,28 @@ export const STAGE_LABELS: Record<Stage, string> = {
   Lost: "Descartado",
 };
 
+/** Rótulo + classe do selo de status de um contato. */
+export interface ContactStatusBadge {
+  label: string;
+  className: string;
+}
+
+/**
+ * Fonte ÚNICA do status exibido de um contato — usada na tabela de Contatos,
+ * no painel e na exportação pra que não divirjam. Deriva de (optOutAt, stage,
+ * lastSentAt): quem saiu vira "Saiu"; um "Novo" que já recebeu disparo vira
+ * "Não respondeu" (mesma ideia do awaitingReply do Chat).
+ */
+export function contactStatusBadge(
+  c: Pick<Contact, "stage" | "optOutAt" | "lastSentAt">,
+): ContactStatusBadge {
+  if (c.optOutAt) return { label: "Saiu", className: "stage-lost" };
+  if (c.stage === "Lead" && c.lastSentAt) {
+    return { label: "Não respondeu", className: "stage-no-reply" };
+  }
+  return { label: STAGE_LABELS[c.stage], className: `stage-${c.stage.toLowerCase()}` };
+}
+
 export type Direction = "Inbound" | "Outbound";
 
 // Status (filtro das abas do Chat). A classificação é automática no backend (respondeu →

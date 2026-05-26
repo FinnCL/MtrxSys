@@ -62,6 +62,13 @@ public sealed class WhatsAppSyncService(
 
     private async Task<ChatSyncResult> SyncOneAsync(WahaChat chat, int messagesPerChat, CancellationToken ct)
     {
+        // Pula a conta de sistema do WhatsApp (0@c.us / status@broadcast) — avisos como
+        // "WhatsApp Business", não conversa de contato. Coerente com o webhook.
+        if (WahaChatIdentifier.IsSystem(chat.Id))
+        {
+            return new ChatSyncResult(0, false);
+        }
+
         var now = clock.UtcNow;
         var kind = WahaChatIdentifier.Classify(chat.Id);
         var isGroup = kind == WahaChatIdentifier.Kind.Group || chat.IsGroup;
@@ -92,6 +99,8 @@ public sealed class WhatsAppSyncService(
         }
 
         var conversation = await conversations.GetByWaChatIdAsync(chat.Id, ct);
+        var isNewConversation = conversation is null;
+        var lastKnownAt = conversation?.LastMessageAt;
         if (conversation is null)
         {
             conversation = Conversation.Create(
@@ -115,46 +124,61 @@ public sealed class WhatsAppSyncService(
             }
         }
 
-        var sessionId = dispatchOpts.Value.SessionId;
-        var msgs = await waha.GetChatMessagesAsync(sessionId, chat.Id, messagesPerChat, ct);
-
         var imported = 0;
         DateTimeOffset? latestAt = null;
         string? latestPreview = null;
 
-        foreach (var m in msgs)
+        // OTIMIZAÇÃO: só puxa mensagens quando há atividade nova — chat novo, ou a prévia do
+        // overview aponta uma mensagem mais recente que a última que já temos. Quando nada mudou,
+        // o webhook já cobriu em tempo real; re-puxar N msgs de TODO chat a cada ciclo era o que
+        // saturava a API (ERR_EMPTY_RESPONSE). TouchLastMessage abaixo cuida da prévia.
+        var hasNewActivity = isNewConversation
+            || (chat.LastMessageAt is { } overviewAt && (lastKnownAt is null || overviewAt > lastKnownAt));
+
+        if (hasNewActivity)
         {
-            ct.ThrowIfCancellationRequested();
-            if (string.IsNullOrEmpty(m.Id))
+            var msgs = await waha.GetChatMessagesAsync(dispatchOpts.Value.SessionId, chat.Id, messagesPerChat, ct);
+            foreach (var m in msgs)
             {
-                continue;
+                ct.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(m.Id))
+                {
+                    continue;
+                }
+                // Pula mensagens sem texto. O sync não captura mídia, então corpo vazio aqui =
+                // bolha inútil (mensagem de protocolo/sistema do WhatsApp, comum via @lid). Mantém
+                // o chat limpo e coerente com o webhook, que também ignora eventos sem conteúdo.
+                if (string.IsNullOrWhiteSpace(m.Body))
+                {
+                    continue;
+                }
+
+                if (latestAt is null || m.Timestamp > latestAt)
+                {
+                    latestAt = m.Timestamp;
+                    latestPreview = m.Body;
+                }
+
+                var existing = await messages.GetByWaMessageIdAsync(m.Id, ct);
+                if (existing is not null)
+                {
+                    continue;
+                }
+
+                var direction = m.FromMe ? MessageDirection.Outbound : MessageDirection.Inbound;
+                var authorPhone = ResolveAuthorPhone(kind, chat.Id, direction, m.Author);
+
+                var entry = ChatMessage.Create(
+                    id: Guid.NewGuid(),
+                    conversationId: conversation.Id,
+                    waMessageId: m.Id,
+                    direction: direction,
+                    authorPhone: authorPhone,
+                    body: m.Body ?? string.Empty,
+                    timestamp: m.Timestamp);
+                await messages.AddAsync(entry, ct);
+                imported++;
             }
-
-            if (latestAt is null || m.Timestamp > latestAt)
-            {
-                latestAt = m.Timestamp;
-                latestPreview = m.Body;
-            }
-
-            var existing = await messages.GetByWaMessageIdAsync(m.Id, ct);
-            if (existing is not null)
-            {
-                continue;
-            }
-
-            var direction = m.FromMe ? MessageDirection.Outbound : MessageDirection.Inbound;
-            var authorPhone = ResolveAuthorPhone(kind, chat.Id, direction, m.Author);
-
-            var entry = ChatMessage.Create(
-                id: Guid.NewGuid(),
-                conversationId: conversation.Id,
-                waMessageId: m.Id,
-                direction: direction,
-                authorPhone: authorPhone,
-                body: m.Body ?? string.Empty,
-                timestamp: m.Timestamp);
-            await messages.AddAsync(entry, ct);
-            imported++;
         }
 
         if (latestAt is not null)

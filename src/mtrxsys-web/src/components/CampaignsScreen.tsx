@@ -16,9 +16,6 @@ import { ConfirmDialog } from "./ConfirmDialog";
 const DEFAULT_DRAFT =
   "{Oi|Olá|E aí}, {tudo bem|tudo certo}? {Tenho uma novidade pra você|Queria te mostrar uma coisa que pode te interessar|Surgiu uma novidade que talvez te interesse}.\n\n{Entre no link e saiba mais|Dá uma olhada aqui|Confira os detalhes}: [cole seu link aqui]\n\nResponda SAIR para não receber mais mensagens.";
 
-const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
-
 // Miniatura de uma mensagem com imagem. Busca o blob com auth (o endpoint exige
 // Bearer, então <img src> direto daria 401) e usa um object URL, revogado ao desmontar.
 function TemplateThumb({ id }: { id: string }) {
@@ -61,9 +58,6 @@ export function CampaignsScreen() {
   const [report, setReport] = useState<DispatchReportItem[]>([]);
   const [reportStatus, setReportStatus] = useState<"" | DispatchJobStatus>("");
   const [draft, setDraft] = useState(DEFAULT_DRAFT);
-  // Imagem opcional da nova mensagem (base64 + mimetype + URL local pra preview).
-  const [image, setImage] = useState<{ base64: string; mimeType: string; previewUrl: string } | null>(null);
-  const [imageError, setImageError] = useState<string | null>(null);
   const [audience, setAudience] = useState<"all" | "responded">("all");
   const [group, setGroup] = useState("");
   const [adding, setAdding] = useState(false);
@@ -89,8 +83,12 @@ export function CampaignsScreen() {
   const [extraInput, setExtraInput] = useState("");
   const [releasing, setReleasing] = useState(false);
 
+  // Mantém o filtro atual acessível ao loadLive (callback estável, deps []) sem recriar o
+  // intervalo a cada troca de filtro. Sincronizado via efeito pra não escrever ref na render.
   const reportStatusRef = useRef<"" | DispatchJobStatus>("");
-  reportStatusRef.current = reportStatus;
+  useEffect(() => {
+    reportStatusRef.current = reportStatus;
+  }, [reportStatus]);
 
   // Dados estáticos (mudam só quando você cria/remove mensagem ou importa grupo).
   const loadLists = useCallback(async () => {
@@ -149,8 +147,12 @@ export function CampaignsScreen() {
 
 
   useEffect(() => {
+    // Bootstrap + polling de dados ao vivo (sistema externo): setState assíncrono pós-await,
+    // não cascateia render — uso legítimo de efeito.
+    /* eslint-disable react-hooks/set-state-in-effect */
     void loadLists();
     void loadLive();
+    /* eslint-enable react-hooks/set-state-in-effect */
     const handle = setInterval(loadLive, 5_000);
     return () => clearInterval(handle);
   }, [loadLists, loadLive]);
@@ -162,9 +164,8 @@ export function CampaignsScreen() {
 
   // Quando o teto deixa de estar batido (liberou mais, ou virou o dia), libera o modal pra
   // reaparecer se bater o novo teto. "Cancelar" mantém dismissed porque atCap segue true.
-  useEffect(() => {
-    if (warmup && !warmup.atCap) setCapDismissed(false);
-  }, [warmup]);
+  // Ajuste durante a render (em vez de setState-in-effect); o guard !capDismissed evita loop.
+  if (warmup && !warmup.atCap && capDismissed) setCapDismissed(false);
 
   // Fim do envio: a fila tinha contatos e zerou enquanto enviava (não pausado, não foi
   // limpar/renovar). Mostra o modal de conclusão uma vez.
@@ -189,49 +190,13 @@ export function CampaignsScreen() {
       : stats.skipped;
   }
 
-  // Lê a imagem escolhida como base64 (sem o prefixo data:...;base64,) e valida tipo/tamanho.
-  // Limites espelham o backend: PNG/JPEG/WebP, até 2 MB.
-  function onPickImage(file: File | null) {
-    setImageError(null);
-    if (!file) {
-      setImage(null);
-      return;
-    }
-    if (!IMAGE_TYPES.includes(file.type)) {
-      setImageError("Use PNG, JPEG ou WebP.");
-      return;
-    }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setImageError("Imagem acima de 2 MB. Reduza o tamanho.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result);
-      const base64 = result.slice(result.indexOf(",") + 1);
-      setImage({ base64, mimeType: file.type, previewUrl: result });
-    };
-    reader.onerror = () => setImageError("Não consegui ler o arquivo.");
-    reader.readAsDataURL(file);
-  }
-
-  function clearImage() {
-    setImage(null);
-    setImageError(null);
-  }
-
   async function addMessage() {
     const text = draft.trim();
     if (!text) return;
     setAdding(true);
     try {
-      await api.createTemplate(
-        text,
-        "Greeting",
-        image ? { base64: image.base64, mimeType: image.mimeType } : undefined,
-      );
+      await api.createTemplate(text, "Greeting");
       setDraft(DEFAULT_DRAFT);
-      clearImage();
       await loadLists();
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
@@ -281,12 +246,13 @@ export function CampaignsScreen() {
     // conclusão desta campanha (caso um clear/renovar anterior não tenha consumido a flag).
     suppressDoneRef.current = false;
     try {
-      await api.pauseDispatch(); // garante que nada sai enquanto você revisa
-      setPaused(true);
+      // O servidor prepara a fila JÁ pausada (atômico com os jobs), então nada sai até clicar
+      // "Iniciar envios" — não precisa pausar pelo front.
       const result = await api.dispatch(selectedIds, {
         engagedOnly: audience === "responded" ? true : undefined,
         groupTag: group.trim() || undefined,
       });
+      setPaused(true);
       setDispatchMsg(
         `${result.scheduled} contato(s) na fila. Revise em "Resultado dos envios" e clique "Iniciar envios".`,
       );
@@ -503,33 +469,8 @@ export function CampaignsScreen() {
             <strong>seu domínio</strong> (ex.: <code>seusite.com.br</code>); <strong>evite encurtadores</strong>{" "}
             (bit.ly etc.), que pesam mais como spam.
           </p>
-          <div className="message-image">
-            <label className="message-image-label" htmlFor="new-image">
-              Anexar imagem (opcional)
-            </label>
-            <input
-              id="new-image"
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              onChange={(e) => onPickImage(e.target.files?.[0] ?? null)}
-            />
-            {image && (
-              <div className="image-preview">
-                <img src={image.previewUrl} alt="prévia da imagem" />
-                <button type="button" className="message-remove" title="Remover imagem" onClick={clearImage}>
-                  ×
-                </button>
-              </div>
-            )}
-            {imageError && <p className="error">{imageError}</p>}
-            <p className="muted small">
-              Uma imagem por mensagem (PNG, JPEG ou WebP, até 2 MB). Ela vai junto com o texto como{" "}
-              <strong>legenda</strong> — a linha "SAIR" continua aparecendo. Imagem e link aumentam um pouco o
-              risco de ban: use com moderação e evite chip novo/frio.
-            </p>
-          </div>
           <button type="button" onClick={() => void addMessage()} disabled={adding || !draft.trim()}>
-            {adding ? "Adicionando..." : image ? "+ Adicionar mensagem com imagem" : "+ Adicionar mensagem"}
+            {adding ? "Adicionando..." : "+ Adicionar mensagem"}
           </button>
         </div>
       </section>

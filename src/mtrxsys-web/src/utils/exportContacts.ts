@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { STAGE_LABELS, type Contact, type DispatchJobStatus, type DispatchReportItem } from "../api/types";
+import { contactStatusBadge, type Contact, type DispatchJobStatus, type DispatchReportItem } from "../api/types";
 
 export const DISPATCH_STATUS_LABELS: Record<DispatchJobStatus, string> = {
   Pending: "Na fila",
@@ -30,12 +30,12 @@ export function downloadContactsXlsx(contacts: Contact[], groupName: string): vo
     Nome: c.name ?? "",
     Telefone: c.phoneE164,
     Grupo: c.groupTag ?? groupName,
-    Status: STAGE_LABELS[c.stage],
+    Status: contactStatusBadge(c).label,
     "Salvo em": fmt(c.optInAt),
     "Importado em": importedAt,
   }));
 
-  const safeName = groupName.replace(/[^\w\-]+/g, "_").slice(0, 40) || "grupo";
+  const safeName = groupName.replace(/[^\w-]+/g, "_").slice(0, 40) || "grupo";
   writeXlsx(rows, [24, 18, 28, 14, 20, 20], "Contatos", `contatos-${safeName}-${today()}.xlsx`);
 }
 

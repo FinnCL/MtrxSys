@@ -25,9 +25,12 @@ internal sealed class ContactConfiguration : IEntityTypeConfiguration<Contact>
         b.Property(x => x.LastSentAt).HasColumnName("last_sent_at");
         b.Property(x => x.Stage).HasColumnName("stage").HasConversion<int>().IsRequired();
         b.Property(x => x.StageChangedAt).HasColumnName("stage_changed_at");
+        b.Property(x => x.DeletedAt).HasColumnName("deleted_at");
         b.HasIndex(x => x.Stage);
         // Índices dos filtros quentes: o público de disparo e a listagem por grupo varrem
         // contatos por group_tag e por opt_out (excluir quem saiu). Sem isso, full scan.
+        // (deleted_at NÃO é indexado: o filtro é "IS NULL" e casa com quase todas as linhas,
+        // então o índice seria ignorado pelo planner — só custaria escrita.)
         b.HasIndex(x => x.GroupTag);
         b.HasIndex(x => x.OptOutAt);
         b.Ignore(x => x.DomainEvents);

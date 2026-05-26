@@ -1,21 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api/client";
-import type { ContactDetail, Stage } from "../api/types";
+import type { ContactDetail } from "../api/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { StatusBadge } from "./StatusBadge";
 
 interface Props {
   contactId: string;
 }
-
-// Rótulo de status alinhado às abas do Chat. É só-leitura: o sistema classifica sozinho
-// (respondeu → Respondeu; "SAIR" → Saiu). Sem funil manual pra evitar cliques/ruído.
-const STATUS_LABEL: Record<Stage, string> = {
-  Lead: "Sem resposta",
-  Qualified: "Respondeu",
-  Proposal: "Negociando",
-  Won: "Cliente",
-  Lost: "Descartado",
-};
 
 export function ContactPanel({ contactId }: Props) {
   const [data, setData] = useState<ContactDetail | null>(null);
@@ -82,9 +73,7 @@ export function ContactPanel({ contactId }: Props) {
       <section className="panel-section">
         <h3>Status</h3>
         <div className="status-readonly">
-          <span className={`stage-badge stage-${(optedOut ? "lost" : data.contact.stage.toLowerCase())}`}>
-            {optedOut ? "Saiu" : STATUS_LABEL[data.contact.stage]}
-          </span>
+          <StatusBadge contact={data.contact} />
           {optedOut && (
             <button
               type="button"

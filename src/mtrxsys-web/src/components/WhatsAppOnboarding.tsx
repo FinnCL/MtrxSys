@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { WahaStatus } from "../api/types";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth } from "../auth/useAuth";
 
 interface Props {
   onWorking: () => void;
@@ -29,6 +29,9 @@ export function WhatsAppOnboarding({ onWorking }: Props) {
   }, [onWorking]);
 
   useEffect(() => {
+    // Polling do status do WAHA (sistema externo): setState assíncrono pós-await, não
+    // cascateia — uso legítimo de efeito.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void pollStatus();
     const handle = setInterval(pollStatus, 3_000);
     return () => clearInterval(handle);
@@ -40,6 +43,8 @@ export function WhatsAppOnboarding({ onWorking }: Props) {
         URL.revokeObjectURL(previousBlobRef.current);
         previousBlobRef.current = null;
       }
+      // Teardown do efeito que gerencia o blob do QR (recurso externo) ao sair do scan.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQrUrl(null);
       return;
     }

@@ -53,6 +53,18 @@ internal sealed class ConversationRepository(MtrxDbContext db) : IConversationRe
             _ => q,
         };
 
+        // O que aparece no Chat:
+        //  - grupos (sem contato por natureza) sempre;
+        //  - conversas de contato ATIVO (não descartado);
+        //  - conversas órfãs (sem contato) só se tiverem mensagem RECEBIDA — resposta real que
+        //    o @lid não casou com contato (nunca esconder uma resposta).
+        // Some, portanto: contato descartado, e órfã só com mensagem enviada (eco de disparo).
+        q = q.Where(x =>
+            x.c.IsGroup
+            || (x.contact != null && x.contact.DeletedAt == null)
+            || (x.contact == null && db.ChatMessages.Any(m =>
+                    m.ConversationId == x.c.Id && m.Direction == MessageDirection.Inbound)));
+
         if (!string.IsNullOrWhiteSpace(search))
         {
             // Escapa curingas do LIKE (\ % _) pra busca literal; "\" é o escape char.

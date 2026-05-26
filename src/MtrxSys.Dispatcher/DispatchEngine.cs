@@ -86,6 +86,16 @@ public sealed class DispatchEngine(
                 skipped++;
                 continue;
             }
+            // Descartado depois de enfileirado: não envia. O soft delete só marca deleted_at
+            // (não apaga jobs como o delete antigo), então um job Pending criado antes do
+            // descarte chegaria aqui — sem esta guarda, mandaria pra quem foi descartado.
+            if (contact.DeletedAt is not null)
+            {
+                job.MarkSkipped("descartado");
+                await uow.SaveChangesAsync(ct);
+                skipped++;
+                continue;
+            }
 
             var sessionId = dispatchOpts.Value.SessionId;
             try
@@ -99,11 +109,10 @@ public sealed class DispatchEngine(
                 var text = composer.Compose(template, contact);
                 var delayBefore = delay.NextDelay();
                 var typingMs = await typing.SimulateAsync(sessionId, contact.Phone.E164, text, ct);
-                // Template com imagem → envia a imagem com o texto composto como legenda
-                // (mantém spintax, placeholders e a linha "SAIR"). Senão, texto puro como antes.
-                var waMessageId = template.HasImage
-                    ? await waha.SendImageAsync(sessionId, contact.Phone.E164, template.ImageData!, template.ImageMimeType ?? "image/jpeg", text, ct)
-                    : await waha.SendTextAsync(sessionId, contact.Phone.E164, text, ct);
+                // Anexo de imagem DESABILITADO: todo disparo sai como texto, mesmo que o template
+                // tenha imagem. Evita rejeição do WAHA (422 por mimetype/dados) e mantém o envio
+                // simples e estável. (O texto composto preserva spintax, placeholders e o "SAIR".)
+                var waMessageId = await waha.SendTextAsync(sessionId, contact.Phone.E164, text, ct);
 
                 var now = clock.UtcNow;
                 job.MarkSent(waMessageId, now);

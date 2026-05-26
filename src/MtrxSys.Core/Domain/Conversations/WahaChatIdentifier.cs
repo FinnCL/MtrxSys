@@ -41,6 +41,22 @@ public static class WahaChatIdentifier
 
     public static bool HasRealPhone(string? chatId) => Classify(chatId) == Kind.Individual;
 
+    /// <summary>Conta de sistema/notificações do WhatsApp (0@c.us, dígitos todos zero) e canal de
+    /// status (status@broadcast) — avisos como "WhatsApp Business", nunca conversa de contato.</summary>
+    public static bool IsSystem(string? chatId)
+    {
+        if (string.IsNullOrEmpty(chatId))
+        {
+            return false;
+        }
+        if (chatId.Equals("status@broadcast", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        var digits = ExtractDigits(chatId);
+        return digits.Length > 0 && digits.All(c => c == '0');
+    }
+
     public static string? TryExtractPhoneE164(string? chatId)
     {
         if (!HasRealPhone(chatId))

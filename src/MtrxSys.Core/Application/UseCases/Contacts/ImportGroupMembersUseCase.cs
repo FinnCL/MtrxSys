@@ -39,7 +39,19 @@ public sealed class ImportGroupMembersUseCase(
                 var existing = await contacts.GetByPhoneAsync(phone.E164, ct);
                 if (existing is not null)
                 {
-                    duplicated++;
+                    // Já existe: re-importar = "quero estes contatos". Traz de volta quem foi
+                    // descartado e garante o grupo (ex.: contato criado pelo sync sem grupo).
+                    // Sem isso, um contato descartado ficava num beco sem saída (some da lista,
+                    // sem como reativar pela interface).
+                    if (existing.ReimportInto(groupTag ?? groupId))
+                    {
+                        await contacts.UpdateAsync(existing, ct);
+                        imported++;
+                    }
+                    else
+                    {
+                        duplicated++;
+                    }
                     continue;
                 }
 

@@ -411,6 +411,7 @@ input[type="checkbox"], input[type="radio"] {
 .stage-badge.stage-qualified { background: #16a34a; color: #fff; }
 .stage-badge.stage-won { background: #2563eb; color: #fff; }
 .stage-badge.stage-lost { background: #6b7280; color: #fff; }
+.stage-badge.stage-no-reply { background: #d97706; color: #fff; }
 
 /* ---- Disparo ---- */
 .message-box {

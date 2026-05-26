@@ -161,15 +161,18 @@ public static class CampaignsEndpoints
                 }
                 stage = parsed;
             }
-            // Nunca dispara pro próprio número conectado (evita auto-envio).
-            var ownPhone = (await state.GetAsync(ct)).WarmupPhone;
+            // Nunca dispara pro próprio número conectado (evita auto-envio). Guarda o agregado
+            // pra reusar na pausa lá embaixo (sem segundo hit no banco).
+            var sysState = await state.GetAsync(ct);
+            var ownPhone = sysState.WarmupPhone;
             var filter = new ContactFilter(
                 Stage: stage,
                 TagName: req.Filter?.TagName,
                 GroupTag: req.Filter?.GroupTag,
                 ExcludeOptedOut: true,
                 EngagedOnly: req.Filter?.EngagedOnly ?? false,
-                ExcludePhoneE164: ownPhone);
+                ExcludePhoneE164: ownPhone,
+                ExcludeAlreadyDispatched: true); // não re-enfileira quem já recebeu/está na fila
             var targets = await contacts.ListByFilterAsync(filter, ct);
             var now = clock.UtcNow;
             foreach (var c in targets)
@@ -178,6 +181,14 @@ public static class CampaignsEndpoints
                 var tpl = pool[rng.NextInt(0, pool.Count)];
                 var job = DispatchJob.Schedule(Guid.NewGuid(), c.Id, tpl.Id, now);
                 await jobs.AddAsync(job, ct);
+            }
+            // Prepara a fila JÁ PAUSADA, no servidor e atômico com os jobs: os jobs nascem
+            // Pending, mas o motor não envia enquanto IsManuallyPaused. Garante que NADA sai sem
+            // o operador clicar "Iniciar envios" (resume) — sem depender de o front pausar antes.
+            if (targets.Count > 0)
+            {
+                sysState.Pause(SystemStateAggregate.ManualPauseReason);
+                await state.UpdateAsync(sysState, ct);
             }
             await uow.SaveChangesAsync(ct);
             return Results.Ok(new { scheduled = targets.Count, templatesUsed = pool.Count });
@@ -228,9 +239,12 @@ public static class CampaignsEndpoints
             return Results.Ok(new { cleared });
         });
 
-        dispatch.MapPost("/reset", async (IDispatchJobRepository repo, CancellationToken ct) =>
+        dispatch.MapPost("/reset", async (IDispatchJobRepository repo, IContactRepository contacts, CancellationToken ct) =>
         {
+            // Renovar = recomeçar a campanha: zera os jobs E o marcador de envio dos contatos,
+            // pra quem só tinha recebido voltar a "Novo" (consistente com ser re-disparável).
             var cleared = await repo.ClearAllAsync(ct);
+            await contacts.ClearLastSentAsync(ct);
             return Results.Ok(new { cleared });
         });
 
@@ -319,7 +333,7 @@ public static class CampaignsEndpoints
             ISystemStateRepository state,
             CancellationToken ct) =>
         {
-            // Mesma exclusão do disparo real (próprio número), pra a prévia bater com a fila.
+            // Mesma exclusão do disparo real (próprio número + já enviados), pra a prévia bater com a fila.
             var ownPhone = (await state.GetAsync(ct)).WarmupPhone;
             var filter = new ContactFilter(
                 Stage: null,
@@ -327,7 +341,8 @@ public static class CampaignsEndpoints
                 GroupTag: string.IsNullOrWhiteSpace(groupTag) ? null : groupTag,
                 ExcludeOptedOut: true,
                 EngagedOnly: engagedOnly ?? false,
-                ExcludePhoneE164: ownPhone);
+                ExcludePhoneE164: ownPhone,
+                ExcludeAlreadyDispatched: true);
             var count = await contacts.CountByFilterAsync(filter, ct);
             return Results.Ok(new { count });
         });

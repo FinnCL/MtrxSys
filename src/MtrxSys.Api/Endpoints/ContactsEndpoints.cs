@@ -180,17 +180,20 @@ public static class ContactsEndpoints
             return Results.Ok(ToDto(contact));
         });
 
-        // Exclui os contatos de UM grupo (com conversas/mensagens/disparos ligados a eles).
+        // Descarta (soft delete) os contatos de UM grupo: somem das listas/disparo e do Chat,
+        // mas a linha e o opt-out ficam no banco (reversível). O WhatsApp do celular não é tocado.
         group.MapPost("/delete-by-group", async (
             DeleteByGroupRequest req,
             IContactRepository contacts,
+            IClock clock,
             CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(req.GroupTag))
             {
                 return Results.Problem("groupTag é obrigatório", statusCode: 400);
             }
-            var deleted = await contacts.DeleteByGroupTagAsync(req.GroupTag.Trim(), ct);
+            // ExecuteUpdate persiste sozinho (não passa pelo UnitOfWork), igual ao delete anterior.
+            var deleted = await contacts.DiscardByGroupTagAsync(req.GroupTag.Trim(), clock.UtcNow, ct);
             return Results.Ok(new { deleted });
         });
 

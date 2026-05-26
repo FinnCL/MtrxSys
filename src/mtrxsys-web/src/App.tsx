@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { AuthProvider } from "./auth/AuthContext";
+import { useAuth } from "./auth/useAuth";
 import { LoginScreen } from "./components/LoginScreen";
 import { ConversationList } from "./components/ConversationList";
 import { ChatThread } from "./components/ChatThread";
@@ -64,6 +65,9 @@ function Shell() {
 
   useEffect(() => {
     if (!user) return;
+    // Sincroniza com sistema externo (status do WAHA): o setState é assíncrono (pós-await),
+    // não cascateia render — uso legítimo de efeito.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void checkWaha();
   }, [user, checkWaha]);
 

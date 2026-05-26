@@ -11,8 +11,13 @@ public interface IContactRepository
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);
     Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct);
     Task<IReadOnlyList<ContactGroupTag>> ListGroupTagsAsync(CancellationToken ct);
-    /// <summary>Exclui os contatos de um grupo (e suas conversas/mensagens/disparos), sem deixar órfãos.</summary>
-    Task<int> DeleteByGroupTagAsync(string groupTag, CancellationToken ct);
+    /// <summary>Descarta (soft delete) os contatos de um grupo: marca deleted_at, somem das
+    /// listas/disparo, mas a linha e o opt-out ficam no banco. Retorna quantos foram descartados.</summary>
+    Task<int> DiscardByGroupTagAsync(string groupTag, DateTimeOffset now, CancellationToken ct);
+
+    /// <summary>Zera o marcador de envio (LastSentAt) de todos os contatos. Usado no "Renovar
+    /// lista": quem só tinha recebido volta a "Novo", consistente com voltar a ser re-disparável.</summary>
+    Task<int> ClearLastSentAsync(CancellationToken ct);
 }
 
 public sealed record ContactFilter(
@@ -22,6 +27,9 @@ public sealed record ContactFilter(
     bool ExcludeOptedOut = true,
     bool EngagedOnly = false,
     // Telefone E.164 a excluir — usado pra nunca disparar pro próprio número conectado.
-    string? ExcludePhoneE164 = null);
+    string? ExcludePhoneE164 = null,
+    // Exclui quem já tem job Pending ou Sent — evita re-enviar pra quem já recebeu e
+    // duplicar quem já está na fila. Usado no disparo e na prévia de público.
+    bool ExcludeAlreadyDispatched = false);
 
 public sealed record ContactGroupTag(string GroupTag, int Count);

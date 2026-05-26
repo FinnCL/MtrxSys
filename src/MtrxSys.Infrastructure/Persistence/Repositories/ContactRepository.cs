@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MtrxSys.Core.Application.Abstractions;
+using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.Contacts;
 
 namespace MtrxSys.Infrastructure.Persistence.Repositories;
@@ -27,36 +28,30 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
     public async Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct) =>
         await ApplyFilter(db.Contacts.AsQueryable(), filter).OrderBy(c => c.Phone.E164).ToListAsync(ct);
 
-    // Exclui os contatos de um grupo SEM deixar órfãos: primeiro apaga disparos e conversas
-    // (cascateiam as mensagens) ligados a esses contatos, depois os contatos (que cascateiam
-    // notas, tags e histórico). Toca outras tabelas de propósito — é uma operação de manutenção.
-    // Tudo numa transação: cada ExecuteDelete commitaria sozinho, então sem isso uma falha no
-    // meio deixaria estado parcial (ex.: disparos apagados mas contatos não).
-    public async Task<int> DeleteByGroupTagAsync(string groupTag, CancellationToken ct)
-    {
-        var ids = await db.Contacts
-            .Where(c => c.GroupTag == groupTag)
-            .Select(c => c.Id)
-            .ToListAsync(ct);
-        if (ids.Count == 0)
-        {
-            return 0;
-        }
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        await db.DispatchJobs.Where(j => ids.Contains(j.ContactId)).ExecuteDeleteAsync(ct);
-        await db.Conversations
-            .Where(c => c.ContactId.HasValue && ids.Contains(c.ContactId.Value))
-            .ExecuteDeleteAsync(ct);
-        await db.Contacts.Where(c => c.GroupTag == groupTag).ExecuteDeleteAsync(ct);
-        await tx.CommitAsync(ct);
-        return ids.Count;
-    }
+    // Descarta (soft delete) os contatos de um grupo: marca deleted_at. Eles somem das listas e
+    // do disparo (ApplyFilter/ListGroupTags filtram deleted_at IS NULL) e suas conversas somem do
+    // Chat (ConversationRepository filtra pelo contato descartado) — mas a linha e o OPT-OUT ficam
+    // no banco. Isso protege o anti-ban: o sync não recria o contato (GetByPhone o encontra) e
+    // quem pediu "SAIR" continua suprimido. Reversível: basta zerar deleted_at.
+    public async Task<int> DiscardByGroupTagAsync(string groupTag, DateTimeOffset now, CancellationToken ct) =>
+        await db.Contacts
+            .Where(c => c.GroupTag == groupTag && c.DeletedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.DeletedAt, now), ct);
+
+    // "Renovar lista": zera o LastSentAt de quem tinha recebido, pra o selo voltar a "Novo"
+    // junto com a fila zerada. Não toca em Stage/OptOut (respondeu/saiu continuam).
+    public Task<int> ClearLastSentAsync(CancellationToken ct) =>
+        db.Contacts
+            .Where(c => c.LastSentAt != null)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSentAt, (DateTimeOffset?)null), ct);
 
     public Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct) =>
         ApplyFilter(db.Contacts.AsQueryable(), filter).CountAsync(ct);
 
     private IQueryable<Contact> ApplyFilter(IQueryable<Contact> q, ContactFilter filter)
     {
+        // Descartados (soft delete) nunca aparecem em lista nem entram no público de disparo.
+        q = q.Where(c => c.DeletedAt == null);
         if (filter.Stage is { } stage)
         {
             q = q.Where(c => c.Stage == stage);
@@ -69,6 +64,16 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         if (filter.ExcludeOptedOut)
         {
             q = q.Where(c => c.OptOutAt == null);
+        }
+        // Não re-seleciona quem já recebeu disparo. Fonte de verdade do "já enviei" é o
+        // LastSentAt — o MESMO marcador do selo "Não respondeu" —, então a exclusão bate com o
+        // que aparece na tela mesmo que os jobs já tenham sido limpos. Inclui também quem está
+        // só na fila (Pending). Falhas ficam de fora de propósito (reenviáveis). "Renovar lista"
+        // zera LastSentAt + jobs, reabilitando todos.
+        if (filter.ExcludeAlreadyDispatched)
+        {
+            q = q.Where(c => c.LastSentAt == null && !db.DispatchJobs.Any(j =>
+                j.ContactId == c.Id && j.Status == DispatchStatus.Pending));
         }
         // Nunca dispara pro próprio número conectado (evita auto-envio).
         if (!string.IsNullOrWhiteSpace(filter.ExcludePhoneE164))
@@ -95,7 +100,7 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         // EF traduz o GroupBy numa projeção anônima; o mapeamento pro record e a
         // ordenação são feitos em memória (EF não traduz projeção via construtor + OrderBy).
         var raw = await db.Contacts
-            .Where(c => c.GroupTag != null)
+            .Where(c => c.GroupTag != null && c.DeletedAt == null)
             .GroupBy(c => c.GroupTag!)
             .Select(g => new { Tag = g.Key, Count = g.Count() })
             .ToListAsync(ct);
