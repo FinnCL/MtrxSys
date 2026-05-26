@@ -20,6 +20,8 @@ public sealed record ContactFilter(
     string? TagName = null,
     string? GroupTag = null,
     bool ExcludeOptedOut = true,
-    bool EngagedOnly = false);
+    bool EngagedOnly = false,
+    // Telefone E.164 a excluir — usado pra nunca disparar pro próprio número conectado.
+    string? ExcludePhoneE164 = null);
 
 public sealed record ContactGroupTag(string GroupTag, int Count);

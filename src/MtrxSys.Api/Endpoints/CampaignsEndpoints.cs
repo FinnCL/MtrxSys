@@ -161,12 +161,15 @@ public static class CampaignsEndpoints
                 }
                 stage = parsed;
             }
+            // Nunca dispara pro próprio número conectado (evita auto-envio).
+            var ownPhone = (await state.GetAsync(ct)).WarmupPhone;
             var filter = new ContactFilter(
                 Stage: stage,
                 TagName: req.Filter?.TagName,
                 GroupTag: req.Filter?.GroupTag,
                 ExcludeOptedOut: true,
-                EngagedOnly: req.Filter?.EngagedOnly ?? false);
+                EngagedOnly: req.Filter?.EngagedOnly ?? false,
+                ExcludePhoneE164: ownPhone);
             var targets = await contacts.ListByFilterAsync(filter, ct);
             var now = clock.UtcNow;
             foreach (var c in targets)
@@ -186,10 +189,18 @@ public static class CampaignsEndpoints
             return Results.Ok(stats);
         });
 
-        dispatch.MapGet("/status", async (ISystemStateRepository state, CancellationToken ct) =>
+        dispatch.MapGet("/status", async (ISystemStateRepository state, IClock clock, CancellationToken ct) =>
         {
             var s = await state.GetAsync(ct);
-            return Results.Ok(new { paused = s.IsManuallyPaused });
+            // Expõe também o disjuntor: ele pausa os envios sozinho após 3 falhas seguidas e
+            // retoma quando OpenUntil passa. Sem isso a UI mostrava "Enviando" travado sem aviso.
+            var circuitOpen = s.Circuit.IsOpenAt(clock.UtcNow);
+            return Results.Ok(new
+            {
+                paused = s.IsManuallyPaused,
+                circuitOpen,
+                circuitOpenUntil = circuitOpen ? s.Circuit.OpenUntil : null,
+            });
         });
 
         dispatch.MapPost("/pause", async (ISystemStateRepository state, IUnitOfWork uow, CancellationToken ct) =>
@@ -305,14 +316,18 @@ public static class CampaignsEndpoints
             bool? engagedOnly,
             string? groupTag,
             IContactRepository contacts,
+            ISystemStateRepository state,
             CancellationToken ct) =>
         {
+            // Mesma exclusão do disparo real (próprio número), pra a prévia bater com a fila.
+            var ownPhone = (await state.GetAsync(ct)).WarmupPhone;
             var filter = new ContactFilter(
                 Stage: null,
                 TagName: null,
                 GroupTag: string.IsNullOrWhiteSpace(groupTag) ? null : groupTag,
                 ExcludeOptedOut: true,
-                EngagedOnly: engagedOnly ?? false);
+                EngagedOnly: engagedOnly ?? false,
+                ExcludePhoneE164: ownPhone);
             var count = await contacts.CountByFilterAsync(filter, ct);
             return Results.Ok(new { count });
         });

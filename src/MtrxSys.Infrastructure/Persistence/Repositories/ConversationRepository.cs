@@ -78,4 +78,9 @@ internal sealed class ConversationRepository(MtrxDbContext db) : IConversationRe
         }
         return Task.CompletedTask;
     }
+
+    public async Task<IReadOnlyList<Conversation>> ListUnlinkedIndividualAsync(CancellationToken ct) =>
+        await db.Conversations
+            .Where(c => !c.IsGroup && c.ContactId == null)
+            .ToListAsync(ct);
 }

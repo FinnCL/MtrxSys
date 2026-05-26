@@ -119,7 +119,7 @@ public sealed class WebhookIngestionService(
             // disparo chegando por @lid criaria uma 2ª conversa do mesmo contato.
             conversation = await conversations.GetByContactIdAsync(contactId.Value, ct);
         }
-        var conversationTitle = ResolveConversationTitle(kind, p.NotifyName);
+        var conversationTitle = p.NotifyName; // título = nome público, quando houver
         if (conversation is null)
         {
             conversation = Conversation.Create(
@@ -232,13 +232,6 @@ public sealed class WebhookIngestionService(
             ct);
     }
 
-    private static string? ResolveConversationTitle(WahaChatIdentifier.Kind kind, string? notifyName) =>
-        kind switch
-        {
-            WahaChatIdentifier.Kind.LinkedId when !string.IsNullOrWhiteSpace(notifyName) => notifyName,
-            WahaChatIdentifier.Kind.Group when !string.IsNullOrWhiteSpace(notifyName) => notifyName,
-            _ => notifyName,
-        };
 
     private static string? ResolveAuthorPhone(
         WahaChatIdentifier.Kind kind,

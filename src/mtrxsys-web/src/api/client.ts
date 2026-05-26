@@ -97,6 +97,9 @@ export const api = {
   wahaStatus: () => request<{ status: WahaStatus; session: string }>("/api/waha/status"),
   wahaStart: () => request<{ status: WahaStatus }>("/api/waha/start", { method: "POST" }),
   wahaLogout: () => request<{ status: WahaStatus }>("/api/waha/logout", { method: "POST" }),
+  // Religa conversas órfãs (sem contato) ao contato — auto-cura ao reconectar.
+  relinkConversations: () =>
+    request<{ linked: number }>("/api/conversations/relink", { method: "POST" }),
   wahaSync: (messagesPerChat?: number) =>
     request<{
       chatsTouched: number;
@@ -215,7 +218,10 @@ export const api = {
     q.set("limit", String(limit));
     return request<DispatchReportItem[]>(`/api/dispatch/report?${q.toString()}`);
   },
-  dispatchStatus: () => request<{ paused: boolean }>("/api/dispatch/status"),
+  dispatchStatus: () =>
+    request<{ paused: boolean; circuitOpen: boolean; circuitOpenUntil: string | null }>(
+      "/api/dispatch/status",
+    ),
   warmupStatus: () => request<WarmupStatus>("/api/dispatch/warmup"),
   restartWarmup: () =>
     request<{ startedOn: string }>("/api/dispatch/warmup/restart", { method: "POST" }),

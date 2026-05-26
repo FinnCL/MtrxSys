@@ -9,11 +9,12 @@ import type {
   WarmupStatus,
 } from "../api/types";
 import { DISPATCH_STATUS_LABELS, downloadDispatchReportXlsx } from "../utils/exportContacts";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 // Texto inicial do campo: já traz a saudação em spintax e a linha de saída (SAIR),
 // que deve estar sempre presente. O usuário escreve o miolo da mensagem no meio.
 const DEFAULT_DRAFT =
-  "{Oi|Olá|E aí}, {tudo bem|tudo certo}? {Tenho uma novidade|Queria te mostrar uma coisa} {pra você|que pode te interessar}.\n\n{Entre no link e saiba mais|Dá uma olhada aqui|Confira os detalhes}: [cole seu link aqui]\n\nResponda SAIR para não receber mais mensagens.";
+  "{Oi|Olá|E aí}, {tudo bem|tudo certo}? {Tenho uma novidade pra você|Queria te mostrar uma coisa que pode te interessar|Surgiu uma novidade que talvez te interesse}.\n\n{Entre no link e saiba mais|Dá uma olhada aqui|Confira os detalhes}: [cole seu link aqui]\n\nResponda SAIR para não receber mais mensagens.";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -72,6 +73,17 @@ export function CampaignsScreen() {
   const [paused, setPaused] = useState(false);
   const [audienceCount, setAudienceCount] = useState<number | null>(null);
   const [warmup, setWarmup] = useState<WarmupStatus | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmRenew, setConfirmRenew] = useState(false);
+  const [confirmStart, setConfirmStart] = useState(false);
+  const [confirmRestartWarmup, setConfirmRestartWarmup] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  // Disjuntor aberto (pausa automática por falhas): horário UTC de retomada, ou null.
+  const [circuitOpenUntil, setCircuitOpenUntil] = useState<string | null>(null);
+  // Detecta o fim do envio (fila > 0 → 0 enquanto enviando). suppressDone evita o modal
+  // quando o zero veio de uma ação manual (limpar fila / renovar lista).
+  const prevPendingRef = useRef(0);
+  const suppressDoneRef = useRef(false);
   // Modal de teto atingido: input do "+N" e flag pra não reabrir depois de cancelar hoje.
   const [capDismissed, setCapDismissed] = useState(false);
   const [extraInput, setExtraInput] = useState("");
@@ -93,20 +105,26 @@ export function CampaignsScreen() {
 
   // Dados "ao vivo" (mudam conforme o dispatcher processa) — atualizados no timer.
   const loadLive = useCallback(async () => {
-    try {
-      const [s, r, st, w] = await Promise.all([
-        api.dispatchStats(),
-        api.dispatchReport(reportStatusRef.current || undefined),
-        api.dispatchStatus(),
-        api.warmupStatus(),
-      ]);
-      setStats(s);
-      setReport(r);
-      setPaused(st.paused);
-      setWarmup(w);
-      setError(null);
-    } catch (ex) {
+    // allSettled: um blip num endpoint não derruba os outros três nem mostra erro à toa.
+    // Cada pedaço atualiza sozinho; só sinaliza erro se TUDO falhar (API provavelmente fora).
+    const [s, r, st, w] = await Promise.allSettled([
+      api.dispatchStats(),
+      api.dispatchReport(reportStatusRef.current || undefined),
+      api.dispatchStatus(),
+      api.warmupStatus(),
+    ]);
+    if (s.status === "fulfilled") setStats(s.value);
+    if (r.status === "fulfilled") setReport(r.value);
+    if (st.status === "fulfilled") {
+      setPaused(st.value.paused);
+      setCircuitOpenUntil(st.value.circuitOpen ? st.value.circuitOpenUntil : null);
+    }
+    if (w.status === "fulfilled") setWarmup(w.value);
+    if ([s, r, st, w].every((x) => x.status === "rejected")) {
+      const ex = (s as PromiseRejectedResult).reason;
       setError(ex instanceof Error ? ex.message : String(ex));
+    } else {
+      setError(null);
     }
   }, []);
 
@@ -147,6 +165,21 @@ export function CampaignsScreen() {
   useEffect(() => {
     if (warmup && !warmup.atCap) setCapDismissed(false);
   }, [warmup]);
+
+  // Fim do envio: a fila tinha contatos e zerou enquanto enviava (não pausado, não foi
+  // limpar/renovar). Mostra o modal de conclusão uma vez.
+  useEffect(() => {
+    const pending = stats?.pending ?? 0;
+    const prev = prevPendingRef.current;
+    prevPendingRef.current = pending;
+    if (prev > 0 && pending === 0) {
+      if (suppressDoneRef.current || paused) {
+        suppressDoneRef.current = false;
+        return;
+      }
+      setShowDone(true);
+    }
+  }, [stats, paused]);
 
   function countFor(key: DispatchJobStatus): number {
     if (!stats) return 0;
@@ -244,6 +277,9 @@ export function CampaignsScreen() {
     }
     setDispatching(true);
     setDispatchMsg(null);
+    // Nova fila: limpa eventual supressão pendente, senão ela poderia engolir o modal de
+    // conclusão desta campanha (caso um clear/renovar anterior não tenha consumido a flag).
+    suppressDoneRef.current = false;
     try {
       await api.pauseDispatch(); // garante que nada sai enquanto você revisa
       setPaused(true);
@@ -262,11 +298,9 @@ export function CampaignsScreen() {
     }
   }
 
-  // Etapa 3: libera a fila preparada — o dispatcher começa a enviar.
+  // Etapa 3: libera a fila preparada — o dispatcher começa a enviar. Confirmado pelo modal.
   async function onStart() {
-    if (!window.confirm(`Iniciar o envio para ${pendingCount} contato(s) na fila?`)) {
-      return;
-    }
+    setConfirmStart(false);
     try {
       await api.resumeDispatch();
       setPaused(false);
@@ -277,11 +311,10 @@ export function CampaignsScreen() {
     }
   }
 
-  // Cancela o que foi preparado (apaga os "Na fila"), sem enviar.
+  // Cancela o que foi preparado (apaga os "Na fila"), sem enviar. Confirmado pelo modal.
   async function onClear() {
-    if (!window.confirm("Limpar a fila? Os contatos preparados não serão enviados.")) {
-      return;
-    }
+    setConfirmClear(false);
+    suppressDoneRef.current = true; // zerar a fila aqui não é "conclusão"
     try {
       await api.clearQueue();
       setDispatchMsg("Fila limpa.");
@@ -292,14 +325,10 @@ export function CampaignsScreen() {
   }
 
   // Renova a lista: baixa o histórico atual em Excel (backup) e zera todos os resultados.
+  // Confirmado pelo modal padrão.
   async function onRenew() {
-    if (
-      !window.confirm(
-        "Renovar a lista? Vou baixar o histórico atual em Excel e zerar todos os resultados (enviadas, falhas, fila). Continuar?",
-      )
-    ) {
-      return;
-    }
+    setConfirmRenew(false);
+    suppressDoneRef.current = true; // zerar resultados aqui não é "conclusão"
     try {
       // Backup COMPLETO (ignora o filtro de status da tela) — o reset apaga tudo.
       const all = await api.dispatchReport(undefined, 5000);
@@ -325,17 +354,9 @@ export function CampaignsScreen() {
     }
   }
 
-  // Reinicia o aquecimento (chip novo): a curva volta ao dia 0 (envios baixos de novo).
+  // Reinicia o aquecimento (chip novo): a curva volta ao dia 0. Confirmado pelo modal.
   async function onRestartWarmup() {
-    if (
-      !window.confirm(
-        "Reiniciar o aquecimento agora? O limite diário volta ao começo da curva (envios baixos) " +
-          "e sobe aos poucos de novo. Obs.: trocar de chip pelo QR já reinicia sozinho ao reconectar — " +
-          "use isto só para forçar manualmente (ex.: esfriar um chip que levou aviso).",
-      )
-    ) {
-      return;
-    }
+    setConfirmRestartWarmup(false);
     try {
       await api.restartWarmup();
       setDispatchMsg("Aquecimento reiniciado — começando do dia 1 da curva.");
@@ -551,7 +572,7 @@ export function CampaignsScreen() {
             <button
               type="button"
               className="warmup-restart"
-              onClick={() => void onRestartWarmup()}
+              onClick={() => setConfirmRestartWarmup(true)}
               title="Reforço manual: reinicia a curva pro dia 1. A troca de chip já reinicia sozinha ao reconectar."
             >
               Reiniciar aquecimento
@@ -584,6 +605,12 @@ export function CampaignsScreen() {
 
       <section className="campaigns-section">
         <h3>3 · Disparar</h3>
+        {circuitOpenUntil && (
+          <p className="circuit-banner">
+            Envios pausados automaticamente por falhas seguidas. Retomam sozinhos às{" "}
+            <strong>{new Date(circuitOpenUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</strong>.
+          </p>
+        )}
         {pendingCount === 0 ? (
           <>
             <p className={`audience-count${audienceCount === 0 ? " zero" : ""}`}>
@@ -608,10 +635,10 @@ export function CampaignsScreen() {
               {pendingCount} contato(s) na fila — revise em "Resultado dos envios" e inicie quando quiser.
             </p>
             <div className="dispatch-actions">
-              <button type="button" className="dispatch-btn" onClick={() => void onStart()}>
+              <button type="button" className="dispatch-btn" onClick={() => setConfirmStart(true)}>
                 Iniciar envios
               </button>
-              <button type="button" className="clear-btn" onClick={() => void onClear()}>
+              <button type="button" className="clear-btn" onClick={() => setConfirmClear(true)}>
                 Limpar fila
               </button>
             </div>
@@ -644,7 +671,7 @@ export function CampaignsScreen() {
             <button
               type="button"
               className="report-renew"
-              onClick={() => void onRenew()}
+              onClick={() => setConfirmRenew(true)}
               disabled={totalJobs === 0}
               title="Baixa o histórico em Excel e zera os resultados pra começar uma nova campanha"
             >
@@ -743,6 +770,104 @@ export function CampaignsScreen() {
             </div>
           </div>
         </div>
+      )}
+
+      {confirmClear && (
+        <ConfirmDialog
+          title="Limpar a fila?"
+          message={
+            <>
+              Vai remover os <strong>{pendingCount}</strong> contato(s) que estão <strong>"Na fila"</strong>. Eles{" "}
+              <strong>não</strong> serão enviados.
+              <br />
+              <br />
+              Os contatos e os envios já feitos não são afetados — dá pra preparar a fila de novo quando quiser.
+            </>
+          }
+          confirmLabel="Sim, limpar"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void onClear()}
+          onCancel={() => setConfirmClear(false)}
+        />
+      )}
+
+      {confirmRenew && (
+        <ConfirmDialog
+          title="Renovar a lista?"
+          message={
+            <>
+              Vai <strong>baixar o histórico atual em Excel</strong> (backup) e <strong>zerar todos os
+              resultados</strong> — enviadas, falhas e fila — pra começar uma nova campanha.
+              <br />
+              <br />
+              Os <strong>contatos não são afetados</strong>. O histórico zerado fica salvo na planilha.
+            </>
+          }
+          confirmLabel="Sim, renovar"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void onRenew()}
+          onCancel={() => setConfirmRenew(false)}
+        />
+      )}
+
+      {confirmStart && (
+        <ConfirmDialog
+          title="Iniciar os envios?"
+          message={
+            <>
+              Vai começar a enviar para os <strong>{pendingCount}</strong> contato(s) na fila. As mensagens saem{" "}
+              <strong>aos poucos</strong>, com intervalos, respeitando o teto do aquecimento.
+            </>
+          }
+          confirmLabel="Sim, iniciar"
+          cancelLabel="Cancelar"
+          onConfirm={() => void onStart()}
+          onCancel={() => setConfirmStart(false)}
+        />
+      )}
+
+      {showDone && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="done-title">
+          <div className="modal-card">
+            <h3 id="done-title">Disparo concluído</h3>
+            <p>Todos os contatos da fila foram processados.</p>
+            {stats && (
+              <p className="cap-stats">
+                Enviadas: <strong>{stats.sent}</strong> · Falharam: <strong>{stats.failed}</strong> · Puladas:{" "}
+                <strong>{stats.skipped}</strong>
+              </p>
+            )}
+            <p className="muted small">
+              Os números acima são o total acumulado. Use "Renovar lista" pra zerar e começar uma nova campanha.
+            </p>
+            <div className="cap-actions">
+              <button type="button" className="dispatch-btn" onClick={() => setShowDone(false)}>
+                Ok
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmRestartWarmup && (
+        <ConfirmDialog
+          title="Reiniciar o aquecimento?"
+          message={
+            <>
+              O limite diário volta ao <strong>começo da curva</strong> (envios baixos) e sobe aos poucos de novo.
+              <br />
+              <br />
+              Trocar de chip pelo QR já reinicia sozinho — use isto só pra forçar manualmente (ex.: esfriar um chip
+              que levou aviso).
+            </>
+          }
+          confirmLabel="Sim, reiniciar"
+          cancelLabel="Cancelar"
+          onConfirm={() => void onRestartWarmup()}
+          onCancel={() => setConfirmRestartWarmup(false)}
+        />
       )}
     </main>
   );

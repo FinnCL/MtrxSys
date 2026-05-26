@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Application.UseCases.Conversations;
 using MtrxSys.Core.Domain.Conversations;
 
 namespace MtrxSys.Api.Endpoints;
@@ -25,6 +26,14 @@ public static class ConversationsEndpoints
             var skip = Math.Max(offset ?? 0, 0);
             var items = await repo.ListByStatusAsync(status, search, take, skip, ct);
             return Results.Ok(items.Select(ToDto));
+        });
+
+        // Religa conversas órfãs (sem contato) ao contato — conserta as que nasceram durante
+        // instabilidade da sessão (LID resolvia null). Idempotente; chamado na conexão e manual.
+        group.MapPost("/relink", async (RelinkOrphanConversationsUseCase relink, CancellationToken ct) =>
+        {
+            var linked = await relink.RunAsync(ct);
+            return Results.Ok(new { linked });
         });
 
         group.MapGet("/counts", async (

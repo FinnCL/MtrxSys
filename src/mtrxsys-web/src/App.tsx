@@ -8,6 +8,7 @@ import { WhatsAppOnboarding } from "./components/WhatsAppOnboarding";
 import { GroupsScreen } from "./components/GroupsScreen";
 import { ContactsScreen } from "./components/ContactsScreen";
 import { CampaignsScreen } from "./components/CampaignsScreen";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { api } from "./api/client";
 import type { Conversation } from "./api/types";
 import { emptyContactPaneMessage } from "./utils/chatLabels";
@@ -22,6 +23,7 @@ function Shell() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [view, setView] = useState<ViewTab>("chat");
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const autoSyncTriggeredRef = useRef(false);
 
   const runSync = useCallback(async (silent = false) => {
@@ -50,14 +52,7 @@ function Shell() {
   // Desconecta o número do WhatsApp (não é o mesmo que "Sair" do sistema). Some o número
   // pareado; a tela de conexão reaparece sozinha (wahaWorking=false) pra escanear outro.
   const disconnectWhatsApp = useCallback(async () => {
-    if (
-      !window.confirm(
-        "Desconectar o WhatsApp? Isso desliga o número atual e PARA os disparos até " +
-          "você parear outro celular pelo QR. (Não é o mesmo que sair do sistema.)",
-      )
-    ) {
-      return;
-    }
+    setConfirmDisconnect(false);
     try {
       await api.wahaLogout();
       autoSyncTriggeredRef.current = false; // permite o auto-sync de novo ao reconectar
@@ -72,13 +67,21 @@ function Shell() {
     void checkWaha();
   }, [user, checkWaha]);
 
+  // Se a sessão cair (inclusive por instabilidade no backend, não só pelo botão), rearma o
+  // gatilho — assim reconcile/relink/sync re-rodam na próxima reconexão (a auto-cura).
+  useEffect(() => {
+    if (wahaWorking === false) autoSyncTriggeredRef.current = false;
+  }, [wahaWorking]);
+
   useEffect(() => {
     if (wahaWorking !== true) return;
     if (autoSyncTriggeredRef.current) return;
     autoSyncTriggeredRef.current = true;
     // Ao conectar, reconcilia o aquecimento com o número: se trocou de chip, reinicia sozinho.
-    // É melhor-esforço — uma falha aqui não pode travar o sync nem a tela.
+    // E religa conversas órfãs ao contato (conserta as criadas durante instabilidade da sessão).
+    // Melhor-esforço — uma falha aqui não pode travar o sync nem a tela.
     void api.reconcileWarmup().catch(() => {});
+    void api.relinkConversations().catch(() => {});
     void runSync(true);
   }, [wahaWorking, runSync]);
 
@@ -131,7 +134,7 @@ function Shell() {
           {user.displayName} <span className="muted">({user.email})</span>
         </span>
         {wahaWorking === true && (
-          <button type="button" className="disconnect-btn" onClick={() => void disconnectWhatsApp()}>
+          <button type="button" className="disconnect-btn" onClick={() => setConfirmDisconnect(true)}>
             Desconectar WhatsApp
           </button>
         )}
@@ -170,6 +173,25 @@ function Shell() {
             </aside>
           )}
         </main>
+      )}
+
+      {confirmDisconnect && (
+        <ConfirmDialog
+          title="Desconectar o WhatsApp?"
+          message={
+            <>
+              Desliga o número conectado e <strong>para os disparos</strong> até você parear outro celular pelo QR.
+              <br />
+              <br />
+              Não é o mesmo que sair do sistema, e <strong>não afeta o WhatsApp do celular</strong>.
+            </>
+          }
+          confirmLabel="Sim, desconectar"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void disconnectWhatsApp()}
+          onCancel={() => setConfirmDisconnect(false)}
+        />
       )}
     </div>
   );

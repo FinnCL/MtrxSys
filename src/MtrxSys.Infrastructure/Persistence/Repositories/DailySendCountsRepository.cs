@@ -6,8 +6,12 @@ namespace MtrxSys.Infrastructure.Persistence.Repositories;
 
 internal sealed class DailySendCountsRepository(MtrxDbContext db) : IDailySendCountsRepository
 {
+    // AsNoTracking de propósito: IncrementAsync escreve via SQL cru (bypassa o EF), então uma
+    // leitura RASTREADA devolveria o contador antigo do identity-map (EF não sobrescreve entidade
+    // já rastreada com o valor novo do banco). Sem isso, dentro de um mesmo ciclo de disparo o teto
+    // do aquecimento lia sempre o valor velho e era furado. Sem tracking, cada leitura é fresca.
     public Task<DailySendCount?> GetAsync(DateOnly dateUtc, CancellationToken ct) =>
-        db.DailySendCounts.FirstOrDefaultAsync(c => c.Id == dateUtc, ct);
+        db.DailySendCounts.AsNoTracking().FirstOrDefaultAsync(c => c.Id == dateUtc, ct);
 
     public async Task<int> IncrementAsync(DateOnly dateUtc, int warmupDayIndex, CancellationToken ct)
     {

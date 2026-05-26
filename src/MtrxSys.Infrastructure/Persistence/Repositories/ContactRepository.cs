@@ -70,6 +70,11 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         {
             q = q.Where(c => c.OptOutAt == null);
         }
+        // Nunca dispara pro próprio número conectado (evita auto-envio).
+        if (!string.IsNullOrWhiteSpace(filter.ExcludePhoneE164))
+        {
+            q = q.Where(c => c.Phone.E164 != filter.ExcludePhoneE164);
+        }
         if (!string.IsNullOrWhiteSpace(filter.GroupTag))
         {
             q = q.Where(c => c.GroupTag == filter.GroupTag);

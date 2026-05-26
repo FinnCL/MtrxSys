@@ -16,6 +16,8 @@ public interface IConversationRepository
     Task<ConversationStatusCounts> CountByStatusAsync(string? search, CancellationToken ct);
     Task AddAsync(Conversation conversation, CancellationToken ct);
     Task UpdateAsync(Conversation conversation, CancellationToken ct);
+    /// <summary>Conversas individuais (não-grupo) sem contato vinculado — órfãs a religar ao contato.</summary>
+    Task<IReadOnlyList<Conversation>> ListUnlinkedIndividualAsync(CancellationToken ct);
 }
 
 public sealed record ConversationStatusCounts(int AwaitingReply, int Responded, int OptedOut, int All);
