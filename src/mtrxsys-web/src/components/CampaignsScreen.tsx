@@ -14,7 +14,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 // Texto inicial do campo: já traz a saudação em spintax e a linha de saída (SAIR),
 // que deve estar sempre presente. O usuário escreve o miolo da mensagem no meio.
 const DEFAULT_DRAFT =
-  "{Oi|Olá|E aí}, {tudo bem|tudo certo}? {Tenho uma novidade pra você|Queria te mostrar uma coisa que pode te interessar|Surgiu uma novidade que talvez te interesse}.\n\n{Entre no link e saiba mais|Dá uma olhada aqui|Confira os detalhes}: [cole seu link aqui]\n\nResponda SAIR para não receber mais mensagens.";
+  "{Oi|Olá|E aí}, {tudo bem|tudo certo}? {Tenho|Surgiu|Apareceu} {uma novidade|uma oferta|uma promoção} {que pode te interessar|que talvez te interesse|especial pra você}.\n\n{Entre no link e saiba mais|Dá uma olhada aqui|Confira os detalhes}: [cole seu link aqui]\n\nResponda SAIR para não receber mais mensagens.";
 
 // Miniatura de uma mensagem com imagem. Busca o blob com auth (o endpoint exige
 // Bearer, então <img src> direto daria 401) e usa um object URL, revogado ao desmontar.
@@ -383,10 +383,7 @@ export function CampaignsScreen() {
     <main className="campaigns-screen">
       <header className="campaigns-section">
         <h2>Disparo de mensagens</h2>
-        <p className="muted">
-          Monte um conjunto de mensagens, escolha pra quem, e dispare. Cada contato recebe uma sorteada —
-          sem texto repetido. O envio é automático e espaçado.
-        </p>
+        <p className="muted">Cada contato recebe uma mensagem sorteada. O envio é automático e espaçado.</p>
       </header>
 
       {error && <p className="error">{error}</p>}
@@ -410,15 +407,23 @@ export function CampaignsScreen() {
 
       <section className="campaigns-section">
         <h3>1 · Suas mensagens ({messages.length})</h3>
-        <p className="muted small">
-          <strong>Como variar sem cair como spam:</strong> dentro de uma mensagem, use{" "}
-          <code>{"{a|b|c}"}</code> — o sistema sorteia uma opção por contato (pode usar vários pontos no
-          texto, ex.: <code>{"{Oi|Olá}"}</code>). <strong>Não</strong> separe a saudação em modelos
-          diferentes ("Oi" num, "Olá" noutro): isso manda texto idêntico pra muita gente. Só crie um{" "}
-          <strong>2º modelo</strong> se o <strong>corpo</strong> da mensagem for diferente (outro
-          argumento), não pra trocar a saudação. Seus contatos não têm nome → prefira saudações sem nome.
-          A linha de saída (<strong>"SAIR"</strong>) já vem pronta no campo — mantenha ela.
-        </p>
+        <details className="help-toggle">
+          <summary>Como escrever a mensagem (variar sem cair como spam)</summary>
+          <p className="muted small">
+            <strong>Como variar sem cair como spam:</strong> dentro de uma mensagem, use{" "}
+            <code>{"{a|b|c}"}</code> — o sistema sorteia uma opção por contato (pode usar vários pontos no
+            texto, ex.: <code>{"{Oi|Olá}"}</code>). <strong>Não</strong> separe a saudação em modelos
+            diferentes ("Oi" num, "Olá" noutro): isso manda texto idêntico pra muita gente. Só crie um{" "}
+            <strong>2º modelo</strong> se o <strong>corpo</strong> da mensagem for diferente (outro
+            argumento), não pra trocar a saudação. Seus contatos não têm nome → prefira saudações sem nome.
+            A linha de saída (<strong>"SAIR"</strong>) já vem pronta no campo — mantenha ela.
+          </p>
+          <p className="muted small">
+            <strong>Link:</strong> é só colar no texto — o WhatsApp gera a prévia sozinho. Prefira o{" "}
+            <strong>seu domínio</strong> (ex.: <code>seusite.com.br</code>); <strong>evite encurtadores</strong>{" "}
+            (bit.ly etc.), que pesam mais como spam.
+          </p>
+        </details>
         {messages.length > 0 && (
           <>
             <p className="muted small pool-label">
@@ -464,11 +469,6 @@ export function CampaignsScreen() {
             placeholder="Escreva uma mensagem (ex.: {Oi|Olá}! ... responda SAIR pra não receber.)"
             rows={4}
           />
-          <p className="muted small">
-            <strong>Link:</strong> é só colar no texto acima — o WhatsApp gera a prévia sozinho. Prefira o{" "}
-            <strong>seu domínio</strong> (ex.: <code>seusite.com.br</code>); <strong>evite encurtadores</strong>{" "}
-            (bit.ly etc.), que pesam mais como spam.
-          </p>
           <button type="button" onClick={() => void addMessage()} disabled={adding || !draft.trim()}>
             {adding ? "Adicionando..." : "+ Adicionar mensagem"}
           </button>
@@ -497,10 +497,7 @@ export function CampaignsScreen() {
             </select>
           </label>
         </div>
-        <p className="muted small">
-          "Só quem já respondeu" envia apenas pros contatos engajados — mais resultado e mais seguro. Quem
-          pediu pra sair nunca recebe.
-        </p>
+        <p className="muted small">Quem pediu pra sair nunca recebe.</p>
       </section>
 
       {warmup && (
@@ -537,10 +534,13 @@ export function CampaignsScreen() {
               </>
             )}
           </p>
-          <p className="muted small">
-            O disparo respeita esse teto automaticamente: ao bater o limite do dia, ele para sozinho e
-            retoma amanhã com um número maior. Aumentar aos poucos é o que protege o número de ban.
-          </p>
+          <details className="help-toggle">
+            <summary>Como o teto protege o chip</summary>
+            <p className="muted small">
+              O disparo respeita esse teto automaticamente: ao bater o limite do dia, ele para sozinho e
+              retoma amanhã com um número maior. Aumentar aos poucos é o que protege o número de ban.
+            </p>
+          </details>
         </section>
       )}
 

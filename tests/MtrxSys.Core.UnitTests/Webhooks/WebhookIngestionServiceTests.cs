@@ -207,6 +207,74 @@ public sealed class WebhookIngestionServiceTests
     }
 
     [Fact]
+    public async Task Ingest_outbound_echo_via_lid_records_under_recipient_not_own_number()
+    {
+        // Regressão: o eco de um disparo chega com FromMe=true e o REMETENTE (nosso próprio número)
+        // serializado como @lid. A troca pro destinatário só tratava @c.us, então o código resolvia
+        // o @lid do nosso número e gravava a mensagem enviada numa "conversa com o próprio número".
+        // A conversa de saída tem que ser SEMPRE o destinatário (To), nunca o remetente.
+        var svc = BuildService();
+        const string core = "3EB0AB12CD34EF56";
+        // Eco ainda não de-duplicado (corrida: o registro proativo do disparo ainda não commitou).
+        _messages.GetByWaMessageIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((ChatMessage?)null);
+        _conversations.GetByWaChatIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Conversation?)null);
+        _conversations.GetByContactIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((Conversation?)null);
+        // Se o @lid do remetente fosse resolvido, cairia no NOSSO número — exatamente o bug.
+        _waha.ResolveLidToPhoneE164Async("default", "157239574847645@lid", Arg.Any<CancellationToken>())
+            .Returns("+557193477235");
+
+        var evt = new WahaWebhookEvent(
+            "message.any",
+            "default",
+            new WahaMessagePayload(
+                Id: $"true_157239574847645@lid_{core}_out",
+                Timestamp: 1700000000,
+                From: "157239574847645@lid",  // nosso número, oculto como @lid
+                To: "557186576422@c.us",       // destinatário do disparo
+                FromMe: true, Body: "oi", HasMedia: false, Media: null, Participant: null));
+
+        await svc.IngestAsync(evt, CancellationToken.None);
+
+        // Não pode resolver/atribuir pelo remetente (nós): a conversa de saída é o destinatário.
+        await _waha.DidNotReceive().ResolveLidToPhoneE164Async(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        // A conversa criada é a do destinatário (To), não a "comigo mesmo".
+        await _conversations.Received(1).AddAsync(
+            Arg.Is<Conversation>(c => c.WaChatId == "557186576422@c.us"),
+            Arg.Any<CancellationToken>());
+        // A mensagem enviada continua sendo gravada (no lugar certo).
+        await _messages.Received(1).AddAsync(Arg.Any<ChatMessage>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Ingest_outbound_group_message_stays_in_group_conversation()
+    {
+        // Mensagem NOSSA (FromMe) num grupo: o From já é o id do grupo, não o nosso número. A regra
+        // de "trocar pro To" vale só pra conversa individual; em grupo, sem To, o eco seria descartado.
+        // Deve ser gravado na conversa do próprio grupo.
+        var svc = BuildService();
+        _messages.GetByWaMessageIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((ChatMessage?)null);
+        _conversations.GetByWaChatIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Conversation?)null);
+
+        var evt = new WahaWebhookEvent(
+            "message.any",
+            "default",
+            new WahaMessagePayload(
+                Id: "true_120363041234567890@g.us_3EB0AA_out",
+                Timestamp: 1700000000,
+                From: "120363041234567890@g.us",  // o grupo é o próprio chat
+                To: null,                          // grupo costuma vir sem To
+                FromMe: true, Body: "promo", HasMedia: false, Media: null, Participant: null));
+
+        await svc.IngestAsync(evt, CancellationToken.None);
+
+        await _conversations.Received(1).AddAsync(
+            Arg.Is<Conversation>(c => c.WaChatId == "120363041234567890@g.us" && c.IsGroup),
+            Arg.Any<CancellationToken>());
+        await _messages.Received(1).AddAsync(Arg.Any<ChatMessage>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Ingest_reuses_existing_contact_conversation_instead_of_creating_duplicate()
     {
         // Mensagem chega por um chatId ainda não visto, mas o contato já tem conversa (ex.: criada

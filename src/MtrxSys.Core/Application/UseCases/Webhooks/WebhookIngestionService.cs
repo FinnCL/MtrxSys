@@ -73,8 +73,20 @@ public sealed class WebhookIngestionService(
         var chatId = p.From!;
         var kind = WahaChatIdentifier.Classify(chatId);
 
-        if (p.FromMe == true && kind == WahaChatIdentifier.Kind.Individual && !string.IsNullOrEmpty(p.To))
+        // Mensagem que NÓS enviamos num chat INDIVIDUAL (eco do disparo, ou resposta manual pelo
+        // celular): o From é o nosso próprio número e, no eco, costuma chegar como @lid (oculto).
+        // Se o resolvêssemos, cairíamos no nosso número e gravaríamos numa "conversa com o próprio
+        // número". A conversa de saída é sempre o destinatário (To) — trocamos independente do
+        // formato (antes só tratávamos @c.us). Sem To não dá pra atribuir, e o disparo já grava a
+        // saída na conversa certa, então ignoramos o eco.
+        // Em GRUPO não se aplica: lá o From já é o id do grupo (não o nosso número), então mantém.
+        if (p.FromMe == true && kind != WahaChatIdentifier.Kind.Group)
         {
+            if (string.IsNullOrEmpty(p.To))
+            {
+                log.LogDebug("Eco de saída sem destinatário (id={Id}); ignorando pra não gravar conversa com o próprio número", p.Id);
+                return;
+            }
             chatId = p.To;
             kind = WahaChatIdentifier.Classify(chatId);
         }

@@ -17,3 +17,42 @@ services:
       WATCHPACK_POLLING: "true"
       VITE_API_URL: "http://localhost:5080"
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+
+  # Backend com hot-reload (dotnet watch). Reaproveita tudo do docker-compose.yml (env, ports,
+  # depends_on); aqui só trocamos pro estágio `dev` da imagem e montamos o código.
+  api:
+    build:
+      target: dev
+    environment:
+      # Development liga o hot-reload completo (edit-and-continue). A connection string, a chave
+      # do WAHA e o JWT continuam vindo por env do base, então o banco/segredos não mudam.
+      ASPNETCORE_ENVIRONMENT: Development
+      DOTNET_USE_POLLING_FILE_WATCHER: "true"
+    # O 1º build dentro do container demora mais que o start_period de produção; alarga a janela
+    # pra o healthcheck não marcar a api como unhealthy (o waha/dispatcher dependem dela).
+    healthcheck:
+      start_period: 240s
+    volumes:
+      - ./:/src
+      # Volumes anônimos: o container usa SEU próprio obj/bin (Linux), nunca o do host (Windows).
+      - /src/src/MtrxSys.Core/obj
+      - /src/src/MtrxSys.Core/bin
+      - /src/src/MtrxSys.Infrastructure/obj
+      - /src/src/MtrxSys.Infrastructure/bin
+      - /src/src/MtrxSys.Api/obj
+      - /src/src/MtrxSys.Api/bin
+
+  dispatcher:
+    build:
+      target: dev
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      DOTNET_USE_POLLING_FILE_WATCHER: "true"
+    volumes:
+      - ./:/src
+      - /src/src/MtrxSys.Core/obj
+      - /src/src/MtrxSys.Core/bin
+      - /src/src/MtrxSys.Infrastructure/obj
+      - /src/src/MtrxSys.Infrastructure/bin
+      - /src/src/MtrxSys.Dispatcher/obj
+      - /src/src/MtrxSys.Dispatcher/bin

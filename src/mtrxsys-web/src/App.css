@@ -184,6 +184,14 @@ input[type="checkbox"], input[type="radio"] {
 .campaigns-section h2 { margin: 0 0 8px; }
 .campaigns-section h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
 .campaigns-section code { background: var(--bg-3); padding: 2px 6px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 12px; }
+/* Ajuda recolhível: tutorial fica fora do caminho por padrão, num clique de distância. */
+.help-toggle { margin: 0 0 10px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.help-toggle > summary { cursor: pointer; color: var(--muted); font-size: 12px; list-style: none; user-select: none; }
+.help-toggle > summary::before { content: "▸ "; }
+.help-toggle[open] > summary::before { content: "▾ "; }
+.help-toggle > summary:hover { color: var(--fg); }
+.help-toggle > summary::-webkit-details-marker { display: none; }
+.help-toggle p:first-of-type { margin-top: 6px; }
 
 .dispatch-stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .chip-btn { cursor: pointer; border: 1px solid transparent; }
