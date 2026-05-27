@@ -73,6 +73,10 @@ docker compose up -d --build
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
+> ⚠️ **Não rode `docker compose -f docker-compose.dev.yml up` sozinho.** O `docker-compose.dev.yml` é um *override* — só faz sentido empilhado **em cima** do base com os dois `-f` na ordem acima. O mapeamento de porta da Api (`5080:8080`) mora só no base; sem ele a Api sobe sem porta publicada e a UI quebra com `ERR_CONNECTION_REFUSED` em `http://localhost:5080`.
+>
+> Como conferir se subiu certo: no `docker compose ps` os containers da app devem se chamar `mtrx-api`, `mtrx-web`, `mtrx-dispatcher`. Se aparecerem como `mtrxsys-api-1` (sufixo `-1`), foi sem o base — derrube com `docker compose down` e suba de novo com os dois `-f` (ou use `dev.cmd`).
+
 ### Comandos úteis
 
 ```bash
