@@ -200,6 +200,18 @@ input[type="checkbox"], input[type="radio"] {
 /* separa visualmente o resultado (com o botão de baixar) da área de disparo acima,
    pra o "Baixar relatório" não ficar colado no "Parar envios" */
 .report-section { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 24px; }
+/* Altura mínima estável pra área de resultados: ao trocar o filtro (ex.: 5 envios -> 0), a tabela
+   não colapsa de vez, evitando o "pulo" do scroll e a página ficar irregular. */
+.report-results { min-height: 240px; }
+.report-search {
+  width: 100%; max-width: 320px; margin: 0 0 10px; padding: 6px 10px;
+  font-size: 13px; background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.report-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 12px; }
+.report-pager button { background: var(--bg-3); color: var(--fg); padding: 4px 14px; font-size: 13px; }
+.report-pager button:hover:not(:disabled) { background: var(--accent); }
+.report-pager button:disabled { opacity: 0.4; cursor: default; }
 .report-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .report-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .report-export { background: var(--bg-3); color: var(--fg); padding: 6px 14px; font-size: 13px; }
@@ -207,6 +219,7 @@ input[type="checkbox"], input[type="radio"] {
 .report-renew { background: var(--bg-3); color: var(--fg); padding: 6px 14px; font-size: 13px; }
 .report-renew:hover:not(:disabled) { background: var(--danger); }
 .stat-chip { padding: 4px 12px; border-radius: 12px; font-size: 12px; background: var(--bg-3); }
+.stat-all { background: var(--bg-3); color: var(--fg); font-weight: 600; }
 .stat-pending { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
 .stat-sent { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 .stat-failed { background: rgba(217, 89, 108, 0.2); color: var(--danger); }

@@ -57,6 +57,9 @@ export function CampaignsScreen() {
   const [stats, setStats] = useState<DispatchStats | null>(null);
   const [report, setReport] = useState<DispatchReportItem[]>([]);
   const [reportStatus, setReportStatus] = useState<"" | DispatchJobStatus>("");
+  // Visão da tabela de resultados (só client-side): busca por telefone/nome e página atual.
+  const [reportSearch, setReportSearch] = useState("");
+  const [reportPage, setReportPage] = useState(1);
   const [draft, setDraft] = useState(DEFAULT_DRAFT);
   const [audience, setAudience] = useState<"all" | "responded">("all");
   const [group, setGroup] = useState("");
@@ -230,6 +233,24 @@ export function CampaignsScreen() {
   const pendingCount = stats?.pending ?? 0;
   const totalJobs = stats ? stats.pending + stats.sent + stats.failed + stats.skipped : 0;
 
+  // Tabela de resultados: busca por telefone/nome e paginação, tudo sobre o que já foi carregado.
+  const REPORT_PAGE_SIZE = 25;
+  const reportQuery = reportSearch.trim().toLowerCase();
+  const filteredReport = reportQuery
+    ? report.filter(
+        (i) =>
+          (i.phone ?? "").toLowerCase().includes(reportQuery) ||
+          (i.name ?? "").toLowerCase().includes(reportQuery),
+      )
+    : report;
+  const reportTotalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
+  // Clamp na leitura (sem setState): se o poll de 5s muda o total, a página nunca "estoura".
+  const reportCurrentPage = Math.min(reportPage, reportTotalPages);
+  const reportPageRows = filteredReport.slice(
+    (reportCurrentPage - 1) * REPORT_PAGE_SIZE,
+    reportCurrentPage * REPORT_PAGE_SIZE,
+  );
+
   // Etapa 2: prepara a fila — pausa e enfileira os contatos (entram "Na fila", nada sai ainda).
   async function onPrepare() {
     if (selectedIds.length === 0) {
@@ -387,23 +408,6 @@ export function CampaignsScreen() {
       </header>
 
       {error && <p className="error">{error}</p>}
-
-      {stats && (
-        <div className="dispatch-stats">
-          {STAT_CHIPS.map((c) => (
-            <button
-              key={c.key}
-              type="button"
-              className={`stat-chip ${c.cls} chip-btn${reportStatus === c.key ? " active" : ""}`}
-              onClick={() => setReportStatus(reportStatus === c.key ? "" : c.key)}
-              title="Clique para ver/filtrar esses contatos abaixo"
-            >
-              {c.label}: {countFor(c.key)}
-            </button>
-          ))}
-        </div>
-      )}
-
 
       <section className="campaigns-section">
         <h3>1 · Suas mensagens ({messages.length})</h3>
@@ -620,13 +624,51 @@ export function CampaignsScreen() {
             </button>
           </div>
         </div>
+        {stats && (
+          <div className="dispatch-stats">
+            <button
+              type="button"
+              className={`stat-chip stat-all chip-btn${reportStatus === "" ? " active" : ""}`}
+              onClick={() => { setReportStatus(""); setReportPage(1); }}
+              title="Mostrar todos os envios (limpa o filtro)"
+            >
+              Todos: {totalJobs}
+            </button>
+            {STAT_CHIPS.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                className={`stat-chip ${c.cls} chip-btn${reportStatus === c.key ? " active" : ""}`}
+                onClick={() => { setReportStatus(reportStatus === c.key ? "" : c.key); setReportPage(1); }}
+                title="Clique para ver/filtrar esses contatos abaixo"
+              >
+                {c.label}: {countFor(c.key)}
+              </button>
+            ))}
+          </div>
+        )}
         <p className="muted small">
           {reportStatus
             ? "Mostrando só os contatos desse status. Clique no chip de novo pra ver todos."
             : "Mostrando todos os envios. Clique num chip de status acima pra filtrar."}
         </p>
+        {report.length > 0 && (
+          <input
+            type="search"
+            className="report-search"
+            placeholder="Buscar por telefone ou nome"
+            value={reportSearch}
+            onChange={(e) => {
+              setReportSearch(e.target.value);
+              setReportPage(1);
+            }}
+          />
+        )}
+        <div className="report-results">
         {report.length === 0 ? (
           <p className="muted">Nenhum envio ainda.</p>
+        ) : reportPageRows.length === 0 ? (
+          <p className="muted">Nenhum contato encontrado para "{reportSearch.trim()}".</p>
         ) : (
           <table className="contacts-table">
             <thead>
@@ -639,8 +681,8 @@ export function CampaignsScreen() {
               </tr>
             </thead>
             <tbody>
-              {report.map((i, idx) => (
-                <tr key={idx}>
+              {reportPageRows.map((i, idx) => (
+                <tr key={(reportCurrentPage - 1) * REPORT_PAGE_SIZE + idx}>
                   <td className="mono">{i.phone ?? "—"}</td>
                   <td>{i.name || <span className="muted">—</span>}</td>
                   <td>
@@ -654,6 +696,28 @@ export function CampaignsScreen() {
               ))}
             </tbody>
           </table>
+        )}
+        </div>
+        {filteredReport.length > REPORT_PAGE_SIZE && (
+          <div className="report-pager">
+            <button
+              type="button"
+              onClick={() => setReportPage(reportCurrentPage - 1)}
+              disabled={reportCurrentPage <= 1}
+            >
+              ‹ Anterior
+            </button>
+            <span className="muted small">
+              Página {reportCurrentPage} de {reportTotalPages} · {filteredReport.length} contato(s)
+            </span>
+            <button
+              type="button"
+              onClick={() => setReportPage(reportCurrentPage + 1)}
+              disabled={reportCurrentPage >= reportTotalPages}
+            >
+              Próxima ›
+            </button>
+          </div>
         )}
       </section>
 
