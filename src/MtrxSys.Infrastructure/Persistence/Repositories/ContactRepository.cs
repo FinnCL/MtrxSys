@@ -13,6 +13,20 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
     public Task<Contact?> GetByPhoneAsync(string e164, CancellationToken ct) =>
         db.Contacts.FirstOrDefaultAsync(c => c.Phone.E164 == e164, ct);
 
+    public async Task<IReadOnlyDictionary<string, Contact>> GetByPhonesAsync(
+        IReadOnlyCollection<string> e164s, CancellationToken ct)
+    {
+        if (e164s.Count == 0)
+        {
+            return new Dictionary<string, Contact>(StringComparer.Ordinal);
+        }
+        var found = await db.Contacts
+            .Where(c => e164s.Contains(c.Phone.E164))
+            .ToListAsync(ct);
+        // E.164 é único (índice único em phone_e164), então não há colisão de chave.
+        return found.ToDictionary(c => c.Phone.E164, StringComparer.Ordinal);
+    }
+
     public async Task AddAsync(Contact contact, CancellationToken ct) =>
         await db.Contacts.AddAsync(contact, ct);
 

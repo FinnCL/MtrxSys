@@ -178,7 +178,7 @@ public sealed class WebhookIngestionService(
             ? DateTimeOffset.FromUnixTimeSeconds(p.Timestamp.Value)
             : now;
         var direction = p.FromMe == true ? MessageDirection.Outbound : MessageDirection.Inbound;
-        var authorPhone = ResolveAuthorPhone(kind, chatId, direction, p);
+        var authorPhone = WahaChatIdentifier.ResolveAuthorPhone(kind, chatId, direction, p.Participant);
 
         var message = ChatMessage.Create(
             id: Guid.NewGuid(),
@@ -263,26 +263,6 @@ public sealed class WebhookIngestionService(
             ct);
     }
 
-
-    private static string? ResolveAuthorPhone(
-        WahaChatIdentifier.Kind kind,
-        string chatId,
-        MessageDirection direction,
-        WahaMessagePayload p)
-    {
-        if (kind == WahaChatIdentifier.Kind.Group)
-        {
-            return string.IsNullOrEmpty(p.Participant)
-                ? null
-                : WahaChatIdentifier.TryExtractPhoneE164(p.Participant)
-                  ?? "+" + WahaChatIdentifier.ExtractDigits(p.Participant);
-        }
-        if (direction == MessageDirection.Inbound && kind == WahaChatIdentifier.Kind.Individual)
-        {
-            return WahaChatIdentifier.TryExtractPhoneE164(chatId);
-        }
-        return null;
-    }
 
     // Troca corpo que é base64 de imagem (WAHA às vezes embute a foto no texto) por um rótulo,
     // pra não poluir o chat/prévia nem guardar dezenas de KB no campo de texto.

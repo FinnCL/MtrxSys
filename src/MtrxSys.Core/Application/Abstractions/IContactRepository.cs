@@ -6,6 +6,9 @@ public interface IContactRepository
 {
     Task<Contact?> GetByIdAsync(Guid id, CancellationToken ct);
     Task<Contact?> GetByPhoneAsync(string e164, CancellationToken ct);
+    /// <summary>Carrega num único SELECT os contatos cujos telefones estão na lista, indexados por
+    /// E.164. Usado pela importação de grupo pra evitar o N+1 (uma consulta por participante).</summary>
+    Task<IReadOnlyDictionary<string, Contact>> GetByPhonesAsync(IReadOnlyCollection<string> e164s, CancellationToken ct);
     Task AddAsync(Contact contact, CancellationToken ct);
     Task UpdateAsync(Contact contact, CancellationToken ct);
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);

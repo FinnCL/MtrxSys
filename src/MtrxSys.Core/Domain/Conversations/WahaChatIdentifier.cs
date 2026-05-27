@@ -96,6 +96,24 @@ public static class WahaChatIdentifier
         return waMessageId; // sem segmento serializado: já é o core (id retornado pelo envio).
     }
 
+    /// <summary>Telefone E.164 do autor de uma mensagem, conforme o tipo de chat: em grupo, do
+    /// participante; em individual recebido, do próprio chat (do nosso lado, no envio, não há autor
+    /// externo → null). Regra única usada igual pelo webhook (tempo real) e pelo sync (histórico).</summary>
+    public static string? ResolveAuthorPhone(Kind kind, string chatId, MessageDirection direction, string? participant)
+    {
+        if (kind == Kind.Group)
+        {
+            return string.IsNullOrEmpty(participant)
+                ? null
+                : TryExtractPhoneE164(participant) ?? "+" + ExtractDigits(participant);
+        }
+        if (direction == MessageDirection.Inbound && kind == Kind.Individual)
+        {
+            return TryExtractPhoneE164(chatId);
+        }
+        return null;
+    }
+
     public static string ExtractDigits(string chatIdOrParticipant)
     {
         if (string.IsNullOrEmpty(chatIdOrParticipant))

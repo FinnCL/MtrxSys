@@ -166,7 +166,7 @@ public sealed class WhatsAppSyncService(
                 }
 
                 var direction = m.FromMe ? MessageDirection.Outbound : MessageDirection.Inbound;
-                var authorPhone = ResolveAuthorPhone(kind, chat.Id, direction, m.Author);
+                var authorPhone = WahaChatIdentifier.ResolveAuthorPhone(kind, chat.Id, direction, m.Author);
 
                 var entry = ChatMessage.Create(
                     id: Guid.NewGuid(),
@@ -191,26 +191,6 @@ public sealed class WhatsAppSyncService(
         }
 
         return new ChatSyncResult(imported, contactCreated);
-    }
-
-    private static string? ResolveAuthorPhone(
-        WahaChatIdentifier.Kind kind,
-        string chatId,
-        MessageDirection direction,
-        string? participant)
-    {
-        if (kind == WahaChatIdentifier.Kind.Group)
-        {
-            return string.IsNullOrEmpty(participant)
-                ? null
-                : WahaChatIdentifier.TryExtractPhoneE164(participant)
-                  ?? "+" + WahaChatIdentifier.ExtractDigits(participant);
-        }
-        if (direction == MessageDirection.Inbound && kind == WahaChatIdentifier.Kind.Individual)
-        {
-            return WahaChatIdentifier.TryExtractPhoneE164(chatId);
-        }
-        return null;
     }
 
     private readonly record struct ChatSyncResult(int MessagesImported, bool ContactCreated);

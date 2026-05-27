@@ -24,11 +24,14 @@ public sealed class ImportGroupMembersUseCase(
         var imported = 0;
         var duplicated = 0;
         var failures = new List<ImportFailure>();
+        var tag = groupTag ?? groupId;
 
+        // 1ª passada: normaliza os telefones (capturando falhas individuais) e descarta o próprio
+        // número. Faz isso ANTES do banco pra poder carregar os já-existentes num lote só.
+        var pending = new List<(WahaParticipant Member, PhoneNumber Phone)>();
         foreach (var member in members)
         {
             ct.ThrowIfCancellationRequested();
-
             try
             {
                 var phone = phones.NormalizeTrusted(member.PhoneE164);
@@ -36,14 +39,34 @@ public sealed class ImportGroupMembersUseCase(
                 {
                     continue; // pula o próprio número do remetente
                 }
-                var existing = await contacts.GetByPhoneAsync(phone.E164, ct);
-                if (existing is not null)
+                pending.Add((member, phone));
+            }
+#pragma warning disable CA1031
+            catch (Exception ex)
+            {
+                failures.Add(new ImportFailure(member.Id, member.PhoneE164, ex.Message));
+            }
+#pragma warning restore CA1031
+        }
+
+        // Carrega num único SELECT os contatos já existentes pros telefones desta importação —
+        // antes era uma consulta por participante (N+1), pesado em grupos grandes.
+        var existingByPhone = await contacts.GetByPhonesAsync(
+            pending.Select(x => x.Phone.E164).Distinct().ToList(), ct);
+        var known = new Dictionary<string, Contact>(existingByPhone, StringComparer.Ordinal);
+
+        foreach (var (member, phone) in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                if (known.TryGetValue(phone.E164, out var existing))
                 {
                     // Já existe: re-importar = "quero estes contatos". Traz de volta quem foi
                     // descartado e garante o grupo (ex.: contato criado pelo sync sem grupo).
                     // Sem isso, um contato descartado ficava num beco sem saída (some da lista,
                     // sem como reativar pela interface).
-                    if (existing.ReimportInto(groupTag ?? groupId))
+                    if (existing.ReimportInto(tag))
                     {
                         await contacts.UpdateAsync(existing, ct);
                         imported++;
@@ -59,11 +82,12 @@ public sealed class ImportGroupMembersUseCase(
                     id: Guid.NewGuid(),
                     phone: phone,
                     name: member.Name,
-                    groupTag: groupTag ?? groupId,
+                    groupTag: tag,
                     theme: null,
                     optInAt: clock.UtcNow);
 
                 await contacts.AddAsync(contact, ct);
+                known[phone.E164] = contact; // telefone repetido no mesmo grupo reaproveita o contato
                 imported++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

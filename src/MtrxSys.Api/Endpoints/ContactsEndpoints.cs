@@ -110,6 +110,11 @@ public static class ContactsEndpoints
 
             if (req.AddTags is { Count: > 0 })
             {
+                // Carrega as tags atuais do contato UMA vez (antes era uma consulta por tag — N+1).
+                // O set também faz o de-dupe dentro do próprio request (as atribuições novas ainda
+                // não estão no banco, então re-consultar não as enxergaria).
+                var assigned = new HashSet<string>(
+                    await tagsRepo.ListTagsForContactAsync(id, ct), StringComparer.OrdinalIgnoreCase);
                 foreach (var name in req.AddTags)
                 {
                     if (string.IsNullOrWhiteSpace(name))
@@ -123,8 +128,7 @@ public static class ContactsEndpoints
                         tag = ContactTag.Create(key, null, now);
                         await tagsRepo.AddAsync(tag, ct);
                     }
-                    var existing = await tagsRepo.ListTagsForContactAsync(id, ct);
-                    if (!existing.Contains(key))
+                    if (assigned.Add(key))
                     {
                         await tagsRepo.AssignAsync(ContactTagAssignment.Create(id, key, now), ct);
                     }

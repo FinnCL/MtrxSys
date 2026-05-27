@@ -22,6 +22,11 @@ services:
   # depends_on); aqui só trocamos pro estágio `dev` da imagem e montamos o código.
   api:
     build:
+      # context/dockerfile repetidos do base de propósito: com o backend `bake`, um override de
+      # build que traz só `target` não herda context/dockerfile e o build passa a procurar
+      # `Dockerfile` na raiz do repo (→ "no such file or directory").
+      context: .
+      dockerfile: src/MtrxSys.Api/Dockerfile
       target: dev
     environment:
       # Development liga o hot-reload completo (edit-and-continue). A connection string, a chave
@@ -44,6 +49,8 @@ services:
 
   dispatcher:
     build:
+      context: .
+      dockerfile: src/MtrxSys.Dispatcher/Dockerfile
       target: dev
     environment:
       DOTNET_ENVIRONMENT: Development
