@@ -85,11 +85,9 @@ export function GroupsScreen() {
           <li key={row.group.id} className="group-row">
             <div className="group-info">
               <span className="group-name">{row.group.name || "(sem nome)"}</span>
-              <span className="muted small">
-                {row.group.participantsCount !== null
-                  ? `${row.group.participantsCount} participantes`
-                  : "—"}
-              </span>
+              {row.group.participantsCount !== null && (
+                <span className="muted small">{row.group.participantsCount} participantes</span>
+              )}
               {row.result && (
                 <span className="import-summary">
                   {row.result.imported} importados · {row.result.duplicated} duplicados

@@ -141,7 +141,7 @@ export function ContactsScreen() {
                         <tbody>
                           {list.map((c) => (
                             <tr key={c.id} className={c.optOutAt ? "opted-out" : undefined}>
-                              <td>{c.name || <span className="muted">—</span>}</td>
+                              <td>{c.name}</td>
                               <td className="mono">{c.phoneE164}</td>
                               <td>
                                 <StatusBadge contact={c} />

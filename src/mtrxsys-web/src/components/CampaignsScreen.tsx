@@ -684,7 +684,7 @@ export function CampaignsScreen() {
               {reportPageRows.map((i, idx) => (
                 <tr key={(reportCurrentPage - 1) * REPORT_PAGE_SIZE + idx}>
                   <td className="mono">{i.phone ?? "—"}</td>
-                  <td>{i.name || <span className="muted">—</span>}</td>
+                  <td>{i.name}</td>
                   <td>
                     <span className={`stat-chip stat-${i.status.toLowerCase()}`}>
                       {DISPATCH_STATUS_LABELS[i.status]}
