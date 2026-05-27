@@ -29,4 +29,17 @@ internal sealed class SystemStateRepository(MtrxDbContext db) : ISystemStateRepo
         }
         return Task.CompletedTask;
     }
+
+    public async Task<bool> IsManuallyPausedAsync(CancellationToken ct)
+    {
+        // AsNoTracking força um round-trip ao banco (não consulta o change tracker como o
+        // FindAsync do GetAsync), então pega o "Parar envios" gravado por outra requisição
+        // mesmo no meio de um ciclo de disparo. Projeta só o motivo da pausa — leitura barata.
+        var reason = await db.SystemState
+            .AsNoTracking()
+            .Where(s => s.Id == SystemStateAggregate.SingletonId)
+            .Select(s => s.PausedReason)
+            .FirstOrDefaultAsync(ct);
+        return reason == SystemStateAggregate.ManualPauseReason;
+    }
 }

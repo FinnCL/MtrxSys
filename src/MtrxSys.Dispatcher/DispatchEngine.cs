@@ -40,8 +40,10 @@ public sealed class DispatchEngine(
 
         while (!ct.IsCancellationRequested)
         {
-            // Freio de mão: operador pausou os envios pelo botão "Parar envios".
-            if ((await systemState.GetAsync(ct)).IsManuallyPaused)
+            // Freio de mão: operador pausou os envios pelo botão "Parar envios". Leitura fresca
+            // (sem cache de tracking) — senão o ciclo não enxergaria a pausa gravada no meio dele
+            // e drenaria a fila inteira mesmo após o clique.
+            if (await systemState.IsManuallyPausedAsync(ct))
             {
                 log.LogInformation("Envios pausados manualmente; ciclo parado.");
                 break;
