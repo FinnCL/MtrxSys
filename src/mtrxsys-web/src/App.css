@@ -22,6 +22,14 @@ body {
   font-size: 14px;
 }
 
+/* Respeita quem prefere menos movimento: zera as transições/animações sutis da interface. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
 button, input, textarea, select {
   font: inherit;
   color: inherit;
@@ -34,8 +42,10 @@ button {
   border-radius: 4px;
   padding: 6px 14px;
   cursor: pointer;
+  transition: background-color 140ms ease, box-shadow 140ms ease, transform 80ms ease, filter 140ms ease, opacity 140ms ease;
 }
 button:hover { background: var(--accent-2); }
+button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { background: #444; cursor: not-allowed; }
 
 input, textarea, select {
@@ -44,8 +54,12 @@ input, textarea, select {
   border-radius: 4px;
   padding: 6px 10px;
   outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
 }
-input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(74, 141, 244, 0.15);
+}
 select {
   appearance: none;
   -webkit-appearance: none;
@@ -186,7 +200,9 @@ input[type="checkbox"], input[type="radio"] {
 .campaigns-section code { background: var(--bg-3); padding: 2px 6px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 12px; }
 /* Ajuda recolhível: tutorial fica fora do caminho por padrão, num clique de distância. */
 .help-toggle { margin: 0 0 10px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
-.help-toggle > summary { cursor: pointer; color: var(--muted); font-size: 12px; list-style: none; user-select: none; }
+.help-toggle { transition: border-color 140ms ease; }
+.help-toggle:hover { border-color: var(--muted); }
+.help-toggle > summary { cursor: pointer; color: var(--muted); font-size: 12px; list-style: none; user-select: none; transition: color 120ms ease; }
 .help-toggle > summary::before { content: "▸ "; }
 .help-toggle[open] > summary::before { content: "▾ "; }
 .help-toggle > summary:hover { color: var(--fg); }
@@ -194,7 +210,7 @@ input[type="checkbox"], input[type="radio"] {
 .help-toggle p:first-of-type { margin-top: 6px; }
 
 .dispatch-stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
-.chip-btn { cursor: pointer; border: 1px solid transparent; }
+.chip-btn { cursor: pointer; border: 1px solid transparent; transition: border-color 140ms ease, filter 140ms ease, background-color 140ms ease, transform 80ms ease; }
 .chip-btn:hover { filter: brightness(1.18); }
 .chip-btn.active { border-color: var(--fg); }
 /* separa visualmente o resultado (com o botão de baixar) da área de disparo acima,
@@ -208,7 +224,7 @@ input[type="checkbox"], input[type="radio"] {
   font-size: 13px; background: var(--bg-3); color: var(--fg);
   border: 1px solid var(--border); border-radius: 6px;
 }
-.report-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 12px; }
+.report-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 12px; flex-wrap: wrap; }
 .report-pager button { background: var(--bg-3); color: var(--fg); padding: 4px 14px; font-size: 13px; }
 .report-pager button:hover:not(:disabled) { background: var(--accent); }
 .report-pager button:disabled { opacity: 0.4; cursor: default; }
@@ -218,7 +234,7 @@ input[type="checkbox"], input[type="radio"] {
 .report-export:hover:not(:disabled) { background: var(--accent); }
 .report-renew { background: var(--bg-3); color: var(--fg); padding: 6px 14px; font-size: 13px; }
 .report-renew:hover:not(:disabled) { background: var(--danger); }
-.stat-chip { padding: 4px 12px; border-radius: 12px; font-size: 12px; background: var(--bg-3); }
+.stat-chip { padding: 4px 12px; border-radius: 4px; font-size: 12px; background: var(--bg-3); }
 .stat-all { background: var(--bg-3); color: var(--fg); font-weight: 600; }
 .stat-pending { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
 .stat-sent { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
@@ -317,12 +333,12 @@ input[type="checkbox"], input[type="radio"] {
 .panel-section h3 { margin: 0 0 8px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
 .stage-picker { display: flex; flex-wrap: wrap; gap: 6px; }
-.stage-chip { background: var(--bg-3); color: var(--fg); padding: 4px 10px; border-radius: 12px; font-size: 12px; }
+.stage-chip { background: var(--bg-3); color: var(--fg); padding: 4px 10px; border-radius: 4px; font-size: 12px; }
 .stage-chip.active { background: var(--accent); }
 .stage-meta { color: var(--muted); font-size: 11px; margin-top: 6px; }
 
 .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.tag-chip { background: var(--bg-3); padding: 3px 4px 3px 10px; border-radius: 12px; display: inline-flex; align-items: center; font-size: 12px; gap: 4px; }
+.tag-chip { background: var(--bg-3); padding: 3px 4px 3px 10px; border-radius: 4px; display: inline-flex; align-items: center; font-size: 12px; gap: 4px; }
 .tag-chip button { background: transparent; padding: 0 6px; color: var(--muted); font-size: 14px; line-height: 1; }
 .tag-chip button:hover { color: var(--danger); background: transparent; }
 .tag-add { display: flex; gap: 6px; }
@@ -428,7 +444,7 @@ input[type="checkbox"], input[type="radio"] {
 .reactivate-btn { padding: 3px 10px; font-size: 12px; background: var(--bg-3); color: var(--fg); }
 .reactivate-btn:hover { background: var(--accent); }
 
-.stage-badge { padding: 2px 10px; border-radius: 12px; font-size: 12px; background: var(--bg-3); color: var(--fg); white-space: nowrap; }
+.stage-badge { padding: 2px 10px; border-radius: 4px; font-size: 12px; background: var(--bg-3); color: var(--fg); white-space: nowrap; }
 .stage-badge.stage-qualified { background: #16a34a; color: #fff; }
 .stage-badge.stage-won { background: #2563eb; color: #fff; }
 .stage-badge.stage-lost { background: #6b7280; color: #fff; }
