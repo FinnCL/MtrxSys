@@ -50,8 +50,14 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         {
             jobsQuery = jobsQuery.Where(j => j.Status == s);
         }
+        // Pending vai pro FIM da lista (histórico de Sent/Failed/Skipped fica no topo, fila
+        // logo abaixo). Sem este OrderBy de status, um Pending recém adicionado se intercalava
+        // no meio dos Sent porque o ScheduledAt dele caía entre os SentAt deles. Dentro de
+        // cada grupo, ordena por data mais recente — preserva o comportamento anterior pros
+        // já enviados, e pros Pending mostra o último adicionado primeiro (atalho visual).
         var jobs = await jobsQuery
-            .OrderByDescending(j => j.SentAt ?? j.ScheduledAt)
+            .OrderBy(j => j.Status == DispatchStatus.Pending ? 1 : 0)
+            .ThenByDescending(j => j.SentAt ?? j.ScheduledAt)
             .Take(limit)
             .ToListAsync(ct);
 
