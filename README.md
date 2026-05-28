@@ -158,7 +158,7 @@ O contato anda no funil sozinho conforme o que acontece — os nomes internos (e
 - `SpintaxExpander` — `{a|b|{c|d}}` recursivo, escape `\{ \| \}`, depth 8, output 4 KB max
 - `MessageComposer` — Spintax + placeholders `{{name|default}}`, `{{phone}}`, `{{group}}`, `{{theme}}`
 - `OptOutDetector` — detecta pedidos de saída em respostas curtas, ignorando frases longas
-- `DelayPolicy` — random uniforme entre `DelayMin/MaxSeconds` (45-75s)
+- `DelayPolicy` — random uniforme entre `DelayMin/MaxSeconds` (60-180s)
 - `TypingSimulator` — typing proporcional ao texto com jitter
 - `WarmupManager` — curva de envios/dia configurável (`Warmup:Curve`); padrão do Dispatcher: `[20, 40, 80, 150, 250, 400, 500]`
 - `CircuitBreaker` — para em N falhas consecutivas, abre por X minutos
@@ -188,8 +188,8 @@ O contato anda no funil sozinho conforme o que acontece — os nomes internos (e
 ```json
 "Dispatch": {
   "SessionId": "default",
-  "DelayMinSeconds": 45,
-  "DelayMaxSeconds": 75,
+  "DelayMinSeconds": 60,
+  "DelayMaxSeconds": 180,
   "TypingMinSeconds": 2,
   "TypingMaxSeconds": 5,
   "TypingJitter": 0.15
