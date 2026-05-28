@@ -11,6 +11,11 @@ import type {
 import { DISPATCH_STATUS_LABELS, downloadDispatchReportXlsx } from "../utils/exportContacts";
 import { ConfirmDialog } from "./ConfirmDialog";
 
+// Chave do localStorage onde fica a mensagem escolhida pra disparo. Persistir é o que
+// faz a seleção sobreviver a F5/reabrir o navegador — sem isso, a tela voltava sempre
+// pra primeira mensagem da lista.
+const SELECTED_MESSAGE_STORAGE_KEY = "mtrx.campaigns.selectedMessageId";
+
 // Texto inicial do campo: já traz a saudação em spintax e a linha de saída (SAIR),
 // que deve estar sempre presente. O usuário escreve o miolo da mensagem no meio.
 const DEFAULT_DRAFT =
@@ -52,8 +57,17 @@ const STAT_CHIPS: { key: DispatchJobStatus; label: string; cls: string }[] = [
 export function CampaignsScreen() {
   const [messages, setMessages] = useState<MessageTemplate[]>([]);
   const [groupTags, setGroupTags] = useState<ContactGroupTag[]>([]);
-  // Mensagens DESmarcadas (excluídas do rodízio). Por padrão todas participam.
-  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+  // Seleção única: o disparo usa só UMA das mensagens salvas por vez. Persistida em
+  // localStorage pra sobreviver a F5 e reabrir o navegador — sem isso, a tela perdia a
+  // seleção do usuário a cada atualização e caía na primeira da lista. Se a salva sumiu
+  // (mensagem apagada), o useEffect abaixo cai pra primeira disponível.
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(() => {
+    try {
+      return typeof window !== "undefined" ? window.localStorage.getItem(SELECTED_MESSAGE_STORAGE_KEY) : null;
+    } catch {
+      return null;
+    }
+  });
   const [stats, setStats] = useState<DispatchStats | null>(null);
   const [report, setReport] = useState<DispatchReportItem[]>([]);
   const [reportStatus, setReportStatus] = useState<"" | DispatchJobStatus>("");
@@ -160,6 +174,34 @@ export function CampaignsScreen() {
     return () => clearInterval(handle);
   }, [loadLists, loadLive]);
 
+  // Mantém a seleção única consistente. NÃO toca em selectedMessageId quando messages
+  // chega vazia — esse estado acontece no mount inicial (antes do loadLists terminar) e
+  // também quando o usuário apaga todas. Em ambos os casos a falta da seleção é tratada
+  // por `selectedIds` (que valida se o id ainda está na lista) — sem mexer no localStorage.
+  // Se messages vem populada e a selecionada (vinda do localStorage ou anterior) não está
+  // mais lá, cai pra primeira disponível.
+  useEffect(() => {
+    if (messages.length === 0) return;
+    setSelectedMessageId((prev) =>
+      prev !== null && messages.some((m) => m.id === prev) ? prev : messages[0].id,
+    );
+  }, [messages]);
+
+  // Persiste a seleção entre F5/reabrir o navegador. Falha silenciosa em modo privado
+  // ou cota cheia — só atrapalha a persistência, não o disparo.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (selectedMessageId === null) {
+        window.localStorage.removeItem(SELECTED_MESSAGE_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(SELECTED_MESSAGE_STORAGE_KEY, selectedMessageId);
+      }
+    } catch {
+      // ignore: localStorage indisponível não compromete o fluxo do disparo
+    }
+  }, [selectedMessageId]);
+
   // Reaplica o filtro do relatório imediatamente quando muda o status selecionado.
   useEffect(() => {
     void loadLive();
@@ -198,9 +240,14 @@ export function CampaignsScreen() {
     if (!text) return;
     setAdding(true);
     try {
-      await api.createTemplate(text, "Greeting");
+      const created = await api.createTemplate(text, "Greeting");
       setDraft(DEFAULT_DRAFT);
       await loadLists();
+      // Auto-seleciona a mensagem recém-criada. O usuário acabou de escrevê-la — quase
+      // certamente é o que quer usar no próximo disparo (se quisesse a anterior, não
+      // teria criado outra). Sem isso, a seleção persistida em localStorage continuava
+      // apontando pra mensagem antiga e o usuário disparava com o template errado.
+      setSelectedMessageId(created.id);
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
     } finally {
@@ -217,19 +264,15 @@ export function CampaignsScreen() {
     }
   }
 
-  function toggleExclude(id: string) {
-    setExcludedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }
-
-  const selectedIds = messages.filter((m) => !excludedIds.has(m.id)).map((m) => m.id);
+  // Lista do payload do disparo: com seleção única, é zero ou uma posição. O backend aceita
+  // pool[] e sorteia — pool de tamanho 1 sempre rende a mesma mensagem (que é o esperado aqui).
+  // Valida que o id ainda existe nas mensagens — protege contra "ghost id" (ex.: id salvo
+  // no localStorage de um deploy anterior, ou seleção apontando pra mensagem recém apagada
+  // antes do useEffect cair pra próxima).
+  const selectedIds =
+    selectedMessageId !== null && messages.some((m) => m.id === selectedMessageId)
+      ? [selectedMessageId]
+      : [];
   const pendingCount = stats?.pending ?? 0;
   const totalJobs = stats ? stats.pending + stats.sent + stats.failed + stats.skipped : 0;
 
@@ -254,7 +297,7 @@ export function CampaignsScreen() {
   // Etapa 2: prepara a fila — pausa e enfileira os contatos (entram "Na fila", nada sai ainda).
   async function onPrepare() {
     if (selectedIds.length === 0) {
-      setDispatchMsg("Marque ao menos uma mensagem antes de preparar.");
+      setDispatchMsg("Escolha uma mensagem antes de preparar.");
       return;
     }
     if (audienceCount === 0) {
@@ -431,19 +474,20 @@ export function CampaignsScreen() {
         {messages.length > 0 && (
           <>
             <p className="muted small pool-label">
-              Salvas — marque quais entram no rodízio ({selectedIds.length} de {messages.length} selecionadas):
+              Salvas — escolha qual usar neste disparo ({messages.length} {messages.length === 1 ? "mensagem" : "mensagens"}):
             </p>
             <ul className="message-pool">
               {messages.map((m) => {
-                const selected = !excludedIds.has(m.id);
+                const selected = selectedMessageId === m.id;
                 return (
                   <li key={m.id} className={selected ? undefined : "unselected"}>
                     <input
-                      type="checkbox"
+                      type="radio"
+                      name="message-pick"
                       className="message-check"
                       checked={selected}
-                      onChange={() => toggleExclude(m.id)}
-                      title={selected ? "No rodízio (desmarque para excluir)" : "Fora do rodízio"}
+                      onChange={() => setSelectedMessageId(m.id)}
+                      title={selected ? "Mensagem que vai no disparo" : "Clique para usar esta mensagem"}
                     />
                     {m.hasImage && <TemplateThumb id={m.id} />}
                     <span className="message-pool-text">{m.contentSpintax}</span>

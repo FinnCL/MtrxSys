@@ -111,6 +111,36 @@ public sealed class DispatchEngine(
                 var text = composer.Compose(template, contact);
                 var delayBefore = delay.NextDelay();
                 var typingMs = await typing.SimulateAsync(sessionId, contact.Phone.E164, text, ct);
+
+                // 2º freio de mão: se o operador clicou "Parar envios" enquanto a gente simulava
+                // o typing (2-5s), o envio ainda não saiu. Checa de novo aqui pra abortar ANTES
+                // do irreversível. O job não é marcado nem como Sent nem como Failed — permanece
+                // Pending e é pego de novo na próxima retomada. Erro de DB no check = não pausa
+                // (preserva o trade-off "preferimos enviar a falhar por hiccup transitório").
+                bool pausedMidIteration;
+                try
+                {
+                    pausedMidIteration = await systemState.IsManuallyPausedAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+#pragma warning disable CA1031
+                catch
+                {
+                    pausedMidIteration = false;
+                }
+#pragma warning restore CA1031
+
+                if (pausedMidIteration)
+                {
+                    log.LogInformation(
+                        "Pausa detectada após typing; abortando envio do job {JobId} (volta para Pending).",
+                        job.Id);
+                    break;
+                }
+
                 // Anexo de imagem DESABILITADO: todo disparo sai como texto, mesmo que o template
                 // tenha imagem. Evita rejeição do WAHA (422 por mimetype/dados) e mantém o envio
                 // simples e estável. (O texto composto preserva spintax, placeholders e o "SAIR".)

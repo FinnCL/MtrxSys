@@ -88,6 +88,7 @@ public static class CampaignsEndpoints
         templates.MapDelete("/{id:guid}", async (
             Guid id,
             IMessageTemplateRepository repo,
+            IDispatchJobRepository jobs,
             IUnitOfWork uow,
             CancellationToken ct) =>
         {
@@ -97,6 +98,11 @@ public static class CampaignsEndpoints
                 return Results.NotFound();
             }
             t.Deactivate();
+            // Junto com o soft delete, sumir com qualquer envio dele que ainda está na fila.
+            // Sem isso, o dispatcher continuaria mandando a mensagem "deletada" — o GetByIdAsync
+            // retorna template inativo igual, e o job já tem o template_id grudado de quando foi
+            // enfileirado. Jobs Sent ficam intactos (histórico de auditoria).
+            await jobs.ClearPendingByTemplateAsync(id, ct);
             await uow.SaveChangesAsync(ct);
             return Results.NoContent();
         });

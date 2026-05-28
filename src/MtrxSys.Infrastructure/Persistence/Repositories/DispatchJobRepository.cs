@@ -63,6 +63,11 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
     public Task<int> ClearPendingAsync(CancellationToken ct) =>
         db.DispatchJobs.Where(j => j.Status == DispatchStatus.Pending).ExecuteDeleteAsync(ct);
 
+    public Task<int> ClearPendingByTemplateAsync(Guid templateId, CancellationToken ct) =>
+        db.DispatchJobs
+            .Where(j => j.TemplateId == templateId && j.Status == DispatchStatus.Pending)
+            .ExecuteDeleteAsync(ct);
+
     public Task<int> ClearAllAsync(CancellationToken ct) =>
         db.DispatchJobs.ExecuteDeleteAsync(ct);
 
