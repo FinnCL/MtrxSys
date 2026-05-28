@@ -45,21 +45,38 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
 
     public async Task<IReadOnlyList<DispatchReportItem>> ListReportAsync(DispatchStatus? status, int limit, CancellationToken ct)
     {
-        var jobsQuery = db.DispatchJobs.AsQueryable();
+        var baseQuery = db.DispatchJobs.AsQueryable();
         if (status is { } s)
         {
-            jobsQuery = jobsQuery.Where(j => j.Status == s);
+            baseQuery = baseQuery.Where(j => j.Status == s);
         }
-        // Pending vai pro FIM da lista (histórico de Sent/Failed/Skipped fica no topo, fila
-        // logo abaixo). Sem este OrderBy de status, um Pending recém adicionado se intercalava
-        // no meio dos Sent porque o ScheduledAt dele caía entre os SentAt deles. Dentro de
-        // cada grupo, ordena por data mais recente — preserva o comportamento anterior pros
-        // já enviados, e pros Pending mostra o último adicionado primeiro (atalho visual).
-        var jobs = await jobsQuery
-            .OrderBy(j => j.Status == DispatchStatus.Pending ? 1 : 0)
-            .ThenByDescending(j => j.SentAt ?? j.ScheduledAt)
+
+        // Duas queries pra ordenar cada grupo na direção certa — não dá pra fazer em uma só
+        // porque histórico precisa de DESC e Pending precisa de ASC.
+        //
+        // Histórico (Sent/Failed/Skipped) no topo, mais recente primeiro: o operador vê a
+        // última atividade direto.
+        var historyJobs = await baseQuery
+            .Where(j => j.Status != DispatchStatus.Pending)
+            .OrderByDescending(j => j.SentAt ?? j.ScheduledAt)
             .Take(limit)
             .ToListAsync(ct);
+
+        // Pending no fim, em ordem FIFO (ScheduledAt ASC) — espelha exatamente como o
+        // dispatcher vai processar (DequeueNextPendingAsync usa OrderBy(ScheduledAt) ASC).
+        // Sem isso, um contato recém adicionado aparecia ACIMA de Pendings mais antigos
+        // (DESC mostrava o último primeiro), dando a sensação de desorganização quando o
+        // operador clicava "Iniciar envios" e a fila era consumida em ordem diferente da
+        // exibida.
+        var remaining = Math.Max(0, limit - historyJobs.Count);
+        var pendingJobs = await baseQuery
+            .Where(j => j.Status == DispatchStatus.Pending)
+            .OrderBy(j => j.ScheduledAt)
+            .Take(remaining)
+            .ToListAsync(ct);
+
+        // Histórico no topo, fila Pending no fim — ordem de exibição final.
+        var jobs = historyJobs.Concat(pendingJobs).ToList();
 
         // Carrega os contatos referenciados num lote só e mapeia em memória
         // (evita join de tipo owned + left join, que o EF traduz mal).
