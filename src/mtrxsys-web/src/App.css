@@ -534,6 +534,7 @@ input[type="checkbox"], input[type="radio"] {
 .clear-btn:hover { background: var(--danger); }
 .prepared-banner { color: #f59e0b; font-size: 13px; font-weight: 600; margin: 0 0 10px; }
 .sending-banner { color: #22c55e; font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+.add-new-row { margin-top: 12px; }
 /* Aviso do disjuntor: pausa automática por falhas, com horário de retomada. */
 .circuit-banner {
   color: var(--danger); font-size: 13px; font-weight: 600;

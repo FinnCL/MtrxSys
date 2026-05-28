@@ -107,6 +107,12 @@ export function CampaignsScreen() {
     reportStatusRef.current = reportStatus;
   }, [reportStatus]);
 
+  // Mesmo padrão pra loadAudienceCount: o ref deixa o loadLive (polling de 5s) re-disparar
+  // sempre a versão mais recente do callback (que tem deps [audience, group]) sem precisar
+  // colocar loadAudienceCount nas deps do loadLive — assim o setInterval não é recriado a
+  // cada mudança de filtro.
+  const loadAudienceCountRef = useRef<(() => Promise<void>) | null>(null);
+
   // Dados estáticos (mudam só quando você cria/remove mensagem ou importa grupo).
   const loadLists = useCallback(async () => {
     try {
@@ -120,6 +126,10 @@ export function CampaignsScreen() {
 
   // Dados "ao vivo" (mudam conforme o dispatcher processa) — atualizados no timer.
   const loadLive = useCallback(async () => {
+    // Audience count também entra no polling pra detectar contatos importados em background
+    // (ex.: outra aba do navegador, CLI). Fire-and-forget: cuida do próprio setState com
+    // generation counter, não precisa esperar nem tratar resultado aqui.
+    void loadAudienceCountRef.current?.();
     // allSettled: um blip num endpoint não derruba os outros três nem mostra erro à toa.
     // Cada pedaço atualiza sozinho; só sinaliza erro se TUDO falhar (API provavelmente fora).
     const [s, r, st, w] = await Promise.allSettled([
@@ -144,23 +154,34 @@ export function CampaignsScreen() {
   }, []);
 
   // Quantos contatos receberiam, com o público/grupo escolhido (mesmo filtro do disparo).
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const { count } = await api.audienceCount({
-          engagedOnly: audience === "responded" ? true : undefined,
-          groupTag: group.trim() || undefined,
-        });
-        if (!cancelled) setAudienceCount(count);
-      } catch {
-        if (!cancelled) setAudienceCount(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  // Chamado por: (a) mudança de filtro (useEffect com deps [loadAudienceCount]), (b) o
+  // polling de 5s do loadLive (via loadAudienceCountRef), (c) o onAddNew após adicionar.
+  // Generation counter via ref descarta resposta antiga quando um fetch novo começou no
+  // meio do caminho — protege contra race se o polling dispara em cima de uma troca de
+  // filtro ou de uma ação manual.
+  const audienceFetchIdRef = useRef(0);
+  const loadAudienceCount = useCallback(async () => {
+    const myId = ++audienceFetchIdRef.current;
+    try {
+      const { count } = await api.audienceCount({
+        engagedOnly: audience === "responded" ? true : undefined,
+        groupTag: group.trim() || undefined,
+      });
+      if (audienceFetchIdRef.current === myId) setAudienceCount(count);
+    } catch {
+      if (audienceFetchIdRef.current === myId) setAudienceCount(null);
+    }
   }, [audience, group]);
+
+  // Sincroniza o ref com a versão mais recente do callback. Sem isso, o loadLive (deps [])
+  // ficaria preso à closure inicial e o polling usaria filtros desatualizados.
+  useEffect(() => {
+    loadAudienceCountRef.current = loadAudienceCount;
+  }, [loadAudienceCount]);
+
+  useEffect(() => {
+    void loadAudienceCount();
+  }, [loadAudienceCount]);
 
 
   useEffect(() => {
@@ -321,6 +342,37 @@ export function CampaignsScreen() {
         `${result.scheduled} contato(s) na fila. Revise em "Resultado dos envios" e clique "Iniciar envios".`,
       );
       await loadLive();
+    } catch (ex) {
+      setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);
+    } finally {
+      setDispatching(false);
+    }
+  }
+
+  // Adiciona à fila APENAS os contatos novos importados depois do disparo já preparado/em
+  // andamento. O endpoint /api/dispatch tem ExcludeAlreadyDispatched: true, então contatos
+  // que já têm job (Pending/Sent/Failed/Skipped) são ignorados — só entra na fila quem ainda
+  // não recebeu/está pra receber. Usa a mensagem atualmente selecionada (radio) e o mesmo
+  // filtro de público/grupo. Não interfere na fila atual; só soma os novos como Pending.
+  async function onAddNew() {
+    if (selectedIds.length === 0) {
+      setDispatchMsg("Escolha uma mensagem antes de adicionar.");
+      return;
+    }
+    if (!audienceCount || audienceCount <= 0) {
+      setDispatchMsg("Nenhum contato novo pra adicionar à fila.");
+      return;
+    }
+    setDispatching(true);
+    setDispatchMsg(null);
+    suppressDoneRef.current = false;
+    try {
+      const result = await api.dispatch(selectedIds, {
+        engagedOnly: audience === "responded" ? true : undefined,
+        groupTag: group.trim() || undefined,
+      });
+      setDispatchMsg(`+${result.scheduled} contato(s) novo(s) adicionado(s) à fila.`);
+      await Promise.all([loadLive(), loadAudienceCount()]);
     } catch (ex) {
       setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);
     } finally {
@@ -639,6 +691,23 @@ export function CampaignsScreen() {
               Parar envios
             </button>
           </>
+        )}
+        {/* Contatos importados DEPOIS da fila atual aparecem como "novos disponíveis".
+            Botão pra adicionar só aparece quando há fila em curso (pausada ou enviando) E
+            existem novos contatos no público escolhido — caso contrário, o fluxo padrão
+            "Disparar" já cobre. */}
+        {pendingCount > 0 && audienceCount !== null && audienceCount > 0 && (
+          <div className="add-new-row">
+            <button
+              type="button"
+              className="dispatch-btn"
+              onClick={() => void onAddNew()}
+              disabled={dispatching || selectedIds.length === 0}
+              title="Adiciona à fila atual apenas os contatos novos do público escolhido (não re-envia pra quem já recebeu)"
+            >
+              {dispatching ? "Adicionando..." : `+ Adicionar ${audienceCount} novo(s) à fila`}
+            </button>
+          </div>
         )}
         {dispatchMsg && <p className="dispatch-msg">{dispatchMsg}</p>}
       </section>
