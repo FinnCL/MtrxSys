@@ -148,7 +148,102 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<List<GroupDto>>(Json, ct) ?? [];
-        return body.Select(g => new WahaGroup(g.Id?.User ?? g.Id?.Server ?? "", g.Name ?? "", g.Participants?.Count)).ToList();
+
+        // Esconde grupos onde o número conectado já não é mais membro (saiu pelo celular). A WAHA
+        // continua listando esse grupo enquanto o chat não for "Apagar conversa" no celular —
+        // sem o filtro, ele aparece aqui como se você ainda participasse. Tudo é melhor-esforço:
+        // se não der pra decidir com certeza, preserva o grupo (preferimos exibir um a mais do
+        // que esconder um real).
+        string? ownDigits = null;
+        try
+        {
+            var ownE164 = await GetOwnPhoneE164Async(sessionId, ct);
+            ownDigits = ownE164?.TrimStart('+');
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031
+        catch
+        {
+            // sessão degradada ou JSON inesperado: cai no fallback "não filtra".
+        }
+#pragma warning restore CA1031
+
+        // Sem o próprio número (ou nenhum grupo retornado), nada a filtrar — devolve cru.
+        if (string.IsNullOrEmpty(ownDigits) || body.Count == 0)
+        {
+            return body
+                .Select(g => new WahaGroup(g.Id?.User ?? g.Id?.Server ?? "", g.Name ?? "", g.Participants?.Count))
+                .ToList();
+        }
+
+        // A WAHA WEBJS NÃO inclui o array `Participants` no /groups overview (vem null), então
+        // pra decidir se ainda sou membro precisamos consultar /groups/{id}/participants de
+        // cada grupo. Em paralelo pra não serializar latência — uso esperado é localhost com
+        // poucos grupos.
+        var checks = await Task.WhenAll(body.Select(async g =>
+        {
+            var groupKey = g.Id?.User ?? g.Id?.Server ?? "";
+            if (string.IsNullOrEmpty(groupKey))
+            {
+                return (Group: g, IsMember: true);
+            }
+            try
+            {
+                var groupJid = groupKey.Contains('@', StringComparison.Ordinal) ? groupKey : groupKey + "@g.us";
+                var isMember = await IsCurrentMemberOfAsync(sessionId, groupJid, ownDigits, ct);
+                return (Group: g, IsMember: isMember);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+#pragma warning disable CA1031
+            catch
+            {
+                // falha na consulta deste grupo: mantém na lista (preserva comportamento atual)
+                return (Group: g, IsMember: true);
+            }
+#pragma warning restore CA1031
+        }));
+
+        return checks
+            .Where(c => c.IsMember)
+            .Select(c => new WahaGroup(c.Group.Id?.User ?? c.Group.Id?.Server ?? "", c.Group.Name ?? "", c.Group.Participants?.Count))
+            .ToList();
+    }
+
+    // Decide se o número conectado ainda é participante deste grupo. Lê direto a resposta crua
+    // da WAHA (sem o filtro de @lid que `ListGroupParticipantsAsync` aplica), pra que o próprio
+    // número, se vier mascarado como LID, ainda detone o fallback ambíguo em vez de marcar como
+    // "não-membro" por engano.
+    // Observado empiricamente na WEBJS: pra um grupo onde você participa, a WAHA devolve a
+    // lista completa (incluindo você); pra um grupo do qual você saiu, devolve LISTA VAZIA
+    // (você não tem mais visibilidade dos membros). Lista vazia = saí.
+    // Só preserva (devolve true) em ambiguidade real: erro HTTP ou lista populada só com LIDs.
+    private async Task<bool> IsCurrentMemberOfAsync(string sessionId, string groupJid, string ownDigits, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/groups/{Esc(groupJid)}/participants");
+        using var resp = await http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            return true;
+        }
+        var body = await resp.Content.ReadFromJsonAsync<List<ParticipantDto>>(Json, ct) ?? [];
+        if (body.Count == 0)
+        {
+            return false;
+        }
+        var hasNonLidParticipant = body.Any(p => p.Id is not null
+            && !string.Equals(p.Id.Server, "lid", StringComparison.OrdinalIgnoreCase)
+            && !(p.Id.RawId?.Contains("@lid", StringComparison.OrdinalIgnoreCase) ?? false));
+        if (!hasNonLidParticipant)
+        {
+            return true;
+        }
+        return body.Any(p => string.Equals(p.Id?.User, ownDigits, StringComparison.Ordinal));
     }
 
     public async Task<IReadOnlyList<WahaParticipant>> ListGroupParticipantsAsync(string sessionId, string groupId, CancellationToken ct)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { Group, ImportResult } from "../api/types";
 import { downloadContactsXlsx } from "../utils/exportContacts";
@@ -14,6 +14,9 @@ export function GroupsScreen() {
   const [rows, setRows] = useState<GroupRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumpar a chave dispara o useEffect (re-busca da WAHA) preservando a proteção
+  // 'cancelled' contra setState pós-unmount.
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +38,10 @@ export function GroupsScreen() {
     return () => {
       cancelled = true;
     };
+  }, [reloadKey]);
+
+  const refresh = useCallback(() => {
+    setReloadKey((k) => k + 1);
   }, []);
 
   async function importOne(idx: number) {
@@ -68,12 +75,25 @@ export function GroupsScreen() {
     }
   }
 
-  if (loading) return <div className="loading">Carregando grupos...</div>;
+  // No primeiro load (rows vazia) mostra "Carregando..." cheio. Em refresh, mantém a lista
+  // antiga visível com o botão em "Atualizando..." pra não dar flash de tela em branco.
+  if (loading && rows.length === 0) return <div className="loading">Carregando grupos...</div>;
 
   return (
     <main className="groups-screen">
       <header className="groups-header">
-        <h2>Grupos</h2>
+        <div className="groups-header-row">
+          <h2>Grupos</h2>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={loading}
+            className="import-btn"
+            title="Re-busca a lista de grupos do WhatsApp conectado"
+          >
+            {loading ? "Atualizando..." : "Atualizar"}
+          </button>
+        </div>
         <p className="muted">
           Grupos que o WhatsApp logado participa. Importe os participantes pra cadastrá-los como contatos no CRM.
         </p>
