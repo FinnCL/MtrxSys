@@ -13,6 +13,14 @@ internal sealed class DailySendCountsRepository(MtrxDbContext db) : IDailySendCo
     public Task<DailySendCount?> GetAsync(DateOnly dateUtc, CancellationToken ct) =>
         db.DailySendCounts.AsNoTracking().FirstOrDefaultAsync(c => c.Id == dateUtc, ct);
 
+    // COUNT(*) WHERE date_utc < today AND sent_count > 0. Dias com 0 envios NAO contam —
+    // sem isso, o DayIndex avancaria por dias do calendario mesmo sem uso (comportamento
+    // antigo) e um chip novo aparecia ja no meio da curva.
+    public Task<int> CountActiveDaysBeforeAsync(DateOnly today, CancellationToken ct) =>
+        db.DailySendCounts.AsNoTracking()
+            .Where(c => c.Id < today && c.SentCount > 0)
+            .CountAsync(ct);
+
     public async Task<int> IncrementAsync(DateOnly dateUtc, int warmupDayIndex, CancellationToken ct)
     {
         var conn = db.Database.GetDbConnection();

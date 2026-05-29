@@ -14,10 +14,37 @@ function readStoredUser(): AuthUser | null {
   }
 }
 
+// Quando o usuário entra via landing page de múltiplos ambientes (localhost:5175), a landing
+// faz o login no backend dele e redireciona pra cá com o JWT + dados do usuário no fragment
+// da URL (#token=...&user=...). Fragment escolhido em vez de query string porque NÃO vai pro
+// servidor (sem risco de aparecer em log) e é limpo da URL logo após consumido.
+function consumeAuthFromUrlHash(): AuthUser | null {
+  if (typeof window === "undefined" || !window.location.hash) return null;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const token = params.get("token");
+  const userJson = params.get("user");
+  if (!token || !userJson) return null;
+  try {
+    const u = JSON.parse(userJson) as AuthUser;
+    setToken(token);
+    localStorage.setItem(USER_KEY, JSON.stringify(u));
+    // Tira o hash da URL pra não vazar o JWT no histórico do navegador nem em links copiados.
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    return u;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   // Inicialização preguiçosa: lê o usuário salvo já na 1ª render. Sem useEffect → sem
-  // setState dentro de efeito e sem o "Carregando" piscar (o token é síncrono).
-  const [user, setUser] = useState<AuthUser | null>(() => (getToken() ? readStoredUser() : null));
+  // setState dentro de efeito e sem o "Carregando" piscar (o token é síncrono). Tenta
+  // primeiro consumir um login vindo da landing (URL hash); senão, lê do localStorage.
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    const fromHash = consumeAuthFromUrlHash();
+    if (fromHash) return fromHash;
+    return getToken() ? readStoredUser() : null;
+  });
   const [ready] = useState(true);
 
   const value = useMemo<AuthState>(

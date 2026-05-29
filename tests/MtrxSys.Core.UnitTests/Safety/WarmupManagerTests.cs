@@ -32,11 +32,14 @@ public sealed class WarmupManagerTests
         (await svc.GetSnapshotAsync(CancellationToken.None)).TodayLimit;
 
     [Fact]
-    public async Task TodayLimit_uses_curve_indexed_by_days_since_start()
+    public async Task TodayLimit_uses_curve_indexed_by_active_days_before_today()
     {
-        var start = new DateOnly(2026, 1, 1);
-        SetToday(new DateOnly(2026, 1, 3));
-        var svc = Build(new WarmupOptions { Curve = [20, 40, 80, 150, 250], StartedOnUtc = start });
+        // 2 dias ATIVOS anteriores (qualquer data) → DayIndex=2 → curva[2]=80. Modelo novo:
+        // a curva avança por dia USADO, não por dia do calendário desde StartedOnUtc.
+        var today = new DateOnly(2026, 1, 3);
+        SetToday(today);
+        _counts.CountActiveDaysBeforeAsync(today, Arg.Any<CancellationToken>()).Returns(2);
+        var svc = Build(new WarmupOptions { Curve = [20, 40, 80, 150, 250] });
 
         (await TodayLimit(svc)).Should().Be(80);
     }
@@ -44,34 +47,41 @@ public sealed class WarmupManagerTests
     [Fact]
     public async Task TodayLimit_clamps_to_last_curve_value_after_curve_ends()
     {
-        var start = new DateOnly(2026, 1, 1);
-        SetToday(new DateOnly(2026, 1, 30));
-        var svc = Build(new WarmupOptions { Curve = [20, 40, 80, 150, 250], StartedOnUtc = start });
+        var today = new DateOnly(2026, 1, 30);
+        SetToday(today);
+        _counts.CountActiveDaysBeforeAsync(today, Arg.Any<CancellationToken>()).Returns(29);
+        var svc = Build(new WarmupOptions { Curve = [20, 40, 80, 150, 250] });
 
         (await TodayLimit(svc)).Should().Be(250);
     }
 
     [Fact]
-    public async Task TodayLimit_uses_day_zero_when_StartedOnUtc_is_null()
+    public async Task TodayLimit_is_day_zero_when_no_active_days_yet()
     {
+        // Chip novo, primeiro dia de uso (zero dias ativos anteriores) → Dia 1 da curva.
+        // Antes esse teste usava StartedOnUtc=null pra cair no fallback "today"; agora a
+        // ausencia de dias ativos eh o que segura no Dia 1, independente da config.
         SetToday(new DateOnly(2026, 1, 1));
-        var svc = Build(new WarmupOptions { Curve = [20, 40, 80], StartedOnUtc = null });
+        var svc = Build(new WarmupOptions { Curve = [20, 40, 80] });
 
         (await TodayLimit(svc)).Should().Be(20);
     }
 
     [Fact]
-    public async Task StartedOn_in_DB_overrides_options()
+    public async Task RestartWarmup_in_DB_marks_StartedOn_in_snapshot()
     {
-        // Banco diz que o aquecimento reiniciou hoje → dia 0, mesmo com StartedOnUtc antigo.
+        // RestartWarmup nao zera mais o DayIndex sozinho (DayIndex agora vem de daily_send_counts).
+        // Mas o snapshot continua expondo a data registrada — UI usa pra mostrar "iniciado em X".
         var today = new DateOnly(2026, 1, 10);
         SetToday(today);
         var state = SystemStateAggregate.CreateInitial();
         state.RestartWarmup(today);
         _state.GetAsync(Arg.Any<CancellationToken>()).Returns(state);
-        var svc = Build(new WarmupOptions { Curve = [20, 40, 80], StartedOnUtc = new DateOnly(2026, 1, 1) });
+        var svc = Build(new WarmupOptions { Curve = [20, 40, 80] });
 
-        (await TodayLimit(svc)).Should().Be(20);
+        var snap = await svc.GetSnapshotAsync(CancellationToken.None);
+        snap.StartedOn.Should().Be(today);
+        snap.DayIndex.Should().Be(0); // sem dias ativos no mock, DayIndex=0
     }
 
     [Fact]

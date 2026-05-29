@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MtrxSys</title>
+  <style>
+    /* Tokens identicos aos do App.css pra o visual ficar igual ao login do app. */
+    :root {
+      --bg: #0d1117;
+      --bg-2: #161b22;
+      --bg-3: #21262d;
+      --fg: #e6edf3;
+      --muted: #7d8590;
+      --border: #30363d;
+      --accent: #2dd4bf;
+      --danger: #f87171;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      gap: 18px;
+    }
+
+    /* Os 2 cards usam exatamente o mesmo style do .login-card da LoginScreen — clone direto */
+    .cards {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      justify-content: center;
+      width: 100%;
+    }
+    .login-card {
+      background: var(--bg-2);
+      padding: 30px;
+      border-radius: 8px;
+      width: 100%;
+      max-width: 320px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      border: 1px solid var(--border);
+    }
+    .login-card h1 { margin: 0 0 6px; font-size: 24px; }
+    .login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+    .login-card input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .login-card input:focus { outline: none; border-color: var(--accent); }
+    .login-card button[type="submit"] {
+      background: var(--accent);
+      color: #052824;
+      border: none;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .login-card button[type="submit"]:hover:not(:disabled) { filter: brightness(1.15); }
+    .login-card button[type="submit"]:disabled { opacity: 0.6; cursor: not-allowed; }
+    .login-error { color: var(--danger); margin: 0; font-size: 12px; min-height: 1em; }
+
+    /* Mostrar/esconder senha — mesmo padrao do App.css */
+    .password-field { position: relative; display: flex; }
+    .password-field input { width: 100%; padding-right: 36px; }
+    .password-toggle {
+      position: absolute;
+      right: 4px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: transparent;
+      border: 0;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .password-toggle:hover { color: var(--fg); }
+
+    .page-title { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
+
+    /* Estado "em uso": card travado enquanto o dashboard correspondente está aberto.
+       Borda verde + badge no canto + botão disabled. JS abaixo controla a classe. */
+    .login-card { position: relative; transition: border-color 0.2s; }
+    .login-card.in-use { border-color: var(--accent); }
+    .login-card.in-use::before {
+      content: "🟢 Em uso";
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      font-size: 11px;
+      color: var(--accent);
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+    .login-card.in-use input,
+    .login-card.in-use .password-toggle { opacity: 0.55; pointer-events: none; }
+    .login-card.in-use button[type="submit"] {
+      background: var(--bg-3);
+      color: var(--muted);
+      cursor: not-allowed;
+    }
+    .login-card.in-use button[type="submit"]:hover { filter: none; }
+
+    /* Em telas pequenas (~ <700px) os cards se empilham automaticamente via flex-wrap.
+       Aqui so reforco padding lateral pra nao colar nas bordas e baixo o gap interno. */
+    @media (max-width: 480px) {
+      body { padding: 12px; }
+      .login-card { padding: 22px; gap: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <p class="page-title">Selecione um ambiente</p>
+
+  <div class="cards">
+    <form class="login-card" data-env="a">
+      <h1>MtrxSys A</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="admin123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
+
+    <form class="login-card" data-env="b">
+      <h1>MtrxSys B</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-b@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipB123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
+  </div>
+
+  <script>
+    // Olho mostrar/esconder senha — adiciona/remove o traco cruzado no SVG igual a LoginScreen.tsx
+    document.querySelectorAll(".password-toggle").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const input = btn.parentElement.querySelector("input");
+        const hidden = input.type === "password";
+        input.type = hidden ? "text" : "password";
+        btn.setAttribute("aria-label", hidden ? "Ocultar senha" : "Mostrar senha");
+        const svg = btn.querySelector("svg");
+        const existingLine = svg.querySelector("line");
+        if (hidden && !existingLine) {
+          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          line.setAttribute("x1", "3");
+          line.setAttribute("y1", "3");
+          line.setAttribute("x2", "21");
+          line.setAttribute("y2", "21");
+          svg.appendChild(line);
+        } else if (!hidden && existingLine) {
+          existingLine.remove();
+        }
+      });
+    });
+
+    // Mapa: qual backend cada card autentica, pra qual frontend redireciona depois.
+    // Alinhado com docker-compose.yml (Stack 1) e docker-compose-2.yml (Stack 2).
+    const ENVS = {
+      a: { backend: "http://localhost:5080", target: "http://localhost:5173" },
+      b: { backend: "http://localhost:5081", target: "http://localhost:5174" },
+    };
+
+    // Mapeia env → referência da janela aberta. Usado pra travar o card enquanto o dashboard
+    // está aberto. NÃO persiste em F5 da landing (referências de window.open são per-sessão).
+    const openedWindows = {};
+
+    function setCardLocked(env, locked) {
+      const card = document.querySelector(`form[data-env="${env}"]`);
+      if (!card) return;
+      card.classList.toggle("in-use", locked);
+      const btn = card.querySelector("button[type=submit]");
+      btn.disabled = locked;
+      btn.textContent = locked ? "Em uso" : "Entrar";
+    }
+
+    // Poll a cada 1s: pra cada janela rastreada, se .closed virou true, destrava o card.
+    // .closed funciona mesmo cross-origin (limitação do browser permite só essa checagem).
+    setInterval(() => {
+      for (const env of Object.keys(openedWindows)) {
+        const win = openedWindows[env];
+        if (!win || win.closed) {
+          delete openedWindows[env];
+          setCardLocked(env, false);
+        }
+      }
+    }, 1000);
+
+    document.querySelectorAll("form[data-env]").forEach((form) => {
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const env = form.dataset.env;
+        // Bloqueia re-submit se este ambiente já está em uso (defesa em camada, alem do disabled).
+        if (openedWindows[env] && !openedWindows[env].closed) {
+          return;
+        }
+        const cfg = ENVS[env];
+        const errEl = form.querySelector("[data-err]");
+        const btn = form.querySelector("button[type=submit]");
+        errEl.textContent = "";
+        btn.disabled = true;
+        const originalLabel = btn.textContent;
+        btn.textContent = "Entrando...";
+        try {
+          const resp = await fetch(`${cfg.backend}/api/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: form.email.value,
+              password: form.password.value,
+            }),
+          });
+          if (!resp.ok) {
+            const txt = await resp.text().catch(() => "");
+            errEl.textContent = `Erro ${resp.status}${txt ? ": " + txt.slice(0, 200) : ""}`;
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            return;
+          }
+          const data = await resp.json();
+          // Manda o JWT + dados do usuario pelo fragment da URL (nao vai pro servidor) — o
+          // AuthContext.tsx do app consome e limpa do historico no mesmo instante.
+          const userPayload = JSON.stringify({
+            userId: data.userId,
+            email: data.email,
+            displayName: data.displayName,
+          });
+          const params = new URLSearchParams({
+            token: data.accessToken,
+            user: userPayload,
+          });
+          const newWin = window.open(`${cfg.target}/#${params.toString()}`, "_blank");
+          if (newWin) {
+            // Popup abriu — trava o card. Polling acima vai destravar quando o usuario fechar.
+            openedWindows[env] = newWin;
+            setCardLocked(env, true);
+          } else {
+            // Popup bloqueado pelo navegador — feedback e libera o botao.
+            errEl.textContent = "Permita popups deste site pra abrir o dashboard em nova aba.";
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+          }
+        } catch (ex) {
+          errEl.textContent = `Erro de rede: ${ex.message || ex}`;
+          btn.disabled = false;
+          btn.textContent = originalLabel;
+        }
+      });
+    });
+  </script>
+</body>
+</html>

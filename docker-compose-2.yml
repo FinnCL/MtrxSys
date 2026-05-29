@@ -1,0 +1,154 @@
+# Stack 2 (espelho do docker-compose.yml) + landing page de seleção de ambiente.
+#
+# Sobe ao lado do Stack 1 com:
+#   docker compose -f docker-compose-2.yml up -d
+#
+# Acessos:
+#   - http://localhost:5175  → landing com os 2 cards (Ambiente A e Ambiente B)
+#   - http://localhost:5174  → web do Stack 2 (Ambiente B / Chip B)
+#   - http://localhost:5081  → API do Stack 2
+#   - http://localhost:5433  → Postgres do Stack 2 (porta diferente do Stack 1)
+#   - http://localhost:3001  → WAHA do Stack 2 (parear o segundo celular aqui)
+#
+# Defaults pra DEV LOCAL. Em outro setup sobrescreva via .env (não commitado).
+
+name: mtrx2
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: mtrx2-postgres
+    environment:
+      POSTGRES_DB: mtrx
+      POSTGRES_USER: mtrx
+      POSTGRES_PASSWORD: ${PG2_PASS:-mtrx}
+      TZ: UTC
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata2:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mtrx", "-d", "mtrx"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: mtrx2-redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: mtrx2-waha
+    ports:
+      - "3001:3000"
+    environment:
+      TZ: UTC
+      WAHA_DASHBOARD_ENABLED: "true"
+      WAHA_DASHBOARD_USERNAME: ${WAHA2_DASH_USER:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA2_DASH_PASS:-admin}
+      WHATSAPP_API_KEY: ${WAHA2_API_KEY:-mtrxsys-dev-key-stack2}
+      # Webhook aponta pro nome interno do serviço (resolvido pela rede do projeto mtrx2)
+      WHATSAPP_HOOK_URL: ${WAHA2_HOOK_URL:-http://api:8080/webhooks/waha}
+      WHATSAPP_HOOK_EVENTS: ${WAHA2_HOOK_EVENTS:-message,message.any}
+      WHATSAPP_SWAGGER_USERNAME: ${WAHA2_SWAGGER_USER:-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA2_SWAGGER_PASS:-admin}
+    volumes:
+      - waha-sessions2:/app/.sessions
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Api/Dockerfile
+    container_name: mtrx2-api
+    ports:
+      - "5081:8080"
+    environment:
+      TZ: UTC
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG2_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA2_API_KEY:-mtrxsys-dev-key-stack2}
+      Waha__WebhookCallbackUrl: "http://api:8080/webhooks/waha"
+      Webhooks__WahaToken: ${WAHA2_HOOK_TOKEN:-}
+      # Chave JWT distinta do Stack 1: tokens emitidos no Stack 1 não autenticam no Stack 2
+      Jwt__SigningKey: ${JWT2_SIGNING_KEY:-dev-only-signing-key-stack-2-change-me-32-chars-min}
+      # Admin específico do Ambiente B — diferente do Stack 1 pra ficar claro qual ambiente é qual
+      Seed__Admin__Email: ${SEED2_ADMIN_EMAIL:-admin-b@local}
+      Seed__Admin__Password: ${SEED2_ADMIN_PASS:-chipB123!}
+      Seed__Admin__DisplayName: ${SEED2_ADMIN_NAME:-Admin Chip B}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  dispatcher:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Dispatcher/Dockerfile
+    container_name: mtrx2-dispatcher
+    environment:
+      TZ: UTC
+      DOTNET_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG2_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA2_API_KEY:-mtrxsys-dev-key-stack2}
+      Jwt__SigningKey: ${JWT2_SIGNING_KEY:-dev-only-signing-key-stack-2-change-me-32-chars-min}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./src/mtrxsys-web
+      dockerfile: Dockerfile
+      args:
+        # Cliente web do Stack 2 chama a API do Stack 2 (porta 5081). Build-time via Vite.
+        VITE_API_URL: "http://localhost:5081"
+        # Identifica a aba do navegador como "MtrxSys B" pra distinguir do Stack 1.
+        VITE_APP_LABEL: "B"
+    container_name: mtrx2-web
+    ports:
+      - "5174:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Landing page de seleção de ambiente — serve os 2 cards (A e B) que autenticam direto
+  # no backend respectivo e abrem o app em nova aba já logado. nginx só com mount volume
+  # do HTML, sem Dockerfile próprio. Sobe junto com o Stack 2 por conveniência.
+  landing:
+    image: nginx:alpine
+    container_name: mtrx-landing
+    ports:
+      - "5175:80"
+    volumes:
+      - ./landing:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+volumes:
+  pgdata2:
+  waha-sessions2:

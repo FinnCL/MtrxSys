@@ -106,6 +106,9 @@ services:
     build:
       context: ./src/mtrxsys-web
       dockerfile: Dockerfile
+      args:
+        # Identifica a aba do navegador como "MtrxSys A" pra distinguir do Stack 2.
+        VITE_APP_LABEL: "A"
     container_name: mtrx-web
     ports:
       - "5173:80"
