@@ -1,11 +1,11 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 pushd "%~dp0"
 
-echo === MtrxSys DEV: Stack 1 com HMR + Stack 2 + Stack 3 + landing ===
+echo === MtrxSys DEV: Stack 1 com HMR + Stacks 2..10 + landing ===
 echo.
 echo Stack 1 sobe com docker-compose.dev.yml (dotnet watch + Vite HMR).
-echo Stacks 2 e 3 sobem em modo producao (sem hot-reload — ambientes espelhados).
+echo Stacks 2..10 sobem em modo producao (sem hot-reload — ambientes espelhados).
 echo Edite codigo em src\... e o Stack 1 recarrega sozinho. Os outros precisam rebuild.
 echo.
 
@@ -17,42 +17,35 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo.
-echo --- Stack 2 (Ambiente B / Chip B) + landing ---
-docker compose -f docker-compose-2.yml up -d --build
-if errorlevel 1 (
-    echo Falha no Stack 2.
-    popd
-    exit /b 1
+for %%N in (2 3 4 5 6 7 8 9 10) do (
+    echo.
+    echo --- Stack %%N (modo producao) ---
+    docker compose -f docker-compose-%%N.yml up -d --build
+    if errorlevel 1 (
+        echo Falha no Stack %%N.
+        popd
+        exit /b 1
+    )
 )
 
 echo.
-echo --- Stack 3 (Ambiente C / Chip C) ---
-docker compose -f docker-compose-3.yml up -d --build
-if errorlevel 1 (
-    echo Falha no Stack 3.
-    popd
-    exit /b 1
-)
-
-echo.
-echo === Aguardando todas as APIs ficarem healthy (timeout 240s, dev demora mais) ===
+echo === Aguardando todas as APIs ficarem healthy (timeout ~360s, dev demora mais) ===
 set /a TRIES=0
 :wait
 set /a TRIES+=1
-if %TRIES% gtr 120 (
+if !TRIES! gtr 180 (
     echo Timeout aguardando APIs.
     popd
     exit /b 1
 )
-set H1=
-set H2=
-set H3=
-for /f "tokens=*" %%i in ('docker inspect -f "{{.State.Health.Status}}" mtrx-api 2^>nul') do set H1=%%i
-for /f "tokens=*" %%i in ('docker inspect -f "{{.State.Health.Status}}" mtrx2-api 2^>nul') do set H2=%%i
-for /f "tokens=*" %%i in ('docker inspect -f "{{.State.Health.Status}}" mtrx3-api 2^>nul') do set H3=%%i
-if "%H1%"=="healthy" if "%H2%"=="healthy" if "%H3%"=="healthy" goto ready
-echo [%TRIES%/120] Stack1=%H1% Stack2=%H2% Stack3=%H3%
+set ALLOK=1
+for %%C in (mtrx-api mtrx2-api mtrx3-api mtrx4-api mtrx5-api mtrx6-api mtrx7-api mtrx8-api mtrx9-api mtrx10-api) do (
+    set H=
+    for /f "tokens=*" %%i in ('docker inspect -f "{{.State.Health.Status}}" %%C 2^>nul') do set H=%%i
+    if not "!H!"=="healthy" set ALLOK=0
+)
+if !ALLOK!==1 goto ready
+echo [!TRIES!/180] aguardando APIs ficarem healthy...
 timeout /t 2 /nobreak >nul
 goto wait
 
@@ -65,8 +58,7 @@ echo.
 echo Ambientes ativos:
 echo   Landing:     http://localhost:5175
 echo   Ambiente A:  http://localhost:5173  (Vite dev server, HMR ligado)
-echo   Ambiente B:  http://localhost:5174  (build estatico)
-echo   Ambiente C:  http://localhost:5176  (build estatico)
+echo   Ambientes B..J: webs 5174, 5176..5183 (build estatico)
 echo.
 echo Pra parar tudo: down-all.cmd
 popd

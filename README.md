@@ -4,7 +4,7 @@ Ferramenta de WhatsApp pra **salvar contatos de grupos** e **disparar mensagens 
 
 > Roda **só em localhost** via Docker Compose. Não foi pensado pra produção.
 
-Suporta rodar até **3 ambientes (chips) em paralelo** — cada um com seu próprio WhatsApp, banco e aquecimento independentes — acessíveis por uma **landing** de seleção. Veja [Como rodar](#como-rodar-localhost).
+Suporta rodar até **10 ambientes (chips) em paralelo** (A–J) — cada um com seu próprio WhatsApp, banco e aquecimento independentes — acessíveis por uma **landing** de seleção (grade de cards). Veja [Como rodar](#como-rodar-localhost).
 
 ## Stack
 
@@ -35,10 +35,10 @@ tests/
 ## Pré-requisitos
 
 - **Docker Desktop** (ou equivalente com `docker compose` >= v2). Tudo roda em containers.
-- ~3 GB livres em disco pras imagens (postgres, redis, waha, .NET runtime, node) — mais por ambiente extra (B/C).
-- Portas livres no host:
+- ~3 GB livres em disco pras imagens (postgres, redis, waha, .NET runtime, node) — mais por ambiente extra. **Atenção:** cada ambiente é uma stack completa (6 containers, incluindo um WAHA/Chromium); 10 ambientes = ~61 containers e vários GB de RAM. Suba só os que for usar.
+- Portas livres no host (faixas, um ambiente por offset — pula 5175, reservada à landing):
   - **Ambiente único (A):** `5080`, `5173`, `3000`, `5432`, `6379`.
-  - **Multi-ambiente (A+B+C):** acima + `5175` (landing), `5174`/`5176` (web B/C), `5081`/`5082` (API B/C), `3001`/`3002` (WAHA B/C), e Postgres/Redis internos de cada stack.
+  - **Multi-ambiente (A–J):** `5175` (landing) + web `5173`/`5174`/`5176`‑`5183`, API `5080`‑`5089`, WAHA `3000`‑`3009`, Postgres `5432`‑`5441`, Redis `6379`‑`6388`.
 
 ## Como rodar (localhost)
 
@@ -83,19 +83,19 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 ### Modo multi-ambiente (3 chips em paralelo)
 
-Pra operar **vários WhatsApp ao mesmo tempo** (cada chip num ambiente isolado, com banco, WAHA e aquecimento próprios), use os helpers `*-all.cmd`. Eles empilham `docker-compose.yml` (Stack 1 / Ambiente A) + `docker-compose-2.yml` (Stack 2 / Ambiente B + a **landing**) + `docker-compose-3.yml` (Stack 3 / Ambiente C).
+Pra operar **vários WhatsApp ao mesmo tempo** (cada chip num ambiente isolado, com banco, WAHA e aquecimento próprios), use os helpers `*-all.cmd`. Eles empilham `docker-compose.yml` (Stack 1 / Ambiente A) + `docker-compose-2.yml` (Stack 2 / Ambiente B + a **landing**) + `docker-compose-3.yml`...`docker-compose-10.yml` (Stacks C…J). São **10 ambientes (A–J)** no total.
 
 ```powershell
-up-all.cmd      # sobe os 3 stacks em modo produção e abre a landing
-dev-all.cmd     # igual, mas o Stack 1 sobe com HMR (Vite + dotnet watch); B e C ficam estáticos
-down-all.cmd    # derruba os 3 stacks (preserva dados)
+up-all.cmd      # sobe os 10 stacks em modo produção e abre a landing
+dev-all.cmd     # igual, mas o Stack 1 sobe com HMR (Vite + dotnet watch); os demais ficam estáticos
+down-all.cmd    # derruba os 10 stacks em ordem inversa (preserva dados)
 ```
 
-O `up-all.cmd` aguarda as 3 APIs ficarem `healthy` (containers `mtrx-api`, `mtrx2-api`, `mtrx3-api`) e abre a **landing em `http://localhost:5175`**.
+O `up-all.cmd` aguarda as 10 APIs ficarem `healthy` (containers `mtrx-api`, `mtrx2-api`…`mtrx10-api`) e abre a **landing em `http://localhost:5175`**. Não precisa subir todos: pra um subconjunto, suba os que quiser com `docker compose -f docker-compose-N.yml up -d --build`.
 
-**Landing (`localhost:5175`):** mostra um card por ambiente (A/B/C) já preenchido com as credenciais. Ao entrar, ela autentica no backend daquele ambiente e abre o dashboard correspondente numa aba nova, passando o JWT pelo fragment da URL (`#token=...`) — que o app consome e limpa do histórico na hora. Cada card mostra **"🟢 Em uso"** e trava quando aquele dashboard está aberto, via *presence tracking* (veja [Presence tracking](#presence-tracking-landing-multi-ambiente)).
+**Landing (`localhost:5175`):** mostra um card por ambiente (A–J) em **grade 5×2** (5 em cima, 5 embaixo; responsiva), já preenchido com as credenciais. Ao entrar, ela autentica no backend daquele ambiente e abre o dashboard correspondente numa aba nova, passando o JWT pelo fragment da URL (`#token=...`) — que o app consome e limpa do histórico na hora. Cada card mostra **"🟢 Em uso"** e trava quando aquele dashboard está aberto, via *presence tracking* (veja [Presence tracking](#presence-tracking-landing-multi-ambiente)).
 
-Os ambientes B e C são **espelhos** do A (mesmo código), diferindo só nas portas, no banco/WAHA isolados e no admin semeado — defina `SEED2_*` / `SEED3_*` no ambiente pra trocar as credenciais padrão.
+Os ambientes B–J são **espelhos** do A (mesmo código), diferindo só nas portas, no banco/WAHA isolados e no admin semeado — defina `SEED{N}_*` no ambiente pra trocar as credenciais padrão de cada stack.
 
 ### Comandos úteis
 
@@ -135,12 +135,19 @@ Migrations do banco rodam automaticamente no boot da Api. Usuário admin (`admin
 
 **Multi-ambiente** (quando subido via `up-all.cmd` / `dev-all.cmd`):
 
-| Ambiente | Landing/Web | API (swagger) | WAHA (parear celular) |
-|----------|-------------|---------------|------------------------|
+| Ambiente | Web | API (swagger) | WAHA (parear celular) |
+|----------|-----|---------------|------------------------|
 | Landing  | http://localhost:5175 | — | — |
 | A / Chip A | http://localhost:5173 | http://localhost:5080/swagger | http://localhost:3000 |
 | B / Chip B | http://localhost:5174 | http://localhost:5081/swagger | http://localhost:3001 |
 | C / Chip C | http://localhost:5176 | http://localhost:5082/swagger | http://localhost:3002 |
+| D / Chip D | http://localhost:5177 | http://localhost:5083/swagger | http://localhost:3003 |
+| E / Chip E | http://localhost:5178 | http://localhost:5084/swagger | http://localhost:3004 |
+| F / Chip F | http://localhost:5179 | http://localhost:5085/swagger | http://localhost:3005 |
+| G / Chip G | http://localhost:5180 | http://localhost:5086/swagger | http://localhost:3006 |
+| H / Chip H | http://localhost:5181 | http://localhost:5087/swagger | http://localhost:3007 |
+| I / Chip I | http://localhost:5182 | http://localhost:5088/swagger | http://localhost:3008 |
+| J / Chip J | http://localhost:5183 | http://localhost:5089/swagger | http://localhost:3009 |
 
 ## Login padrão
 
@@ -151,8 +158,15 @@ Criados automaticamente no primeiro startup de cada stack se a tabela `users` es
 | A | `admin@local` | `admin123!` |
 | B | `admin-b@local` | `chipB123!` |
 | C | `admin-c@local` | `chipC123!` |
+| D | `admin-d@local` | `chipD123!` |
+| E | `admin-e@local` | `chipE123!` |
+| F | `admin-f@local` | `chipF123!` |
+| G | `admin-g@local` | `chipG123!` |
+| H | `admin-h@local` | `chipH123!` |
+| I | `admin-i@local` | `chipI123!` |
+| J | `admin-j@local` | `chipJ123!` |
 
-As credenciais de B e C são configuráveis via `SEED2_ADMIN_EMAIL`/`SEED2_ADMIN_PASS` e `SEED3_ADMIN_EMAIL`/`SEED3_ADMIN_PASS`. A landing já vem com os campos preenchidos.
+As credenciais de cada stack (B–J) são configuráveis via `SEED{N}_ADMIN_EMAIL`/`SEED{N}_ADMIN_PASS` (`SEED2_*` = Ambiente B, …, `SEED10_*` = Ambiente J). A landing já vem com os campos preenchidos.
 
 ## Fluxo de uso
 
@@ -260,7 +274,7 @@ Serve pra a **landing** travar o card de um ambiente enquanto o dashboard dele e
 
 ## Variáveis de ambiente
 
-Veja `.env.example` na raiz. As principais são `WAHA_API_KEY`, `JWT_SIGNING_KEY`, `PG_PASS`. No multi-ambiente, as credenciais do admin semeado de cada stack vêm de `SEED2_ADMIN_EMAIL`/`SEED2_ADMIN_PASS` (Ambiente B) e `SEED3_ADMIN_EMAIL`/`SEED3_ADMIN_PASS` (Ambiente C) — com defaults `admin-b@local`/`chipB123!` e `admin-c@local`/`chipC123!`.
+Veja `.env.example` na raiz. As principais são `WAHA_API_KEY`, `JWT_SIGNING_KEY`, `PG_PASS`. No multi-ambiente, cada stack `N` (2–10) tem suas próprias variáveis com sufixo: `PG{N}_PASS`, `WAHA{N}_API_KEY`, `JWT{N}_SIGNING_KEY` e o admin semeado via `SEED{N}_ADMIN_EMAIL`/`SEED{N}_ADMIN_PASS` (defaults `admin-<letra>@local` / `chip<Letra>123!`, ex.: `SEED2_*` → B, `SEED10_*` → J). A landing já vem com os campos preenchidos.
 
 ## Notas
 

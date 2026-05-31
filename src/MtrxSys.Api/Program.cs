@@ -25,11 +25,16 @@ builder.Services.AddOptions<MtrxSys.Api.Options.WebhookOptions>()
 builder.Services.AddOptions<MtrxSys.Core.Application.Options.SyncOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Core.Application.Options.SyncOptions.SectionName));
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WhatsAppAutoSyncService>();
-// Origens permitidas: por padrão libera as portas usadas no setup localhost — Stack 1 (5173),
-// Stack 2 (5174), Stack 3 (5176) e a landing de múltiplos ambientes (5175). Pode ser
-// sobrescrito por env var Web__Origins__0, Web__Origins__1, etc. quando rodar em outro setup.
+// Origens permitidas: por padrão libera as portas web usadas no setup localhost — a landing
+// de múltiplos ambientes (5175) e os webs dos Stacks 1..10 (5173, 5174, 5176..5183; a 5175 é
+// da landing). Pode ser sobrescrito por env var Web__Origins__0, Web__Origins__1, etc.
 var corsOrigins = builder.Configuration.GetSection("Web:Origins").Get<string[]>()
-    ?? new[] { "http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176" };
+    ?? new[]
+    {
+        "http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176",
+        "http://localhost:5177", "http://localhost:5178", "http://localhost:5179", "http://localhost:5180",
+        "http://localhost:5181", "http://localhost:5182", "http://localhost:5183",
+    };
 builder.Services.AddCors(opts => opts.AddDefaultPolicy(p =>
     p.AllowAnyHeader().AllowAnyMethod().WithOrigins(corsOrigins)));
 

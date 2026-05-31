@@ -1,0 +1,142 @@
+# Stack 8 (espelho do docker-compose.yml/compose-2.yml). Landing fica só no compose-2.
+#
+# Sobe ao lado dos outros stacks com:
+#   docker compose -f docker-compose-8.yml up -d
+#
+# Acessos:
+#   - http://localhost:5175  → landing (no compose-2), agora com 8 cards (A, B, C, D, E, F, G, H)
+#   - http://localhost:5181  → web do Stack 8 (Ambiente H / Chip H)
+#   - http://localhost:5087  → API do Stack 8
+#   - http://localhost:5439  → Postgres do Stack 8 (porta diferente dos demais)
+#   - http://localhost:3007  → WAHA do Stack 8 (parear o oitavo celular aqui)
+#
+# Defaults pra DEV LOCAL. Em outro setup sobrescreva via .env (não commitado).
+
+name: mtrx8
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: mtrx8-postgres
+    environment:
+      POSTGRES_DB: mtrx
+      POSTGRES_USER: mtrx
+      POSTGRES_PASSWORD: ${PG8_PASS:-mtrx}
+      TZ: UTC
+    ports:
+      - "5439:5432"
+    volumes:
+      - pgdata8:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mtrx", "-d", "mtrx"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: mtrx8-redis
+    ports:
+      - "6386:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: mtrx8-waha
+    ports:
+      - "3007:3000"
+    environment:
+      TZ: UTC
+      WAHA_DASHBOARD_ENABLED: "true"
+      WAHA_DASHBOARD_USERNAME: ${WAHA8_DASH_USER:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA8_DASH_PASS:-admin}
+      WHATSAPP_API_KEY: ${WAHA8_API_KEY:-mtrxsys-dev-key-stack8}
+      # Webhook aponta pro nome interno do serviço (resolvido pela rede do projeto mtrx8)
+      WHATSAPP_HOOK_URL: ${WAHA8_HOOK_URL:-http://api:8080/webhooks/waha}
+      WHATSAPP_HOOK_EVENTS: ${WAHA8_HOOK_EVENTS:-message,message.any}
+      WHATSAPP_SWAGGER_USERNAME: ${WAHA8_SWAGGER_USER:-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA8_SWAGGER_PASS:-admin}
+    volumes:
+      - waha-sessions8:/app/.sessions
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Api/Dockerfile
+    container_name: mtrx8-api
+    ports:
+      - "5087:8080"
+    environment:
+      TZ: UTC
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG8_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA8_API_KEY:-mtrxsys-dev-key-stack8}
+      Waha__WebhookCallbackUrl: "http://api:8080/webhooks/waha"
+      Webhooks__WahaToken: ${WAHA8_HOOK_TOKEN:-}
+      # Chave JWT distinta dos demais Stacks: tokens emitidos noutro stack não autenticam aqui
+      Jwt__SigningKey: ${JWT8_SIGNING_KEY:-dev-only-signing-key-stack-8-change-me-32-chars-min}
+      # Admin específico do Ambiente H — diferente dos outros pra ficar claro qual ambiente é qual
+      Seed__Admin__Email: ${SEED8_ADMIN_EMAIL:-admin-h@local}
+      Seed__Admin__Password: ${SEED8_ADMIN_PASS:-chipH123!}
+      Seed__Admin__DisplayName: ${SEED8_ADMIN_NAME:-Admin Chip H}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  dispatcher:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Dispatcher/Dockerfile
+    container_name: mtrx8-dispatcher
+    environment:
+      TZ: UTC
+      DOTNET_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG8_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA8_API_KEY:-mtrxsys-dev-key-stack8}
+      Jwt__SigningKey: ${JWT8_SIGNING_KEY:-dev-only-signing-key-stack-8-change-me-32-chars-min}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./src/mtrxsys-web
+      dockerfile: Dockerfile
+      args:
+        # Cliente web do Stack 8 chama a API do Stack 8 (porta 5087). Build-time via Vite.
+        VITE_API_URL: "http://localhost:5087"
+        # Identifica a aba do navegador como "MtrxSys H" pra distinguir dos outros.
+        VITE_APP_LABEL: "H"
+    container_name: mtrx8-web
+    ports:
+      - "5181:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata8:
+  waha-sessions8:

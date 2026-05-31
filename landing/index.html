@@ -34,24 +34,24 @@
 
     /* Os 2 cards usam exatamente o mesmo style do .login-card da LoginScreen — clone direto */
     .cards {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 16px;
-      justify-content: center;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
       width: 100%;
+      max-width: 1280px;
+      margin: 0 auto;
     }
     .login-card {
       background: var(--bg-2);
-      padding: 30px;
+      padding: 16px;
       border-radius: 8px;
       width: 100%;
-      max-width: 320px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 10px;
       border: 1px solid var(--border);
     }
-    .login-card h1 { margin: 0 0 6px; font-size: 24px; }
+    .login-card h1 { margin: 0 0 2px; font-size: 18px; }
     .login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
     .login-card input {
       background: var(--bg);
@@ -122,12 +122,11 @@
     }
     .login-card.in-use button[type="submit"]:hover { filter: none; }
 
-    /* Em telas pequenas (~ <700px) os cards se empilham automaticamente via flex-wrap.
-       Aqui so reforco padding lateral pra nao colar nas bordas e baixo o gap interno. */
-    @media (max-width: 480px) {
-      body { padding: 12px; }
-      .login-card { padding: 22px; gap: 12px; }
-    }
+    /* 5 colunas (5 em cima / 5 embaixo) no desktop largo; reduz as colunas conforme
+       a tela estreita, pra não estourar a largura em telas menores. */
+    @media (max-width: 1100px) { .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 780px; } }
+    @media (max-width: 720px)  { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 520px; } }
+    @media (max-width: 460px)  { .cards { grid-template-columns: 1fr; max-width: 320px; } body { padding: 12px; } }
   </style>
 </head>
 <body>
@@ -199,6 +198,160 @@
       <p class="login-error" data-err></p>
       <button type="submit">Entrar</button>
     </form>
+
+    <form class="login-card" data-env="d">
+      <h1>MtrxSys D</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-d@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipD123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
+
+    <form class="login-card" data-env="e">
+      <h1>MtrxSys E</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-e@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipE123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
+
+    <form class="login-card" data-env="f">
+      <h1>MtrxSys F</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-f@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipF123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
+
+    <form class="login-card" data-env="g">
+      <h1>MtrxSys G</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-g@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipG123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
+
+    <form class="login-card" data-env="h">
+      <h1>MtrxSys H</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-h@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipH123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
+
+    <form class="login-card" data-env="i">
+      <h1>MtrxSys I</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-i@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipI123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
+
+    <form class="login-card" data-env="j">
+      <h1>MtrxSys J</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-j@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipJ123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
   </div>
 
   <script>
@@ -230,6 +383,13 @@
       a: { backend: "http://localhost:5080", target: "http://localhost:5173" },
       b: { backend: "http://localhost:5081", target: "http://localhost:5174" },
       c: { backend: "http://localhost:5082", target: "http://localhost:5176" },
+      d: { backend: "http://localhost:5083", target: "http://localhost:5177" },
+      e: { backend: "http://localhost:5084", target: "http://localhost:5178" },
+      f: { backend: "http://localhost:5085", target: "http://localhost:5179" },
+      g: { backend: "http://localhost:5086", target: "http://localhost:5180" },
+      h: { backend: "http://localhost:5087", target: "http://localhost:5181" },
+      i: { backend: "http://localhost:5088", target: "http://localhost:5182" },
+      j: { backend: "http://localhost:5089", target: "http://localhost:5183" },
     };
 
     function setCardLocked(env, locked) {
