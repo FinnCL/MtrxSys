@@ -37,6 +37,7 @@ public sealed class DispatchEngine(
         var failed = 0;
         var skipped = 0;
         var templateCache = new Dictionary<Guid, MtrxSys.Core.Domain.Messages.MessageTemplate>();
+        var sessionId = dispatchOpts.Value.SessionId;
 
         while (!ct.IsCancellationRequested)
         {
@@ -72,6 +73,34 @@ public sealed class DispatchEngine(
                 break;
             }
 
+            // Só agora (há job pra enviar) vale checar a sessão — evita bater no WAHA em ciclos
+            // ociosos. Sessão fora? Para; o job fica Pending e é retomado quando a sessão voltar.
+            // Endurecido pra NÃO atrapalhar envio saudável: erro transitório de status é engolido
+            // (assume ok) e só para em estado DEFINITIVO (Stopped/Failed) — Starting/ScanQrCode seguem.
+            if (dispatchOpts.Value.PauseWhenSessionDown)
+            {
+                WahaSessionStatus sessionStatus;
+                try
+                {
+                    sessionStatus = await waha.GetSessionStatusAsync(sessionId, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+#pragma warning disable CA1031
+                catch
+                {
+                    sessionStatus = WahaSessionStatus.Working; // status indisponível: não trava o envio
+                }
+#pragma warning restore CA1031
+                if (sessionStatus is WahaSessionStatus.Stopped or WahaSessionStatus.Failed)
+                {
+                    log.LogInformation("Sessão WAHA {Status}; ciclo parado (job volta para Pending).", sessionStatus);
+                    break;
+                }
+            }
+
             processed++;
             var contact = await contacts.GetByIdAsync(job.ContactId, ct);
             if (contact is null)
@@ -99,7 +128,6 @@ public sealed class DispatchEngine(
                 continue;
             }
 
-            var sessionId = dispatchOpts.Value.SessionId;
             try
             {
                 if (!templateCache.TryGetValue(job.TemplateId, out var template))

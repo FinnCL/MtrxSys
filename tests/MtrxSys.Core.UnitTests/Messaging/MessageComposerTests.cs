@@ -1,5 +1,7 @@
 using FluentAssertions;
+using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
+using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Messages;
 using MtrxSys.Core.Messaging;
@@ -12,10 +14,13 @@ public sealed class MessageComposerTests
     private readonly IMessageTemplateRepository _templates = Substitute.For<IMessageTemplateRepository>();
     private readonly IRandomSource _rng = Substitute.For<IRandomSource>();
 
-    private MessageComposer Build()
+    // OptOutFooter vazio por padrão pros testes existentes (sem rodapé); os testes de opt-out
+    // passam um rodapé explícito.
+    private MessageComposer Build(string optOutFooter = "")
     {
         _rng.NextInt(Arg.Any<int>(), Arg.Any<int>()).Returns(0);
-        return new MessageComposer(new SpintaxExpander(_rng), _templates);
+        var opts = Options.Create(new DispatchOptions { OptOutFooter = optOutFooter });
+        return new MessageComposer(new SpintaxExpander(_rng), _templates, opts);
     }
 
     private static Contact BuildContact(string? name = "Maria", string? group = "Grupo VIP", string? theme = "Promo")
@@ -70,5 +75,43 @@ public sealed class MessageComposerTests
         var c = BuildContact();
 
         Build().Compose(t, c).Should().Be("Hello  world");
+    }
+
+    [Fact]
+    public void Compose_appends_optout_on_first_contact()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi, {{name}}!");
+        var c = BuildContact(name: "João"); // recém-criado: LastSentAt == null
+
+        Build("Responda SAIR para sair.").Compose(t, c)
+            .Should().Be("Oi, João!\n\nResponda SAIR para sair.");
+    }
+
+    [Fact]
+    public void Compose_does_not_append_optout_when_already_sent()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
+        var c = BuildContact();
+        c.RegisterSend(DateTimeOffset.UtcNow); // já recebeu antes → não é 1º contato
+
+        Build("Responda SAIR para sair.").Compose(t, c).Should().Be("Oi!");
+    }
+
+    [Fact]
+    public void Compose_does_not_duplicate_optout_when_text_already_mentions_sair()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi! Responda SAIR p/ parar.");
+        var c = BuildContact();
+
+        Build("Responda SAIR para sair.").Compose(t, c).Should().Be("Oi! Responda SAIR p/ parar.");
+    }
+
+    [Fact]
+    public void Compose_does_not_append_when_footer_empty()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
+        var c = BuildContact();
+
+        Build("").Compose(t, c).Should().Be("Oi!");
     }
 }
