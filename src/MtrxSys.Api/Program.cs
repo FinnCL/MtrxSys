@@ -19,16 +19,17 @@ builder.Host.UseSerilog((ctx, lc) => lc
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<MtrxSys.Core.Application.Abstractions.ICurrentUserAccessor, MtrxSys.Api.Startup.HttpCurrentUserAccessor>();
+builder.Services.AddSingleton<MtrxSys.Api.Services.PresenceTracker>();
 builder.Services.AddOptions<MtrxSys.Api.Options.WebhookOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Api.Options.WebhookOptions.SectionName));
 builder.Services.AddOptions<MtrxSys.Core.Application.Options.SyncOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Core.Application.Options.SyncOptions.SectionName));
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WhatsAppAutoSyncService>();
-// Origens permitidas: por padrão libera as 3 portas usadas no setup localhost — Stack 1 (5173),
-// Stack 2 (5174) e a landing de múltiplos ambientes (5175). Pode ser sobrescrito por env var
-// Web__Origins__0, Web__Origins__1, etc. quando rodar em outro setup.
+// Origens permitidas: por padrão libera as portas usadas no setup localhost — Stack 1 (5173),
+// Stack 2 (5174), Stack 3 (5176) e a landing de múltiplos ambientes (5175). Pode ser
+// sobrescrito por env var Web__Origins__0, Web__Origins__1, etc. quando rodar em outro setup.
 var corsOrigins = builder.Configuration.GetSection("Web:Origins").Get<string[]>()
-    ?? new[] { "http://localhost:5173", "http://localhost:5174", "http://localhost:5175" };
+    ?? new[] { "http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176" };
 builder.Services.AddCors(opts => opts.AddDefaultPolicy(p =>
     p.AllowAnyHeader().AllowAnyMethod().WithOrigins(corsOrigins)));
 
@@ -100,6 +101,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapHealthEndpoints();
+app.MapPresenceEndpoints();
 app.MapAuthEndpoints();
 app.MapWebhookEndpoints();
 app.MapConversationsEndpoints();

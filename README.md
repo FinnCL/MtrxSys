@@ -4,6 +4,8 @@ Ferramenta de WhatsApp pra **salvar contatos de grupos** e **disparar mensagens 
 
 > Roda **só em localhost** via Docker Compose. Não foi pensado pra produção.
 
+Suporta rodar até **3 ambientes (chips) em paralelo** — cada um com seu próprio WhatsApp, banco e aquecimento independentes — acessíveis por uma **landing** de seleção. Veja [Como rodar](#como-rodar-localhost).
+
 ## Stack
 
 - Backend: .NET 10 (C#), ASP.NET Core Minimal API, Worker Service, EF Core 10 + PostgreSQL 17, JWT Bearer.
@@ -33,12 +35,14 @@ tests/
 ## Pré-requisitos
 
 - **Docker Desktop** (ou equivalente com `docker compose` >= v2). Tudo roda em containers.
-- ~3 GB livres em disco pras imagens (postgres, redis, waha, .NET runtime, node).
-- Portas livres no host: `5080`, `5173`, `3000`, `5432`, `6379`.
+- ~3 GB livres em disco pras imagens (postgres, redis, waha, .NET runtime, node) — mais por ambiente extra (B/C).
+- Portas livres no host:
+  - **Ambiente único (A):** `5080`, `5173`, `3000`, `5432`, `6379`.
+  - **Multi-ambiente (A+B+C):** acima + `5175` (landing), `5174`/`5176` (web B/C), `5081`/`5082` (API B/C), `3001`/`3002` (WAHA B/C), e Postgres/Redis internos de cada stack.
 
 ## Como rodar (localhost)
 
-O sistema é 100% conteinerizado — sobe via Docker Compose. Dois modos disponíveis:
+O sistema é 100% conteinerizado — sobe via Docker Compose. Há os modos de **ambiente único** (abaixo) e o de **múltiplos ambientes** (mais adiante).
 
 ### Modo produção-like (recomendado pra usar)
 
@@ -77,6 +81,22 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 >
 > Como conferir se subiu certo: no `docker compose ps` os containers da app devem se chamar `mtrx-api`, `mtrx-web`, `mtrx-dispatcher`. Se aparecerem como `mtrxsys-api-1` (sufixo `-1`), foi sem o base — derrube com `docker compose down` e suba de novo com os dois `-f` (ou use `dev.cmd`).
 
+### Modo multi-ambiente (3 chips em paralelo)
+
+Pra operar **vários WhatsApp ao mesmo tempo** (cada chip num ambiente isolado, com banco, WAHA e aquecimento próprios), use os helpers `*-all.cmd`. Eles empilham `docker-compose.yml` (Stack 1 / Ambiente A) + `docker-compose-2.yml` (Stack 2 / Ambiente B + a **landing**) + `docker-compose-3.yml` (Stack 3 / Ambiente C).
+
+```powershell
+up-all.cmd      # sobe os 3 stacks em modo produção e abre a landing
+dev-all.cmd     # igual, mas o Stack 1 sobe com HMR (Vite + dotnet watch); B e C ficam estáticos
+down-all.cmd    # derruba os 3 stacks (preserva dados)
+```
+
+O `up-all.cmd` aguarda as 3 APIs ficarem `healthy` (containers `mtrx-api`, `mtrx2-api`, `mtrx3-api`) e abre a **landing em `http://localhost:5175`**.
+
+**Landing (`localhost:5175`):** mostra um card por ambiente (A/B/C) já preenchido com as credenciais. Ao entrar, ela autentica no backend daquele ambiente e abre o dashboard correspondente numa aba nova, passando o JWT pelo fragment da URL (`#token=...`) — que o app consome e limpa do histórico na hora. Cada card mostra **"🟢 Em uso"** e trava quando aquele dashboard está aberto, via *presence tracking* (veja [Presence tracking](#presence-tracking-landing-multi-ambiente)).
+
+Os ambientes B e C são **espelhos** do A (mesmo código), diferindo só nas portas, no banco/WAHA isolados e no admin semeado — defina `SEED2_*` / `SEED3_*` no ambiente pra trocar as credenciais padrão.
+
 ### Comandos úteis
 
 ```bash
@@ -87,6 +107,16 @@ docker compose down -v               # parar e apagar volumes (perde pareamento 
 docker compose up -d --build api     # rebuildar apenas um serviço
 ```
 
+**Multi-ambiente — cada `-f` mira um stack.** Sem `-f`, o comando age **só no Ambiente A** (`docker-compose.yml`). Pra atingir B/C/… aponte pro arquivo do stack:
+
+```bash
+docker compose -f docker-compose-2.yml logs -f api            # logs do Ambiente B
+docker compose -f docker-compose-2.yml up -d --build api web  # rebuildar só api+web do B
+docker compose -f docker-compose-3.yml up -d --build api web  # idem, Ambiente C
+```
+
+Editou **código compartilhado** (`src/...`) e quer refletir num ambiente em modo produção? Como não há hot reload nele, precisa rebuildar o serviço afetado (`api` recompila C#, `web` reentra o bundle do front). `up-all.cmd` / `dev-all.cmd` rebuildam **todos** os stacks de uma vez.
+
 ### Primeira vez
 
 A primeira execução demora 2-5 minutos (build das 4 imagens custom + pull das oficiais). As próximas usam o cache do Docker e sobem em ~10 segundos.
@@ -95,18 +125,34 @@ Migrations do banco rodam automaticamente no boot da Api. Usuário admin (`admin
 
 ## URLs
 
+**Ambiente único (A):**
+
 - Web: http://localhost:5173 — UI principal
 - Api: http://localhost:5080/swagger — endpoints REST
 - WAHA dashboard: http://localhost:3000/dashboard (creds não funcionam em WAHA Core; o MtrxSys faz tudo que o dashboard faria)
 - Postgres: 5432
 - Redis: 6379
 
+**Multi-ambiente** (quando subido via `up-all.cmd` / `dev-all.cmd`):
+
+| Ambiente | Landing/Web | API (swagger) | WAHA (parear celular) |
+|----------|-------------|---------------|------------------------|
+| Landing  | http://localhost:5175 | — | — |
+| A / Chip A | http://localhost:5173 | http://localhost:5080/swagger | http://localhost:3000 |
+| B / Chip B | http://localhost:5174 | http://localhost:5081/swagger | http://localhost:3001 |
+| C / Chip C | http://localhost:5176 | http://localhost:5082/swagger | http://localhost:3002 |
+
 ## Login padrão
 
-- Email: `admin@local`
-- Senha: `admin123!`
+Criados automaticamente no primeiro startup de cada stack se a tabela `users` estiver vazia. JWT dura 7 dias.
 
-Criado automaticamente no primeiro startup se a tabela `users` estiver vazia. JWT dura 7 dias.
+| Ambiente | Email | Senha |
+|----------|-------|-------|
+| A | `admin@local` | `admin123!` |
+| B | `admin-b@local` | `chipB123!` |
+| C | `admin-c@local` | `chipC123!` |
+
+As credenciais de B e C são configuráveis via `SEED2_ADMIN_EMAIL`/`SEED2_ADMIN_PASS` e `SEED3_ADMIN_EMAIL`/`SEED3_ADMIN_PASS`. A landing já vem com os campos preenchidos.
 
 ## Fluxo de uso
 
@@ -160,7 +206,7 @@ O contato anda no funil sozinho conforme o que acontece — os nomes internos (e
 - `OptOutDetector` — detecta pedidos de saída em respostas curtas, ignorando frases longas
 - `DelayPolicy` — random uniforme entre `DelayMin/MaxSeconds` (60-180s)
 - `TypingSimulator` — typing proporcional ao texto com jitter
-- `WarmupManager` — curva de envios/dia configurável (`Warmup:Curve`); padrão do Dispatcher: `[20, 40, 80, 150, 250, 400, 500]`
+- `WarmupManager` — teto de envios/dia por uma curva configurável (`Warmup:Curve`); curva do Dispatcher hoje: `[10, 15, 25, 40, 60, 80, 100]` (default interno se nenhuma for dada: igual). **A curva avança por dias REALMENTE usados, não por calendário:** o índice é a contagem de dias *anteriores a hoje* com ≥1 envio (`CountActiveDaysBeforeAsync`), então chip parado fica no mesmo nível e a 1ª mensagem do dia já entra com o teto do dia atual. Suporta **bônus manual por dia** (`BonusToday`) e modo **"Disparar todos"** (`UnlimitedToday`, sem teto pra hoje); ao bater o teto efetivo (`AtCap`), a UI abre um modal pra liberar mais
 - `CircuitBreaker` — para em N falhas consecutivas, abre por X minutos
 - `DispatchEngine` — loop: pausa manual? → breaker check → warmup check → dequeue → compose → typing → send → audit → delay
 - `SendAuditEntry` — log de cada envio (telefone, texto renderizado, timings)
@@ -183,6 +229,18 @@ O contato anda no funil sozinho conforme o que acontece — os nomes internos (e
 - Inbound resolve telefone via `@c.us` ou `@lid` (traduzido pra E.164 via WAHA), classifica o contato e, se for opt-out novo, envia **uma** confirmação de saída (entregas duplicadas falham no `SaveChanges` antes do envio → confirmação sai só uma vez)
 - Auto-sync periódico (`WhatsAppAutoSyncService`, padrão 60s): o webhook só dispara em mensagens; entrar num grupo não gera mensagem, então o loop garante que o grupo apareça sem sync manual
 
+### Presence tracking (landing multi-ambiente)
+
+Serve pra a **landing** travar o card de um ambiente enquanto o dashboard dele está aberto (evita dois operadores no mesmo chip). É baseado em **conexão (SSE)**, não em heartbeat:
+
+- O **dashboard** (`App.tsx`) abre um `EventSource` pra `GET /api/presence/connect` do próprio backend e o mantém aberto enquanto a aba existir. Reconecta sozinho se a conexão cair (ex.: API reiniciou).
+- `PresenceTracker` (singleton, por API) conta as **conexões abertas**; `GET /api/presence/status` → `{ active, connections }` com `active = connections > 0`. Endpoints **anônimos** (`PresenceEndpoints`).
+- A **landing** consulta `/api/presence/status` de cada ambiente a cada 2s e trava o card quando `active`. Destrava só após **2 leituras inativas seguidas** (debounce, pra um F5/reconexão do dashboard não piscar o card). Se o backend estiver fora do ar, *fail open* (destrava).
+
+> **Por que conexão e não heartbeat** (correção do "card não trava fora da aba"): um heartbeat depende de um timer de JS, e navegadores **estrangulam timers de abas em segundo plano** (Chrome ~1x/min) e ainda **congelam a aba** (*Page Lifecycle / freeze*) após ~5min — o timer para e o card destravava sozinho com o dashboard ainda aberto. Com SSE, **quem segura a conexão viva é o navegador, não o JS**: minimizar, mandar pra segundo plano ou congelar a aba **não** derruba a conexão → continua "em uso", que é a intenção. Quando a aba fecha, navega ou o processo morre (crash/kill), o socket cai e o servidor percebe na hora via `RequestAborted` (mais o keepalive de 10s pra detectar quedas sem fechamento limpo) → **destrava automático, sem ação manual**.
+>
+> Detalhe relacionado: o `EventSource` em `App.tsx` usa o mesmo fallback do `client.ts` (`VITE_API_URL ?? "http://localhost:5080"`). Sem isso, o Ambiente A em **modo dev** (que não injeta `VITE_API_URL`) não abriria a conexão e o card A nunca travava. Nos ambientes de produção o `VITE_API_URL` vem do build arg (ou do default do Dockerfile).
+
 ## Configurações importantes (`appsettings.json`)
 
 ```json
@@ -195,21 +253,21 @@ O contato anda no funil sozinho conforme o que acontece — os nomes internos (e
   "TypingJitter": 0.15
 },
 "CircuitBreaker": { "FailureThreshold": 3, "OpenDurationMinutes": 120 },
-"Warmup": { "Curve": [20, 40, 80, 150, 250, 400, 500] },
+"Warmup": { "Curve": [10, 15, 25, 40, 60, 80, 100], "StartedOnUtc": "2026-05-24" },
 "Jwt": { "AccessTokenMinutes": 10080 },
 "Seed": { "Admin": { "Email": "admin@local", "Password": "admin123!" } }
 ```
 
 ## Variáveis de ambiente
 
-Veja `.env.example` na raiz. As principais são `WAHA_API_KEY`, `JWT_SIGNING_KEY`, `PG_PASS`.
+Veja `.env.example` na raiz. As principais são `WAHA_API_KEY`, `JWT_SIGNING_KEY`, `PG_PASS`. No multi-ambiente, as credenciais do admin semeado de cada stack vêm de `SEED2_ADMIN_EMAIL`/`SEED2_ADMIN_PASS` (Ambiente B) e `SEED3_ADMIN_EMAIL`/`SEED3_ADMIN_PASS` (Ambiente C) — com defaults `admin-b@local`/`chipB123!` e `admin-c@local`/`chipC123!`.
 
 ## Notas
 
 - **Localhost only**. Não foi pensado pra produção — sem HTTPS, sem Docker Secrets, sem rate limit.
 - **WAHA Core ignora `WAHA_DASHBOARD_*`** — dashboard nativo do WAHA não loga com `admin/admin`. Use o MtrxSys.
 - **Privacidade do WhatsApp** — contatos com privacidade de número ativada aparecem como `@lid`; na importação eles são pulados (sem telefone real), mas em respostas o MtrxSys tenta resolver o LID pro telefone via WAHA pra não perder o opt-out.
-- **Warmup começa em 20 envios/dia**. Pra liberar mais cedo, ajuste o array `Warmup:Curve`. Atenção: a curva fica no `appsettings.json` de **cada serviço**; quem manda no envio é o **Dispatcher** (`src/MtrxSys.Dispatcher/appsettings.json`).
+- **Warmup começa em 10 envios/dia** e só sobe a cada dia de uso real (não por data de calendário). Pra liberar mais cedo, ajuste o array `Warmup:Curve` ou use o **bônus / "Disparar todos"** na UI. Atenção: a curva fica no `appsettings.json` de **cada serviço**; quem manda no envio é o **Dispatcher** (`src/MtrxSys.Dispatcher/appsettings.json`). `Warmup:StartedOnUtc` é só pra exibir "iniciado em ..." — não determina mais o índice da curva.
 
 ## Testes
 

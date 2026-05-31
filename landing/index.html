@@ -177,6 +177,28 @@
       <p class="login-error" data-err></p>
       <button type="submit">Entrar</button>
     </form>
+
+    <form class="login-card" data-env="c">
+      <h1>MtrxSys C</h1>
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="admin-c@local" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Senha</span>
+        <div class="password-field">
+          <input type="password" name="password" value="chipC123!" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </label>
+      <p class="login-error" data-err></p>
+      <button type="submit">Entrar</button>
+    </form>
   </div>
 
   <script>
@@ -203,45 +225,69 @@
     });
 
     // Mapa: qual backend cada card autentica, pra qual frontend redireciona depois.
-    // Alinhado com docker-compose.yml (Stack 1) e docker-compose-2.yml (Stack 2).
+    // Alinhado com docker-compose.yml (Stack 1), docker-compose-2.yml (Stack 2) e -3.yml (Stack 3).
     const ENVS = {
       a: { backend: "http://localhost:5080", target: "http://localhost:5173" },
       b: { backend: "http://localhost:5081", target: "http://localhost:5174" },
+      c: { backend: "http://localhost:5082", target: "http://localhost:5176" },
     };
-
-    // Mapeia env → referência da janela aberta. Usado pra travar o card enquanto o dashboard
-    // está aberto. NÃO persiste em F5 da landing (referências de window.open são per-sessão).
-    const openedWindows = {};
 
     function setCardLocked(env, locked) {
       const card = document.querySelector(`form[data-env="${env}"]`);
       if (!card) return;
+      // Se o card já está no estado certo, não toca (evita flicker do textContent durante render).
+      if (card.classList.contains("in-use") === locked) return;
       card.classList.toggle("in-use", locked);
       const btn = card.querySelector("button[type=submit]");
       btn.disabled = locked;
       btn.textContent = locked ? "Em uso" : "Entrar";
     }
 
-    // Poll a cada 1s: pra cada janela rastreada, se .closed virou true, destrava o card.
-    // .closed funciona mesmo cross-origin (limitação do browser permite só essa checagem).
-    setInterval(() => {
-      for (const env of Object.keys(openedWindows)) {
-        const win = openedWindows[env];
-        if (!win || win.closed) {
-          delete openedWindows[env];
+    // Fonte de verdade do lock: GET /api/presence/status de cada backend. O backend conta
+    // as conexões SSE abertas do dashboard (data.active = há alguma aba aberta). Sobrevive a
+    // F5 da landing (estado vive no backend, não em memória do JS).
+    // Debounce: só destrava após 2 leituras inativas seguidas (~4s), pra um F5/reconexão do
+    // dashboard (queda rápida do SSE) não piscar o card como livre. Trava na 1ª leitura ativa.
+    const inactiveStreak = {};
+    async function pollPresence(env) {
+      const cfg = ENVS[env];
+      try {
+        const resp = await fetch(`${cfg.backend}/api/presence/status`, { cache: "no-store" });
+        if (!resp.ok) {
+          inactiveStreak[env] = 0;
           setCardLocked(env, false);
+          return;
         }
+        const data = await resp.json();
+        if (data.active) {
+          inactiveStreak[env] = 0;
+          setCardLocked(env, true);
+        } else {
+          inactiveStreak[env] = (inactiveStreak[env] || 0) + 1;
+          if (inactiveStreak[env] >= 2) setCardLocked(env, false);
+        }
+      } catch {
+        // Backend down/inalcançável — destrava (fail open). Tentar logar aí vai falhar
+        // de qualquer jeito e a mensagem de erro de rede aparece.
+        inactiveStreak[env] = 0;
+        setCardLocked(env, false);
       }
-    }, 1000);
+    }
+
+    function pollAll() {
+      for (const env of Object.keys(ENVS)) {
+        pollPresence(env);
+      }
+    }
+    pollAll();
+    setInterval(pollAll, 2000);
 
     document.querySelectorAll("form[data-env]").forEach((form) => {
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         const env = form.dataset.env;
-        // Bloqueia re-submit se este ambiente já está em uso (defesa em camada, alem do disabled).
-        if (openedWindows[env] && !openedWindows[env].closed) {
-          return;
-        }
+        // Defesa em camada: se já está em uso, ignora (alem do disabled visual).
+        if (form.classList.contains("in-use")) return;
         const cfg = ENVS[env];
         const errEl = form.querySelector("[data-err]");
         const btn = form.querySelector("button[type=submit]");
@@ -279,11 +325,11 @@
           });
           const newWin = window.open(`${cfg.target}/#${params.toString()}`, "_blank");
           if (newWin) {
-            // Popup abriu — trava o card. Polling acima vai destravar quando o usuario fechar.
-            openedWindows[env] = newWin;
+            // Trava otimista do card: cobre o gap até a aba nova abrir o SSE de presença
+            // (~1s do boot do React). O polling continua e mantém a verdade via backend.
+            inactiveStreak[env] = 0;
             setCardLocked(env, true);
           } else {
-            // Popup bloqueado pelo navegador — feedback e libera o botao.
             errEl.textContent = "Permita popups deste site pra abrir o dashboard em nova aba.";
             btn.disabled = false;
             btn.textContent = originalLabel;

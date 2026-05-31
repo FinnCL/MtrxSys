@@ -107,6 +107,10 @@ services:
       context: ./src/mtrxsys-web
       dockerfile: Dockerfile
       args:
+        # API deste stack (porta publicada do mtrx-api). Explícito por consistência com os
+        # stacks B/C — sem isto o front cai no fallback de client.ts, mas o heartbeat de
+        # presença passava a não ter URL e o card A nunca travava na landing.
+        VITE_API_URL: "http://localhost:5080"
         # Identifica a aba do navegador como "MtrxSys A" pra distinguir do Stack 2.
         VITE_APP_LABEL: "A"
     container_name: mtrx-web

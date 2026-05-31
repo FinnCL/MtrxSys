@@ -202,6 +202,19 @@ function Shell() {
 }
 
 export default function App() {
+  // Presença pra a landing multi-ambiente: mantém um stream SSE aberto pro próprio backend
+  // enquanto esta aba existir. Quem segura a conexão viva é o navegador, não um timer de JS
+  // — então minimizar/segundo plano/congelar a aba NÃO destrava o card. Fechar/navegar/cair
+  // derruba a conexão e o backend destrava sozinho. Independe de estar logado: "aba aberta"
+  // trava o card. O EventSource reconecta sozinho se a conexão cair (ex.: API reiniciou).
+  useEffect(() => {
+    // Mesmo fallback do client.ts: o Ambiente A não injeta VITE_API_URL no build, então
+    // sem isto a conexão de presença não abriria e o card A nunca travaria na landing.
+    const apiUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:5080";
+    const es = new EventSource(`${apiUrl}/api/presence/connect`);
+    return () => es.close();
+  }, []);
+
   return (
     <AuthProvider>
       <Shell />
