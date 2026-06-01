@@ -425,11 +425,16 @@ export function CampaignsScreen() {
     }
   }
 
-  async function onStop() {
+  // Pausa o disparo no backend (grava IsManuallyPaused: o engine para no próximo job e
+  // não retoma sozinho, nem quando o teto de aquecimento reseta à meia-noite). A pausa
+  // vem PRIMEIRO: só se ela der certo é que mexemos no estado da UI — em caso de erro,
+  // nada muda e a tela continua mostrando "Enviando" (e o modal de teto, se aberto), em
+  // vez de fingir que parou. A mensagem muda conforme o contexto que chamou.
+  async function onStop(message = "Envios parados.") {
     try {
       await api.pauseDispatch();
       setPaused(true);
-      setDispatchMsg("Envios parados.");
+      setDispatchMsg(message);
       await loadLive();
     } catch (ex) {
       setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);
@@ -473,6 +478,14 @@ export function CampaignsScreen() {
       setReleasing(false);
     }
   }
+
+  // "Cancelar — retomo amanhã" pausa o disparo de verdade (mesma pausa do "Parar envios",
+  // só com mensagem própria). Antes só fechava o modal via setCapDismissed: `paused` seguia
+  // false, a faixa continuava "Enviando..." e, à meia-noite (teto reseta), o engine voltava
+  // a disparar a fila sozinho. O setPaused(true) do onStop já esconde o modal (showCapModal
+  // exige !paused), então não precisa de flag extra — e se a pausa falhar o modal permanece.
+  const onCancelUntilTomorrow = () =>
+    onStop('Envios pausados. A fila fica guardada — clique "Iniciar envios" quando quiser retomar.');
 
   // Mostra o modal quando: bateu o teto efetivo, ainda há fila, não está pausado e o
   // operador não cancelou hoje. (atCap já considera o bônus liberado.)
@@ -881,7 +894,7 @@ export function CampaignsScreen() {
                 type="button"
                 className="clear-btn"
                 disabled={releasing}
-                onClick={() => setCapDismissed(true)}
+                onClick={() => void onCancelUntilTomorrow()}
               >
                 Cancelar — retomo amanhã
               </button>
