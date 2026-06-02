@@ -49,6 +49,7 @@ function TemplateThumb({ id }: { id: string }) {
 
 const STAT_CHIPS: { key: DispatchJobStatus; label: string; cls: string }[] = [
   { key: "Pending", label: "Na fila", cls: "stat-pending" },
+  { key: "Retrying", label: "Reenviando", cls: "stat-retrying" },
   { key: "Sent", label: "Enviadas", cls: "stat-sent" },
   { key: "Failed", label: "Falharam", cls: "stat-failed" },
   { key: "Skipped", label: "Puladas", cls: "stat-skipped" },
@@ -234,9 +235,10 @@ export function CampaignsScreen() {
   if (warmup && !warmup.atCap && capDismissed) setCapDismissed(false);
 
   // Fim do envio: a fila tinha contatos e zerou enquanto enviava (não pausado, não foi
-  // limpar/renovar). Mostra o modal de conclusão uma vez.
+  // limpar/renovar). Inclui Retrying — só está concluído quando nada mais está na fila nem
+  // aguardando reenvio (senão o modal apareceria cedo, com reenvios ainda pendentes).
   useEffect(() => {
-    const pending = stats?.pending ?? 0;
+    const pending = (stats?.pending ?? 0) + (stats?.retrying ?? 0);
     const prev = prevPendingRef.current;
     prevPendingRef.current = pending;
     if (prev > 0 && pending === 0) {
@@ -251,6 +253,7 @@ export function CampaignsScreen() {
   function countFor(key: DispatchJobStatus): number {
     if (!stats) return 0;
     return key === "Pending" ? stats.pending
+      : key === "Retrying" ? stats.retrying
       : key === "Sent" ? stats.sent
       : key === "Failed" ? stats.failed
       : stats.skipped;
@@ -294,8 +297,10 @@ export function CampaignsScreen() {
     selectedMessageId !== null && messages.some((m) => m.id === selectedMessageId)
       ? [selectedMessageId]
       : [];
-  const pendingCount = stats?.pending ?? 0;
-  const totalJobs = stats ? stats.pending + stats.sent + stats.failed + stats.skipped : 0;
+  // "Na fila" inclui os que falharam e voltaram pra fila (Retrying) — eles ainda vão sair, então
+  // contam como restantes (banner "Enviando", botão de adicionar, confirmação de limpar fila etc.).
+  const pendingCount = stats ? stats.pending + stats.retrying : 0;
+  const totalJobs = stats ? stats.pending + stats.sent + stats.failed + stats.skipped + stats.retrying : 0;
 
   // Tabela de resultados: busca por telefone/nome e paginação, tudo sobre o que já foi carregado.
   const REPORT_PAGE_SIZE = 25;
@@ -706,19 +711,22 @@ export function CampaignsScreen() {
           </>
         )}
         {/* Contatos importados DEPOIS da fila atual aparecem como "novos disponíveis".
-            Botão pra adicionar só aparece quando há fila em curso (pausada ou enviando) E
-            existem novos contatos no público escolhido — caso contrário, o fluxo padrão
-            "Disparar" já cobre. */}
-        {pendingCount > 0 && audienceCount !== null && audienceCount > 0 && (
+            Enquanto há fila em curso (pausada ou enviando), o botão fica sempre visível e
+            dinâmico: mostra quantos novos há pra adicionar, ou avisa quando não há nenhum. */}
+        {pendingCount > 0 && (
           <div className="add-new-row">
             <button
               type="button"
               className="dispatch-btn"
               onClick={() => void onAddNew()}
-              disabled={dispatching || selectedIds.length === 0}
+              disabled={dispatching || selectedIds.length === 0 || !audienceCount}
               title="Adiciona à fila atual apenas os contatos novos do público escolhido (não re-envia pra quem já recebeu)"
             >
-              {dispatching ? "Adicionando..." : `+ Adicionar ${audienceCount} novo(s) à fila`}
+              {dispatching
+                ? "Adicionando..."
+                : audienceCount && audienceCount > 0
+                  ? `+ Adicionar ${audienceCount} novo(s) à fila`
+                  : "Nenhum novo a adicionar à fila"}
             </button>
           </div>
         )}
@@ -815,6 +823,9 @@ export function CampaignsScreen() {
                     <span className={`stat-chip stat-${i.status.toLowerCase()}`}>
                       {DISPATCH_STATUS_LABELS[i.status]}
                     </span>
+                    {(i.status === "Retrying" || i.status === "Failed") && i.attemptCount > 0 && (
+                      <span className="muted small"> · {i.attemptCount + 1}ª tentativa</span>
+                    )}
                   </td>
                   <td>{new Date(i.sentAt ?? i.scheduledAt).toLocaleString()}</td>
                   <td className="muted small">{i.errorReason || "-"}</td>

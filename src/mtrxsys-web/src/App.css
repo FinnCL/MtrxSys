@@ -240,6 +240,7 @@ input[type="checkbox"], input[type="radio"] {
 .stat-pending { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
 .stat-sent { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 .stat-failed { background: rgba(217, 89, 108, 0.2); color: var(--danger); }
+.stat-retrying { background: rgba(168, 85, 247, 0.2); color: #a855f7; }
 .stat-skipped { background: var(--bg-3); color: var(--muted); }
 .stat-greeting, .stat-intro, .stat-hook, .stat-optout { background: rgba(74, 141, 244, 0.2); color: var(--accent); }
 

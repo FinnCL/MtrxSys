@@ -6,6 +6,7 @@ export const DISPATCH_STATUS_LABELS: Record<DispatchJobStatus, string> = {
   Sent: "Enviada",
   Failed: "Falhou",
   Skipped: "Pulada",
+  Retrying: "Reenviando",
 };
 
 /** Monta uma planilha de uma aba a partir de linhas-objeto e dispara o download. */

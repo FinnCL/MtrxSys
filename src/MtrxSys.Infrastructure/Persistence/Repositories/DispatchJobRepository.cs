@@ -8,7 +8,10 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
 {
     public Task<DispatchJob?> DequeueNextPendingAsync(DateTimeOffset until, CancellationToken ct) =>
         db.DispatchJobs
-            .Where(j => j.Status == DispatchStatus.Pending && j.ScheduledAt <= until)
+            // Retrying = falhou e voltou pro fim da fila; é processado igual a Pending. Como o
+            // reenvio grava ScheduledAt = agora, ele naturalmente sai depois dos Pending antigos.
+            .Where(j => (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)
+                && j.ScheduledAt <= until)
             .OrderBy(j => j.ScheduledAt)
             .FirstOrDefaultAsync(ct);
 
@@ -34,7 +37,8 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         var sent = grouped.FirstOrDefault(g => g.Status == DispatchStatus.Sent)?.Count ?? 0;
         var failed = grouped.FirstOrDefault(g => g.Status == DispatchStatus.Failed)?.Count ?? 0;
         var skipped = grouped.FirstOrDefault(g => g.Status == DispatchStatus.Skipped)?.Count ?? 0;
-        return new DispatchStats(pending, sent, failed, skipped);
+        var retrying = grouped.FirstOrDefault(g => g.Status == DispatchStatus.Retrying)?.Count ?? 0;
+        return new DispatchStats(pending, sent, failed, skipped, retrying);
     }
 
     public async Task<IReadOnlyList<DispatchJob>> ListRecentAsync(int limit, CancellationToken ct) =>
@@ -57,7 +61,7 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         // Histórico (Sent/Failed/Skipped) no topo, mais recente primeiro: o operador vê a
         // última atividade direto.
         var historyJobs = await baseQuery
-            .Where(j => j.Status != DispatchStatus.Pending)
+            .Where(j => j.Status != DispatchStatus.Pending && j.Status != DispatchStatus.Retrying)
             .OrderByDescending(j => j.SentAt ?? j.ScheduledAt)
             .Take(limit)
             .ToListAsync(ct);
@@ -70,7 +74,7 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         // exibida.
         var remaining = Math.Max(0, limit - historyJobs.Count);
         var pendingJobs = await baseQuery
-            .Where(j => j.Status == DispatchStatus.Pending)
+            .Where(j => j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)
             .OrderBy(j => j.ScheduledAt)
             .Take(remaining)
             .ToListAsync(ct);
@@ -83,12 +87,17 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         return await BuildReportAsync(jobs, ct);
     }
 
+    // "Na fila" = Pending E Retrying (este último falhou uma vez e voltou pra fila). Ambos ainda
+    // sairiam — então limpar a fila precisa remover os dois, senão um Retrying escaparia da limpeza.
     public Task<int> ClearPendingAsync(CancellationToken ct) =>
-        db.DispatchJobs.Where(j => j.Status == DispatchStatus.Pending).ExecuteDeleteAsync(ct);
+        db.DispatchJobs
+            .Where(j => j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)
+            .ExecuteDeleteAsync(ct);
 
     public Task<int> ClearPendingByTemplateAsync(Guid templateId, CancellationToken ct) =>
         db.DispatchJobs
-            .Where(j => j.TemplateId == templateId && j.Status == DispatchStatus.Pending)
+            .Where(j => j.TemplateId == templateId
+                && (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying))
             .ExecuteDeleteAsync(ct);
 
     public Task<int> ClearAllAsync(CancellationToken ct) =>
@@ -111,7 +120,8 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
                 Status: j.Status.ToString(),
                 ScheduledAt: j.ScheduledAt,
                 SentAt: j.SentAt,
-                ErrorReason: j.ErrorReason);
+                ErrorReason: j.ErrorReason,
+                AttemptCount: j.AttemptCount);
         }).ToList();
     }
 }

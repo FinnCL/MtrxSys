@@ -174,6 +174,7 @@ export interface DispatchStats {
   sent: number;
   failed: number;
   skipped: number;
+  retrying: number;
 }
 
 // Estado do aquecimento do chip (vindo de /api/dispatch/warmup). day é base-1.
@@ -194,7 +195,7 @@ export interface WarmupStatus {
   curve: number[];
 }
 
-export type DispatchJobStatus = "Pending" | "Sent" | "Failed" | "Skipped";
+export type DispatchJobStatus = "Pending" | "Sent" | "Failed" | "Skipped" | "Retrying";
 
 export interface DispatchReportItem {
   phone: string | null;
@@ -203,14 +204,16 @@ export interface DispatchReportItem {
   scheduledAt: string;
   sentAt: string | null;
   errorReason: string | null;
+  attemptCount: number;
 }
 
 export interface DispatchJob {
   id: string;
   contactId: string;
   templateId: string;
-  status: "Pending" | "Sent" | "Failed" | "Skipped";
+  status: DispatchJobStatus;
   scheduledAt: string;
   sentAt: string | null;
   errorReason: string | null;
+  attemptCount: number;
 }

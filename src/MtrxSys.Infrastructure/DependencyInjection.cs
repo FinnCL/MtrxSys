@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http.Resilience;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
@@ -73,14 +74,36 @@ public static class DependencyInjection
         services.AddScoped<CircuitBreaker>();
         services.AddScoped<WarmupManager>();
 
+        // Timeout efetivo das chamadas ao WAHA. O default do handler de resiliência é 30s e
+        // IGNORA o Waha:TimeoutSeconds — por isso lemos a config aqui e configuramos o Polly.
+        var wahaTimeoutSeconds = config.GetValue<int?>($"{WahaOptions.SectionName}:TimeoutSeconds") ?? 30;
+        var wahaTimeout = TimeSpan.FromSeconds(wahaTimeoutSeconds);
+
         services.AddHttpClient<IWahaClient, WahaClient>((sp, client) =>
         {
             var wahaOpts = sp.GetRequiredService<IOptions<WahaOptions>>().Value;
             var baseUrl = wahaOpts.BaseUrl.EndsWith('/') ? wahaOpts.BaseUrl : wahaOpts.BaseUrl + "/";
             client.BaseAddress = new Uri(baseUrl);
-            client.Timeout = TimeSpan.FromSeconds(wahaOpts.TimeoutSeconds);
+            // Quem governa o tempo é o handler de resiliência (Polly). O HttpClient não impõe teto
+            // próprio — senão cortaria antes (em 30s) e brigaria com o TotalRequestTimeout abaixo.
+            client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
         })
-        .AddStandardResilienceHandler();
+        .AddStandardResilienceHandler().Configure(options =>
+        {
+            // AttemptTimeout é o teto REAL por chamada (honra o Waha:TimeoutSeconds). Como não há
+            // retry de transporte (MaxRetryAttempts=0), é ele que governa o tempo de cada sendText.
+            options.AttemptTimeout.Timeout = wahaTimeout;
+            // Validação do Polly: TotalRequestTimeout precisa ser ESTRITAMENTE maior que o
+            // AttemptTimeout — deixamos o dobro (limite externo que, sem retries, não dispara).
+            options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(wahaTimeoutSeconds * 2);
+            // Validação do Polly: SamplingDuration do breaker interno >= 2 × AttemptTimeout.
+            options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(wahaTimeoutSeconds * 2);
+            // Não re-tenta métodos não idempotentes (POST do sendText → evita duplicar a mensagem);
+            // GETs (status/grupos/qr) continuam com retry. O reenvio do disparo é feito no nível do
+            // app (DispatchEngine), de forma controlada. NB: MaxRetryAttempts=0 é REJEITADO pela
+            // validação do handler (precisa ser >= 1) — por isso desligamos via ShouldHandle.
+            options.Retry.DisableForUnsafeHttpMethods();
+        });
 
         services.AddLogging(b => b.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning));
 

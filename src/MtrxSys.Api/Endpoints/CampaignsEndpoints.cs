@@ -388,6 +388,7 @@ public static class CampaignsEndpoints
                 scheduledAt = i.ScheduledAt,
                 sentAt = i.SentAt,
                 errorReason = i.ErrorReason,
+                attemptCount = i.AttemptCount,
             }));
         });
 
@@ -404,6 +405,7 @@ public static class CampaignsEndpoints
                 scheduledAt = j.ScheduledAt,
                 sentAt = j.SentAt,
                 errorReason = j.ErrorReason,
+                attemptCount = j.AttemptCount,
             }));
         });
 

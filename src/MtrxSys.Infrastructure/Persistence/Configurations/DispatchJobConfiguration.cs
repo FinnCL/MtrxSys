@@ -19,6 +19,7 @@ internal sealed class DispatchJobConfiguration : IEntityTypeConfiguration<Dispat
         b.Property(x => x.SentAt).HasColumnName("sent_at");
         b.Property(x => x.WahaMessageId).HasColumnName("waha_message_id").HasMaxLength(120);
         b.Property(x => x.ErrorReason).HasColumnName("error_reason").HasMaxLength(500);
+        b.Property(x => x.AttemptCount).HasColumnName("attempt_count").HasDefaultValue(0);
         b.HasIndex(x => new { x.Status, x.ScheduledAt });
         b.Ignore(x => x.DomainEvents);
         b.Property<uint>("xmin").HasColumnName("xmin").IsConcurrencyToken().ValueGeneratedOnAddOrUpdate();

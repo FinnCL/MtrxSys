@@ -1,3 +1,4 @@
+using System.Net.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
@@ -36,6 +37,7 @@ public sealed class DispatchEngine(
         var sent = 0;
         var failed = 0;
         var skipped = 0;
+        var retried = 0;
         var templateCache = new Dictionary<Guid, MtrxSys.Core.Domain.Messages.MessageTemplate>();
         var sessionId = dispatchOpts.Value.SessionId;
 
@@ -214,17 +216,59 @@ public sealed class DispatchEngine(
 #pragma warning disable CA1031
             catch (Exception ex)
             {
-                log.LogWarning(ex, "Dispatch failed for job {JobId}", job.Id);
-                job.MarkFailed(ex.Message, clock.UtcNow);
-                await breaker.RecordFailureAsync(ex.Message, ct);
-                await uow.SaveChangesAsync(ct);
+                var now = clock.UtcNow;
                 metrics.RecordSendFailure(ex.Message);
-                failed++;
+                // Erro permanente (4xx do WAHA: número inválido etc.) não melhora com reenvio.
+                // Falha transitória (timeout/5xx/conexão) reenvia ATÉ o teto de tentativas.
+                if (!IsPermanentFailure(ex) && job.CanRetry(dispatchOpts.Value.MaxSendAttempts))
+                {
+                    // Volta pro FIM da fila (ScheduledAt = agora) pra um novo envio. NÃO conta pro
+                    // circuit breaker: um contato que reenfileira não pode pausar o sistema todo.
+                    job.ScheduleRetry(now, ex.Message);
+                    await uow.SaveChangesAsync(ct);
+                    retried++;
+                    log.LogInformation(
+                        "Envio do job {JobId} falhou ({Reason}); reenfileirado (tentativa {Attempt} de {Max}).",
+                        job.Id, ex.Message, job.AttemptCount + 1, dispatchOpts.Value.MaxSendAttempts);
+                    // Respiro curto SÓ no reenvio: o job volta com ScheduledAt = agora e seria
+                    // re-dequeuado na hora se a fila estiver vazia. Evita martelar o WAHA em loop.
+                    await Task.Delay(FailureCooldown, ct);
+                }
+                else
+                {
+                    // Definitivo: esgotou as tentativas ou é erro permanente. Aí sim conta pro
+                    // breaker (chip genuinamente quebrado acaba pausando após falhas seguidas).
+                    log.LogWarning(ex, "Dispatch failed for job {JobId}", job.Id);
+                    job.MarkFailed(ex.Message, now);
+                    await breaker.RecordFailureAsync(ex.Message, ct);
+                    await uow.SaveChangesAsync(ct);
+                    failed++;
+                }
             }
 #pragma warning restore CA1031
         }
 
-        return new DispatchCycleResult(processed, sent, failed, skipped);
+        return new DispatchCycleResult(processed, sent, failed, skipped, retried);
+    }
+
+    // Respiro após uma falha, pra não martelar o WAHA em loop quando a fila só tem o job que falha.
+    private static readonly TimeSpan FailureCooldown = TimeSpan.FromSeconds(5);
+
+    // Falha definitiva = a que não melhora reenviando: respostas 4xx do WAHA (request inválido,
+    // número ruim), EXCETO 408 (timeout) e 429 (rate limit), que são transitórios. Timeout do
+    // Polly, 5xx e erros de conexão caem no padrão "transitório" (reenvia).
+    private static bool IsPermanentFailure(Exception ex)
+    {
+        if (ex is HttpRequestException http && http.StatusCode is { } code)
+        {
+            var n = (int)code;
+            if (n is 408 or 429)
+            {
+                return false;
+            }
+            return n is >= 400 and < 500;
+        }
+        return false;
     }
 
     // Envolve a gravação no chat: nunca propaga exceção. Se falhar (concorrência na conversa,
@@ -300,4 +344,4 @@ public sealed class DispatchEngine(
     }
 }
 
-public sealed record DispatchCycleResult(int Processed, int Sent, int Failed, int Skipped);
+public sealed record DispatchCycleResult(int Processed, int Sent, int Failed, int Skipped, int Retried);

@@ -82,12 +82,14 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         // Não re-seleciona quem já recebeu disparo. Fonte de verdade do "já enviei" é o
         // LastSentAt — o MESMO marcador do selo "Não respondeu" —, então a exclusão bate com o
         // que aparece na tela mesmo que os jobs já tenham sido limpos. Inclui também quem está
-        // só na fila (Pending). Falhas ficam de fora de propósito (reenviáveis). "Renovar lista"
-        // zera LastSentAt + jobs, reabilitando todos.
+        // na fila (Pending) OU em reenvio automático (Retrying) — senão um contato que falhou e
+        // voltou pra fila apareceria de novo como "novo a adicionar". Falha DEFINITIVA (Failed)
+        // fica de fora de propósito (re-adicionável manualmente). "Renovar lista" zera tudo.
         if (filter.ExcludeAlreadyDispatched)
         {
             q = q.Where(c => c.LastSentAt == null && !db.DispatchJobs.Any(j =>
-                j.ContactId == c.Id && j.Status == DispatchStatus.Pending));
+                j.ContactId == c.Id
+                && (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)));
         }
         // Nunca dispara pro próprio número conectado (evita auto-envio).
         if (!string.IsNullOrWhiteSpace(filter.ExcludePhoneE164))

@@ -19,4 +19,10 @@ public sealed class DispatchOptions
     // Para o ciclo de disparo se a sessão WAHA do chip não estiver "Working" (caiu/deslogou),
     // antes de queimar tentativas e abrir o circuit breaker por falhas.
     public bool PauseWhenSessionDown { get; set; } = true;
+
+    // Quantas vezes, no total, um disparo é tentado antes de virar falha definitiva.
+    // 2 = a tentativa original + 1 reenvio automático (o contato volta pro fim da fila).
+    // Falha transitória abaixo desse teto reenvia sem contar pro circuit breaker; ao atingir
+    // o teto, vira Failed e aí sim conta (chip genuinamente quebrado acaba pausando).
+    public int MaxSendAttempts { get; set; } = 2;
 }
