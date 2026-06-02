@@ -51,7 +51,9 @@
       gap: 10px;
       border: 1px solid var(--border);
     }
-    .login-card h1 { margin: 0 0 2px; font-size: 18px; }
+    .login-card h1 { margin: 0 0 2px; font-size: 18px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    /* Host (localhost:porta) que o card abre — preenchido via JS a partir do mapa ENVS. */
+    .env-host { font-size: 12px; font-weight: 400; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
     .login-card input {
       background: var(--bg);
@@ -443,6 +445,16 @@
     setInterval(pollAll, 2000);
 
     document.querySelectorAll("form[data-env]").forEach((form) => {
+      // Mostra, ao lado do título, qual localhost este card abre. Fonte única: o mapa ENVS,
+      // então realocar uma porta lá reflete aqui sem editar o HTML de cada card.
+      const host = ENVS[form.dataset.env]?.target;
+      if (host) {
+        const span = document.createElement("span");
+        span.className = "env-host";
+        span.textContent = host.replace(/^https?:\/\//, "");
+        form.querySelector("h1").appendChild(span);
+      }
+
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         const env = form.dataset.env;

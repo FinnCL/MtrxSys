@@ -93,7 +93,7 @@ down-all.cmd    # derruba os 10 stacks em ordem inversa (preserva dados)
 
 O `up-all.cmd` aguarda as 10 APIs ficarem `healthy` (containers `mtrx-api`, `mtrx2-api`…`mtrx10-api`) e abre a **landing em `http://localhost:5175`**. Não precisa subir todos: pra um subconjunto, suba os que quiser com `docker compose -f docker-compose-N.yml up -d --build`.
 
-**Landing (`localhost:5175`):** mostra um card por ambiente (A–J) em **grade 5×2** (5 em cima, 5 embaixo; responsiva), já preenchido com as credenciais. Ao entrar, ela autentica no backend daquele ambiente e abre o dashboard correspondente numa aba nova, passando o JWT pelo fragment da URL (`#token=...`) — que o app consome e limpa do histórico na hora. Cada card mostra **"🟢 Em uso"** e trava quando aquele dashboard está aberto, via *presence tracking* (veja [Presence tracking](#presence-tracking-landing-multi-ambiente)).
+**Landing (`localhost:5175`):** mostra um card por ambiente (A–J) em **grade 5×2** (5 em cima, 5 embaixo; responsiva), já preenchido com as credenciais. Cada card exibe, ao lado do título, o **`localhost:porta` que ele abre** (ex.: `localhost:5173`) — preenchido dinamicamente a partir do mapa `ENVS` do próprio HTML, então trocar uma porta lá reflete no rótulo sem editar cada card. Ao entrar, ela autentica no backend daquele ambiente e abre o dashboard correspondente numa aba nova, passando o JWT pelo fragment da URL (`#token=...`) — que o app consome e limpa do histórico na hora. Cada card mostra **"🟢 Em uso"** e trava quando aquele dashboard está aberto, via *presence tracking* (veja [Presence tracking](#presence-tracking-landing-multi-ambiente)).
 
 Os ambientes B–J são **espelhos** do A (mesmo código), diferindo só nas portas, no banco/WAHA isolados e no admin semeado — defina `SEED{N}_*` no ambiente pra trocar as credenciais padrão de cada stack.
 
@@ -217,12 +217,14 @@ O contato anda no funil sozinho conforme o que acontece — os nomes internos (e
 - **Pausa manual (kill switch):** `SystemState.IsManuallyPaused`; o `DispatchEngine` checa no topo de cada ciclo e para
 - `SpintaxExpander` — `{a|b|{c|d}}` recursivo, escape `\{ \| \}`, depth 8, output 4 KB max
 - `MessageComposer` — Spintax + placeholders `{{name|default}}`, `{{phone}}`, `{{group}}`, `{{theme}}`
+- **Rodapé de opt-out na 1ª mensagem** (`Dispatch:OptOutFooter`) — anexado **só na primeira** mensagem a cada contato (`LastSentAt == null`), pra dar uma saída explícita ("responda SAIR") em vez de a pessoa denunciar/bloquear. Não duplica se o template já menciona "sair" (match por palavra inteira); string vazia desliga o recurso
 - `OptOutDetector` — detecta pedidos de saída em respostas curtas, ignorando frases longas
 - `DelayPolicy` — random uniforme entre `DelayMin/MaxSeconds` (60-180s)
 - `TypingSimulator` — typing proporcional ao texto com jitter
-- `WarmupManager` — teto de envios/dia por uma curva configurável (`Warmup:Curve`); curva do Dispatcher hoje: `[10, 15, 25, 40, 60, 80, 100]` (default interno se nenhuma for dada: igual). **A curva avança por dias REALMENTE usados, não por calendário:** o índice é a contagem de dias *anteriores a hoje* com ≥1 envio (`CountActiveDaysBeforeAsync`), então chip parado fica no mesmo nível e a 1ª mensagem do dia já entra com o teto do dia atual. Suporta **bônus manual por dia** (`BonusToday`) e modo **"Disparar todos"** (`UnlimitedToday`, sem teto pra hoje); ao bater o teto efetivo (`AtCap`), a UI abre um modal pra liberar mais
+- `WarmupManager` — teto de envios/dia por uma curva configurável (`Warmup:Curve`); curva do Dispatcher hoje: `[10, 15, 25, 40, 60, 80, 100]` (default interno se nenhuma for dada: igual). **A curva avança por dias REALMENTE usados, não por calendário:** o índice é a contagem de dias *anteriores a hoje* com ≥1 envio (`CountActiveDaysBeforeAsync`), então chip parado fica no mesmo nível e a 1ª mensagem do dia já entra com o teto do dia atual. Suporta **bônus manual por dia** (`BonusToday`) e modo **"Disparar todos"** (`UnlimitedToday`, sem teto pra hoje); ao bater o teto efetivo (`AtCap`), a UI abre um modal pra liberar mais (ou **"Cancelar — retomo amanhã"**, que **pausa o disparo de verdade** no backend — `IsManuallyPaused` — pra a fila não voltar a disparar sozinha quando o teto reseta à meia-noite; só fecha o modal se a pausa der certo)
 - `CircuitBreaker` — para em N falhas consecutivas, abre por X minutos
-- `DispatchEngine` — loop: pausa manual? → breaker check → warmup check → dequeue → compose → typing → send → audit → delay
+- **Guarda de sessão WAHA** (`Dispatch:PauseWhenSessionDown`) — havendo job pra enviar, o engine checa a sessão WAHA do chip; se estiver em estado **definitivo** de queda (`Stopped`/`Failed`) ele **para o ciclo** (o job fica `Pending` e retoma quando a sessão voltar), em vez de queimar tentativas e abrir o circuit breaker. Estados transitórios (`Starting`/`ScanQrCode`) e erro ao ler o status **não** travam (assume ok); a checagem só roda quando há job (não bate no WAHA em ciclos ociosos)
+- `DispatchEngine` — loop: pausa manual? → breaker check → warmup check → dequeue → **sessão WAHA ok?** → compose → typing → send → audit → delay
 - `SendAuditEntry` — log de cada envio (telefone, texto renderizado, timings)
 - Relatório de envios (`/report`, `/status`) + export pra Excel (.xlsx) e "Renovar lista" (backup + zera)
 
@@ -264,7 +266,9 @@ Serve pra a **landing** travar o card de um ambiente enquanto o dashboard dele e
   "DelayMaxSeconds": 180,
   "TypingMinSeconds": 2,
   "TypingMaxSeconds": 5,
-  "TypingJitter": 0.15
+  "TypingJitter": 0.15,
+  "OptOutFooter": "Se não quiser mais receber mensagens, responda SAIR.",
+  "PauseWhenSessionDown": true
 },
 "CircuitBreaker": { "FailureThreshold": 3, "OpenDurationMinutes": 120 },
 "Warmup": { "Curve": [10, 15, 25, 40, 60, 80, 100], "StartedOnUtc": "2026-05-24" },
