@@ -3,6 +3,11 @@ import { api, getToken, setToken } from "../api/client";
 import { AuthCtx, type AuthState, type AuthUser } from "./useAuth";
 
 const USER_KEY = "mtrx_user";
+const LANDING_KEY = "mtrx_landing_url";
+
+// Só aceita voltar pra uma origem localhost (evita open-redirect via fragment forjado).
+const isSafeLandingUrl = (url: string | null): url is string =>
+  !!url && /^https?:\/\/localhost(:\d+)?$/i.test(url);
 
 function readStoredUser(): AuthUser | null {
   const raw = localStorage.getItem(USER_KEY);
@@ -28,6 +33,12 @@ function consumeAuthFromUrlHash(): AuthUser | null {
     const u = JSON.parse(userJson) as AuthUser;
     setToken(token);
     localStorage.setItem(USER_KEY, JSON.stringify(u));
+    // Guarda de onde o usuário veio (a landing), pra o logout voltar pro hub. sessionStorage:
+    // por aba, sobrevive a F5, e some quando a aba fecha (acesso direto = sem isto = login local).
+    const landing = params.get("landing");
+    if (isSafeLandingUrl(landing)) {
+      sessionStorage.setItem(LANDING_KEY, landing);
+    }
     // Tira o hash da URL pra não vazar o JWT no histórico do navegador nem em links copiados.
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
     return u;
@@ -61,6 +72,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout: () => {
         setToken(null);
         localStorage.removeItem(USER_KEY);
+        // Veio da landing multi-ambiente? Volta pro hub (os 10 cards) em vez do login isolado
+        // deste ambiente. Acesso direto (sem landing guardada) → login local, como antes.
+        const landing = sessionStorage.getItem(LANDING_KEY);
+        if (isSafeLandingUrl(landing)) {
+          window.location.href = landing;
+          return;
+        }
         setUser(null);
       },
     }),

@@ -14,6 +14,7 @@ public sealed class WhatsAppAutoSyncService(
     IServiceProvider services,
     IOptions<SyncOptions> syncOpts,
     IOptions<DispatchOptions> dispatchOpts,
+    IOptions<WahaOptions> wahaOpts,
     ILogger<WhatsAppAutoSyncService> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -58,7 +59,20 @@ public sealed class WhatsAppAutoSyncService(
         var sp = scope.ServiceProvider;
 
         var waha = sp.GetRequiredService<IWahaClient>();
-        var status = await waha.GetSessionStatusAsync(dispatchOpts.Value.SessionId, ct);
+        var sessionId = dispatchOpts.Value.SessionId;
+        var status = await waha.GetSessionStatusAsync(sessionId, ct);
+
+        // Religa a sessão parada (chip pareado reusa a auth salva, sem QR) pra o disparo rodar
+        // desassistido — sem isso, depois de um restart o Dispatcher fica pausado até alguém
+        // clicar "Iniciar sessão". Só de Stopped: Failed fica como "chip com falha" (decisão do
+        // operador) e os demais estados são transitórios. O próximo tick já sincroniza.
+        if (status == WahaSessionStatus.Stopped && wahaOpts.Value.AutoStart)
+        {
+            log.LogInformation("Auto-start: sessão {Session} parada, iniciando.", sessionId);
+            await waha.EnsureSessionStartedAsync(sessionId, ct);
+            return;
+        }
+
         if (status != WahaSessionStatus.Working)
         {
             log.LogDebug("Auto-sync: sessão {Status}, pulando ciclo.", status);

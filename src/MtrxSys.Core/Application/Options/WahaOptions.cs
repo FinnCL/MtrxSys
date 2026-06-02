@@ -18,4 +18,10 @@ public sealed class WahaOptions
     public string? WebhookCallbackUrl { get; set; }
 
     public string[] WebhookEvents { get; set; } = ["message", "message.any"];
+
+    // Religa a sessão automaticamente quando estiver parada (Stopped), reusando a auth salva
+    // (sem QR). Pensado pro disparo desassistido: se a sessão cai (restart do WAHA/stack), o chip
+    // pareado volta a Working sozinho em ~1 ciclo do auto-sync, em vez de esperar clique manual.
+    // NÃO mexe em Failed (fica como "chip com falha") nem força nada além de iniciar.
+    public bool AutoStart { get; set; } = true;
 }

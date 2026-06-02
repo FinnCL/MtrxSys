@@ -20,6 +20,7 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<MtrxSys.Core.Application.Abstractions.ICurrentUserAccessor, MtrxSys.Api.Startup.HttpCurrentUserAccessor>();
 builder.Services.AddSingleton<MtrxSys.Api.Services.PresenceTracker>();
+builder.Services.AddMemoryCache(); // cache curto do status do chip (/api/presence/chip)
 builder.Services.AddOptions<MtrxSys.Api.Options.WebhookOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Api.Options.WebhookOptions.SectionName));
 builder.Services.AddOptions<MtrxSys.Core.Application.Options.SyncOptions>()

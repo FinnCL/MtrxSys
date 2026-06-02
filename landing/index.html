@@ -54,6 +54,24 @@
     .login-card h1 { margin: 0 0 2px; font-size: 18px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     /* Host (localhost:porta) que o card abre — preenchido via JS a partir do mapa ENVS. */
     .env-host { font-size: 12px; font-weight: 400; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    /* Pílula ÚNICA de status do card, abaixo do título. Mostra um estado por vez, com
+       prioridade Em uso > status do chip (lógica no JS). Estados: Em uso (dashboard aberto),
+       Conectado (sessão WORKING), Chip com falha (FAILED), Desconectado (padrão — sem chip/QR,
+       fora do ar ou qualquer outro). A bolinha usa a cor do texto (currentColor). */
+    .chip-status {
+      align-self: flex-start;
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted); /* default = desconectado */
+    }
+    .chip-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+    .chip-status.inuse { color: var(--accent); }
+    .chip-status.paired { color: var(--accent); }
+    .chip-status.failed { color: var(--danger); }
+    /* .disconnected não precisa de regra: a cor base de .chip-status já é var(--muted). */
     .login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
     .login-card input {
       background: var(--bg);
@@ -102,19 +120,10 @@
     .page-title { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
 
     /* Estado "em uso": card travado enquanto o dashboard correspondente está aberto.
-       Borda verde + badge no canto + botão disabled. JS abaixo controla a classe. */
+       Borda verde + botão disabled. O texto "Em uso" agora vai na pílula única de status
+       (.chip-status), não num badge separado. JS abaixo controla a classe. */
     .login-card { position: relative; transition: border-color 0.2s; }
     .login-card.in-use { border-color: var(--accent); }
-    .login-card.in-use::before {
-      content: "🟢 Em uso";
-      position: absolute;
-      top: 10px;
-      right: 12px;
-      font-size: 11px;
-      color: var(--accent);
-      font-weight: 600;
-      letter-spacing: 0.3px;
-    }
     .login-card.in-use input,
     .login-card.in-use .password-toggle { opacity: 0.55; pointer-events: none; }
     .login-card.in-use button[type="submit"] {
@@ -394,15 +403,38 @@
       j: { backend: "http://localhost:5089", target: "http://localhost:5183" },
     };
 
+    // Pílula ÚNICA de status por card. Dois pollers alimentam o estado (presença → inUseByEnv;
+    // chip → chipByEnv) e renderStatus decide o que mostrar, com prioridade Em uso > chip.
+    const STATUS_LABELS = {
+      inuse: "Em uso",
+      paired: "Pareado",
+      failed: "Chip com falha",
+      disconnected: "Desconectado",
+    };
+    const inUseByEnv = {};
+    const chipByEnv = {};
+    function renderStatus(env) {
+      const el = document.querySelector(`form[data-env="${env}"] .chip-status`);
+      if (!el) return; // pílula ainda não criada (1º poll antes do forEach) — ignora
+      const state = inUseByEnv[env] ? "inuse" : (chipByEnv[env] || "disconnected");
+      if (el.dataset.state === state) return; // sem mudança → não toca no DOM
+      el.dataset.state = state;
+      el.className = `chip-status ${state}`;
+      el.textContent = STATUS_LABELS[state];
+    }
+
     function setCardLocked(env, locked) {
       const card = document.querySelector(`form[data-env="${env}"]`);
       if (!card) return;
-      // Se o card já está no estado certo, não toca (evita flicker do textContent durante render).
-      if (card.classList.contains("in-use") === locked) return;
-      card.classList.toggle("in-use", locked);
-      const btn = card.querySelector("button[type=submit]");
-      btn.disabled = locked;
-      btn.textContent = locked ? "Em uso" : "Entrar";
+      // Só mexe na classe/botão quando o lock muda (evita flicker do textContent durante render).
+      if (card.classList.contains("in-use") !== locked) {
+        card.classList.toggle("in-use", locked);
+        const btn = card.querySelector("button[type=submit]");
+        btn.disabled = locked;
+        btn.textContent = locked ? "Em uso" : "Entrar";
+      }
+      inUseByEnv[env] = locked;
+      renderStatus(env); // a pílula tem guarda própria contra reescrita redundante
     }
 
     // Fonte de verdade do lock: GET /api/presence/status de cada backend. O backend conta
@@ -444,16 +476,57 @@
     pollAll();
     setInterval(pollAll, 2000);
 
+    // Status do chip (sessão WAHA + circuit breaker de cada ambiente). Cadência menor que a
+    // presença (10s) porque é uma chamada ao WAHA — o backend ainda cacheia ~5s pra não martelar
+    // o Chromium. Só grava o estado do chip; o renderStatus decide se ele aparece (perde pro
+    // "Em uso"). Mapeamento:
+    //   FAILED                    → failed (sessão caiu)
+    //   WORKING + breaker aberto  → failed (chip conectado mas não está disparando — troque)
+    //   WORKING                   → paired (pareado e ativo, ninguém usando)
+    //   resto/erro/queda          → disconnected (QR não lido / parado / fora do ar)
+    // OBS: o breaker só vira "falha" quando WORKING. Sem chip (ScanQrCode/Stopped), o breaker
+    // aberto é só efeito de tentar enviar sem sessão — não é defeito do chip, é "Desconectado".
+    function setCardChip(env, state) {
+      if (chipByEnv[env] === state) return;
+      chipByEnv[env] = state;
+      renderStatus(env);
+    }
+    async function pollChip(env) {
+      try {
+        const resp = await fetch(`${ENVS[env].backend}/api/presence/chip`, { cache: "no-store" });
+        const data = resp.ok ? await resp.json() : null;
+        if (!data) setCardChip(env, "disconnected");
+        else if (data.status === "Failed") setCardChip(env, "failed");
+        else if (data.status === "Working") setCardChip(env, data.breakerOpen ? "failed" : "paired");
+        else setCardChip(env, "disconnected"); // ScanQrCode/Stopped/etc.: QR não lido
+      } catch {
+        setCardChip(env, "disconnected"); // backend fora do ar → padrão
+      }
+    }
+    function pollAllChips() {
+      for (const env of Object.keys(ENVS)) pollChip(env);
+    }
+
     document.querySelectorAll("form[data-env]").forEach((form) => {
       // Mostra, ao lado do título, qual localhost este card abre. Fonte única: o mapa ENVS,
       // então realocar uma porta lá reflete aqui sem editar o HTML de cada card.
+      const h1 = form.querySelector("h1");
       const host = ENVS[form.dataset.env]?.target;
       if (host) {
         const span = document.createElement("span");
         span.className = "env-host";
         span.textContent = host.replace(/^https?:\/\//, "");
-        form.querySelector("h1").appendChild(span);
+        h1.appendChild(span);
       }
+
+      // Pílula única de status. Nasce "Desconectado" (padrão); renderStatus já a corrige pro
+      // estado conhecido (ex.: presença detectou "Em uso" antes da pílula existir).
+      const chip = document.createElement("div");
+      chip.className = "chip-status disconnected";
+      chip.dataset.state = "disconnected";
+      chip.textContent = "Desconectado";
+      h1.insertAdjacentElement("afterend", chip);
+      renderStatus(form.dataset.env);
 
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -494,6 +567,10 @@
           const params = new URLSearchParams({
             token: data.accessToken,
             user: userPayload,
+            // Diz ao dashboard de onde ele veio, pra o "Sair" voltar pro hub (os 10 cards) em
+            // vez do login isolado do ambiente. Vai no fragment junto do token (não vaza pro
+            // servidor) e o AuthContext guarda em sessionStorage.
+            landing: window.location.origin,
           });
           const newWin = window.open(`${cfg.target}/#${params.toString()}`, "_blank");
           if (newWin) {
@@ -513,6 +590,10 @@
         }
       });
     });
+
+    // Só agora os selos .chip-status existem (criados no loop acima) — dispara o 1º poll e agenda.
+    pollAllChips();
+    setInterval(pollAllChips, 10000);
   </script>
 </body>
 </html>
