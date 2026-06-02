@@ -71,7 +71,7 @@ UI com 4 abas (aparecem após o WhatsApp conectar): **Chat · Grupos · Contatos
 - **Spintax** `{a|b|{c|d}}` + placeholders `{{name|default}}`, `{{phone}}`, `{{group}}`, `{{theme}}`.
 - **Rodapé de opt-out na 1ª msg** (`Dispatch:OptOutFooter`) — só quando `LastSentAt == null` e o texto ainda não cita "sair".
 - **Delay** 60–180s · **typing simulado** proporcional ao texto.
-- **Warm-up** por curva (`Warmup:Curve` = `[10,15,25,40,60,80,100]`) que avança por **dias de uso real** (não calendário); bônus manual / "Disparar todos" liberam o teto do dia.
+- **Warm-up** por curva (`Warmup:Curve` = `[10,15,25,40,50]`, platô em **50/dia**) que avança por **dias de uso real** (não calendário); bônus manual / "Disparar todos" liberam o teto do dia.
 - **Circuit breaker** (para em N falhas, abre por X min) · **pausa manual** (`IsManuallyPaused`).
 - **Guarda de sessão WAHA** (`Dispatch:PauseWhenSessionDown`) — havendo job, se a sessão estiver `Stopped`/`Failed` o ciclo para (job volta a `Pending`); estados transitórios e erro de leitura não travam.
 - Loop do `DispatchEngine`: pausa? → breaker → warmup → dequeue → sessão ok? → compose → typing → send → audit → delay.
@@ -100,7 +100,7 @@ A landing mostra um card por ambiente em grade 5×2, já com credenciais e o `lo
 ```json
 "Dispatch": { "DelayMinSeconds": 60, "DelayMaxSeconds": 180, "OptOutFooter": "...responda SAIR.", "PauseWhenSessionDown": true },
 "CircuitBreaker": { "FailureThreshold": 3, "OpenDurationMinutes": 120 },
-"Warmup": { "Curve": [10, 15, 25, 40, 60, 80, 100] },
+"Warmup": { "Curve": [10, 15, 25, 40, 50] },
 "Waha": { "AutoStart": true },
 "Jwt": { "AccessTokenMinutes": 10080 }
 ```

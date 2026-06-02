@@ -13,7 +13,7 @@ public sealed class WarmupManager(
 {
     // Curva-padrão conservadora, usada se o appsettings não trouxer uma. Nunca "ilimitado":
     // um teto ausente anularia o aquecimento (o ponto todo é segurar o volume cedo).
-    private static readonly int[] DefaultCurve = [10, 15, 25, 40, 60, 80, 100];
+    private static readonly int[] DefaultCurve = [10, 15, 25, 40, 50];
 
     public async Task<bool> CanSendAsync(CancellationToken ct)
     {

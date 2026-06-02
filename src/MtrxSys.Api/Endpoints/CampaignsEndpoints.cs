@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Application.UseCases.Webhooks;
 using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Messages;
@@ -252,6 +253,15 @@ public static class CampaignsEndpoints
             var cleared = await repo.ClearAllAsync(ct);
             await contacts.ClearLastSentAsync(ct);
             return Results.Ok(new { cleared });
+        });
+
+        // Reconcilia opt-outs que o webhook não pegou (ex.: "Sair" que chegou com o chip fora e
+        // só entrou pelo sync, que não classifica). Marca opt-out + Lost dos contatos ativos cujo
+        // inbound bate o OptOutDetector. Idempotente — rodar de novo não muda quem já é opt-out.
+        dispatch.MapPost("/reconcile-optout", async (OptOutReconciler reconciler, CancellationToken ct) =>
+        {
+            var result = await reconciler.ReconcileAsync(ct);
+            return Results.Ok(new { count = result.Count, phones = result.Phones });
         });
 
         dispatch.MapGet("/warmup", async (

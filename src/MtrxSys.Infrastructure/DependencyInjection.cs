@@ -63,6 +63,7 @@ public static class DependencyInjection
         services.AddScoped<MtrxSys.Core.Application.UseCases.Conversations.RelinkOrphanConversationsUseCase>();
         services.AddScoped<IWebhookIngestionService, WebhookIngestionService>();
         services.AddScoped<WhatsAppSyncService>();
+        services.AddScoped<MtrxSys.Core.Application.UseCases.Webhooks.OptOutReconciler>();
 
         services.AddScoped<BrazilPhoneValidator>();
         services.AddScoped<SpintaxExpander>();

@@ -87,5 +87,31 @@ public sealed class WhatsAppAutoSyncService(
                 "Auto-sync: {Chats} chats, +{Msgs} msgs, +{Contacts} contatos.",
                 result.ChatsTouched, result.MessagesImported, result.ContactsCreated);
         }
+
+        // Self-healing do opt-out: só quando o sync trouxe mensagens novas (ex.: respostas
+        // atrasadas de quando o chip estava fora), reconcilia opt-outs que o webhook não pegou.
+        // Isolado — uma falha aqui NÃO afeta o sync (o ciclo já rodou e foi logado acima).
+        if (result.MessagesImported > 0)
+        {
+            try
+            {
+                var reconciler = sp.GetRequiredService<OptOutReconciler>();
+                var rec = await reconciler.ReconcileAsync(ct);
+                if (rec.Count > 0)
+                {
+                    log.LogInformation("Auto-sync: {Count} opt-out(s) reconciliado(s) de respostas atrasadas.", rec.Count);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+#pragma warning disable CA1031
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Auto-sync: reconciliação de opt-out falhou; tenta no próximo ciclo.");
+            }
+#pragma warning restore CA1031
+        }
     }
 }
