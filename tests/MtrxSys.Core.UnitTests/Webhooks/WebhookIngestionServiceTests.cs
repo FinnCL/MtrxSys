@@ -19,6 +19,7 @@ public sealed class WebhookIngestionServiceTests
     private readonly IWahaClient _waha = Substitute.For<IWahaClient>();
     private readonly IUnitOfWork _uow = Substitute.For<IUnitOfWork>();
     private readonly IClock _clock = Substitute.For<IClock>();
+    private readonly ISharedPhoneLedger _ledger = Substitute.For<ISharedPhoneLedger>();
 
     private WebhookIngestionService BuildService()
     {
@@ -33,6 +34,7 @@ public sealed class WebhookIngestionServiceTests
             _uow,
             _clock,
             new MtrxSys.Core.Validation.BrazilPhoneValidator(),
+            _ledger,
             opts,
             NullLogger<WebhookIngestionService>.Instance);
     }

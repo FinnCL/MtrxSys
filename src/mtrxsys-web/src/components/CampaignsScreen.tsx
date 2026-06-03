@@ -716,9 +716,9 @@ export function CampaignsScreen() {
           </>
         )}
         {/* Contatos importados DEPOIS da fila atual aparecem como "novos disponíveis".
-            Enquanto há fila em curso (pausada ou enviando), o botão fica sempre visível e
-            dinâmico: mostra quantos novos há pra adicionar, ou avisa quando não há nenhum. */}
-        {pendingCount > 0 && (
+            Com fila em curso, o botão só aparece quando há novos pra adicionar (ou enquanto
+            adiciona) — sem nada a adicionar, fica escondido em vez de aparecer desabilitado. */}
+        {pendingCount > 0 && ((audienceCount ?? 0) > 0 || dispatching) && (
           <div className="add-new-row">
             <button
               type="button"
@@ -727,11 +727,7 @@ export function CampaignsScreen() {
               disabled={dispatching || selectedIds.length === 0 || !audienceCount}
               title="Adiciona à fila atual apenas os contatos novos do público escolhido (não re-envia pra quem já recebeu)"
             >
-              {dispatching
-                ? "Adicionando..."
-                : audienceCount && audienceCount > 0
-                  ? `+ Adicionar ${audienceCount} novo(s) à fila`
-                  : "Nenhum novo a adicionar à fila"}
+              {dispatching ? "Adicionando..." : `+ Adicionar ${audienceCount} novo(s) à fila`}
             </button>
           </div>
         )}

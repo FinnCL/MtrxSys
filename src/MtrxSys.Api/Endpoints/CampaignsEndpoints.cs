@@ -121,6 +121,7 @@ public static class CampaignsEndpoints
             IWahaClient waha,
             IOptions<DispatchOptions> dispatchOpts,
             ISystemStateRepository state,
+            ISharedPhoneLedger ledger,
             ILoggerFactory logFactory,
             CancellationToken ct) =>
         {
@@ -181,6 +182,17 @@ public static class CampaignsEndpoints
                 ExcludePhoneE164: ownPhone,
                 ExcludeAlreadyDispatched: true); // não re-enfileira quem já recebeu/está na fila
             var targets = await contacts.ListByFilterAsync(filter, ct);
+            // Dedup entre ambientes: em Enforce, tira do público quem já consta no registro
+            // compartilhado (já enviado/opt-out em outro chip) — evita enfileirar jobs que o motor
+            // pularia e mantém a contagem coerente. Em Observe/Off não altera o público.
+            if (ledger.IsEnforcing && targets.Count > 0)
+            {
+                var suppressed = await ledger.GetSuppressedAsync(targets.Select(c => c.Phone.E164).ToArray(), ct);
+                if (suppressed.Count > 0)
+                {
+                    targets = targets.Where(c => !suppressed.Contains(c.Phone.E164)).ToList();
+                }
+            }
             var now = clock.UtcNow;
             foreach (var c in targets)
             {
@@ -253,6 +265,38 @@ public static class CampaignsEndpoints
             var cleared = await repo.ClearAllAsync(ct);
             await contacts.ClearLastSentAsync(ct);
             return Results.Ok(new { cleared });
+        });
+
+        // Carga inicial do registro compartilhado: empurra os telefones já ENVIADOS / em OPT-OUT
+        // DESTE ambiente pro registro, pra o histórico já contar na dedup cross-chip. Idempotente
+        // (ON CONFLICT) e fail-open. No-op quando o recurso está desligado. Rode uma vez por chip.
+        dispatch.MapPost("/ledger-backfill", async (
+            IContactRepository contacts,
+            ISharedPhoneLedger ledger,
+            CancellationToken ct) =>
+        {
+            if (!ledger.IsEnabled)
+            {
+                return Results.Ok(new { enabled = false, sent = 0, optedOut = 0 });
+            }
+            var all = await contacts.ListByFilterAsync(new ContactFilter(ExcludeOptedOut: false), ct);
+            var sent = 0;
+            var optedOut = 0;
+            foreach (var c in all)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (c.OptOutAt is not null)
+                {
+                    await ledger.MarkOptOutAsync(c.Phone.E164, ct);
+                    optedOut++;
+                }
+                else if (c.LastSentAt is not null)
+                {
+                    await ledger.MarkSentAsync(c.Phone.E164, ct);
+                    sent++;
+                }
+            }
+            return Results.Ok(new { enabled = true, sent, optedOut });
         });
 
         // Reconcilia opt-outs que o webhook não pegou (ex.: "Sair" que chegou com o chip fora e
@@ -347,6 +391,7 @@ public static class CampaignsEndpoints
             string? groupTag,
             IContactRepository contacts,
             ISystemStateRepository state,
+            ISharedPhoneLedger ledger,
             CancellationToken ct) =>
         {
             // Mesma exclusão do disparo real (próprio número + já enviados), pra a prévia bater com a fila.
@@ -359,6 +404,14 @@ public static class CampaignsEndpoints
                 EngagedOnly: engagedOnly ?? false,
                 ExcludePhoneE164: ownPhone,
                 ExcludeAlreadyDispatched: true);
+            // Em Enforce, a prévia também desconta quem o registro compartilhado vai suprimir —
+            // assim a contagem bate com o que o disparo realmente enfileira (mesma lógica do POST).
+            if (ledger.IsEnforcing)
+            {
+                var targets = await contacts.ListByFilterAsync(filter, ct);
+                var suppressed = await ledger.GetSuppressedAsync(targets.Select(c => c.Phone.E164).ToArray(), ct);
+                return Results.Ok(new { count = targets.Count(c => !suppressed.Contains(c.Phone.E164)) });
+            }
             var count = await contacts.CountByFilterAsync(filter, ct);
             return Results.Ok(new { count });
         });

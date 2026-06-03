@@ -1,0 +1,17 @@
+# Override OPCIONAL — liga o registro compartilhado (phone_ledger) no Stack A. Componha com o base:
+#   docker compose -f docker-compose.yml -f docker-compose.ledger.yml up -d --build
+# DESLIGADO por padrão (SHARED_LEDGER_MODE=Off): aplicar o override é inócuo. Ativa só ao subir com
+#   $env:SHARED_LEDGER_MODE="Observe"   (valida: consulta/grava e LOGA o que faria, sem suprimir)
+#   $env:SHARED_LEDGER_MODE="Enforce"   (suprime de fato: não reenvia + opt-out global)
+# Requer o banco compartilhado no ar:  docker compose -f docker-compose.shared.yml up -d
+services:
+  api:
+    environment:
+      ConnectionStrings__SharedLedger: "Host=host.docker.internal;Port=5440;Database=mtrx_shared;Username=mtrx;Password=${PG_PASS:-mtrx}"
+      SharedLedger__Mode: "${SHARED_LEDGER_MODE:-Off}"
+      SharedLedger__Chip: "A"
+  dispatcher:
+    environment:
+      ConnectionStrings__SharedLedger: "Host=host.docker.internal;Port=5440;Database=mtrx_shared;Username=mtrx;Password=${PG_PASS:-mtrx}"
+      SharedLedger__Mode: "${SHARED_LEDGER_MODE:-Off}"
+      SharedLedger__Chip: "A"

@@ -23,6 +23,7 @@ public sealed class OptOutReconciler(
     IContactStageChangeRepository stageChanges,
     IUnitOfWork uow,
     IClock clock,
+    ISharedPhoneLedger ledger,
     ILogger<OptOutReconciler> log)
 {
     // Respostas de saída são curtas e recentes; 200 msgs por conversa cobre com folga sem
@@ -83,6 +84,12 @@ public sealed class OptOutReconciler(
         if (reconciled.Count > 0)
         {
             await uow.SaveChangesAsync(ct);
+            // Opt-out global: propaga os reconciliados pro registro compartilhado (após o commit
+            // local). Fail-open e idempotente — uma falha aqui não desfaz a reconciliação local.
+            foreach (var phone in reconciled)
+            {
+                await ledger.MarkOptOutAsync(phone, ct);
+            }
         }
 
         return new OptOutReconcileResult(reconciled.Count, reconciled);

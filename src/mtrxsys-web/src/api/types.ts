@@ -27,11 +27,15 @@ export interface ContactStatusBadge {
  * "Não respondeu" (mesma ideia do awaitingReply do Chat).
  */
 export function contactStatusBadge(
-  c: Pick<Contact, "stage" | "optOutAt" | "lastSentAt">,
+  c: Pick<Contact, "stage" | "optOutAt" | "lastSentAt" | "sentElsewhere">,
 ): ContactStatusBadge {
   if (c.optOutAt) return { label: "Saiu", className: "stage-lost" };
   if (c.stage === "Lead" && c.lastSentAt) {
     return { label: "Não respondeu", className: "stage-no-reply" };
+  }
+  // Sem envio local, mas já consta no registro compartilhado → outro chip já disparou pra ele.
+  if (c.stage === "Lead" && c.sentElsewhere) {
+    return { label: "Enviado · outro chip", className: "stage-no-reply" };
   }
   return { label: STAGE_LABELS[c.stage], className: `stage-${c.stage.toLowerCase()}` };
 }
@@ -83,6 +87,9 @@ export interface Contact {
   optInAt: string | null;
   optOutAt: string | null;
   lastSentAt: string | null;
+  // Consta no registro compartilhado (tratado por outro ambiente). Vem false quando o
+  // recurso está desligado. Vira selo só quando não houve envio local (ver contactStatusBadge).
+  sentElsewhere: boolean;
 }
 
 export interface ContactNote {
