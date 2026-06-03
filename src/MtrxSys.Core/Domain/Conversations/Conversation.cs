@@ -1,3 +1,4 @@
+using MtrxSys.Core.Common;
 using MtrxSys.Core.Domain.Common;
 
 namespace MtrxSys.Core.Domain.Conversations;
@@ -39,14 +40,11 @@ public sealed class Conversation : Entity<Guid>
         if (LastMessageAt is null || at > LastMessageAt)
         {
             LastMessageAt = at;
-            LastMessagePreview = Truncate(preview, 280);
+            LastMessagePreview = preview.TruncateWithEllipsis(280);
         }
     }
 
     public void Rename(string? title) => Title = title;
 
     public void LinkContact(Guid contactId) => ContactId = contactId;
-
-    private static string? Truncate(string? s, int max) =>
-        string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..(max - 1)] + "…";
 }

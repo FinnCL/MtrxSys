@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using MtrxSys.Cli.Infrastructure;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Common;
 using QRCoder;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -258,8 +259,8 @@ internal sealed class ChatCommand(
         {
             table.AddRow(
                 c.IsGroup ? "[blue]grupo[/]" : "[green]pessoa[/]",
-                Markup.Escape(Truncate(c.Name, 30)),
-                Markup.Escape(Truncate(c.LastMessagePreview ?? "-", 50)),
+                Markup.Escape(c.Name.TruncateWithEllipsis(30)),
+                Markup.Escape((c.LastMessagePreview ?? "-").TruncateWithEllipsis(50)),
                 c.LastMessageAt?.ToLocalTime().ToString("dd/MM HH:mm") ?? "-");
         }
         AnsiConsole.Write(table);
@@ -284,7 +285,7 @@ internal sealed class ChatCommand(
                 .PageSize(25)
                 .MoreChoicesText("[grey](use ↑↓ pra mais)[/]")
                 .EnableSearch()
-                .UseConverter(c => $"{(c.IsGroup ? "[blue][grupo][/]" : "[green][pessoa][/]")} {Markup.Escape(Truncate(c.Name, 50))}")
+                .UseConverter(c => $"{(c.IsGroup ? "[blue][grupo][/]" : "[green][pessoa][/]")} {Markup.Escape(c.Name.TruncateWithEllipsis(50))}")
                 .AddChoices(chats));
 
         var messages = await waha.GetChatMessagesAsync(_sessionId, selected.Id, limit: 30, ct);
@@ -293,7 +294,7 @@ internal sealed class ChatCommand(
 
         foreach (var m in messages)
         {
-            var who = m.FromMe ? "[green]Você[/]" : $"[blue]{Markup.Escape(Truncate(m.Author, 20))}[/]";
+            var who = m.FromMe ? "[green]Você[/]" : $"[blue]{Markup.Escape(m.Author.TruncateWithEllipsis(20))}[/]";
             var when = m.Timestamp.ToLocalTime().ToString("HH:mm");
             AnsiConsole.MarkupLine($"[grey]{when}[/]  {who}: {Markup.Escape(m.Body)}");
         }
@@ -333,8 +334,8 @@ internal sealed class ChatCommand(
         foreach (var g in groups)
         {
             table.AddRow(
-                Markup.Escape(Truncate(g.Id, 40)),
-                Markup.Escape(Truncate(g.Name, 40)),
+                Markup.Escape(g.Id.TruncateWithEllipsis(40)),
+                Markup.Escape(g.Name.TruncateWithEllipsis(40)),
                 g.ParticipantsCount?.ToString() ?? "-");
         }
         AnsiConsole.Write(table);
@@ -346,6 +347,4 @@ internal sealed class ChatCommand(
         AnsiConsole.MarkupLine($"Session [bold]{_sessionId}[/] => [yellow]{s}[/]");
     }
 
-    private static string Truncate(string s, int max) =>
-        string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..(max - 1)] + "…";
 }

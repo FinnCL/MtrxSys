@@ -504,6 +504,9 @@ export function CampaignsScreen() {
         ? { cls: "risk-mid", text: "Chip em aquecimento — risco moderado. Use com cautela." }
         : { cls: "risk-low", text: "Chip já aquecido — risco menor, mas use com bom senso." }
     : { cls: "risk-mid", text: "" };
+  // Curva concluída: day é base-1 de dias usados e não para no fim da curva, então
+  // day > totalDays significa "já passou dos N dias" — o chip está no platô, não "dia 10 de 5".
+  const warmupDone = !!warmup && warmup.day > warmup.totalDays;
 
   const prepareLabel = dispatching
     ? "Preparando..."
@@ -622,7 +625,9 @@ export function CampaignsScreen() {
         <section className="campaigns-section warmup-panel">
           <div className="warmup-head">
             <h3>
-              Aquecimento do chip — dia {warmup.day} de {warmup.totalDays}
+              Aquecimento do chip — {warmupDone
+                ? <>concluído · teto de {warmup.plateauLimit}/dia</>
+                : <>dia {warmup.day} de {warmup.totalDays}</>}
               {warmup.phone && <span className="warmup-phone"> · {warmup.phone}</span>}
             </h3>
             <button
@@ -867,7 +872,7 @@ export function CampaignsScreen() {
               <strong>{pendingCount}</strong>
             </p>
             <p className={`cap-risk ${warmupRisk.cls}`}>
-              Dia {warmup.day} de {warmup.totalDays} — {warmupRisk.text}
+              {warmupDone ? "Aquecimento concluído" : `Dia ${warmup.day} de ${warmup.totalDays}`} — {warmupRisk.text}
             </p>
             <p className="muted small">
               O envio parou no teto de hoje. Você pode liberar mais (decisão sua) — a liberação vale

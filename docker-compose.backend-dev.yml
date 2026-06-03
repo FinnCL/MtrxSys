@@ -1,0 +1,42 @@
+# Override de backend em DEV (dotnet watch), COMPARTILHADO por todos os stacks — api/dispatcher
+# não têm nada por-stack (build, target, env e volumes são iguais nos 10). Componha junto do
+# base e do override de front do stack:
+#   docker compose -f docker-compose-N.yml -f docker-compose-N.web.yml -f docker-compose.backend-dev.yml up -d --build
+services:
+  api:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Api/Dockerfile
+      target: dev
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      DOTNET_USE_POLLING_FILE_WATCHER: "true"
+    # 1o build do dotnet watch demora mais que o start_period de prod; alarga a janela.
+    healthcheck:
+      start_period: 240s
+    volumes:
+      - ./:/src
+      # Volumes anonimos: o container usa SEU obj/bin (Linux), nunca o do host (Windows).
+      - /src/src/MtrxSys.Core/obj
+      - /src/src/MtrxSys.Core/bin
+      - /src/src/MtrxSys.Infrastructure/obj
+      - /src/src/MtrxSys.Infrastructure/bin
+      - /src/src/MtrxSys.Api/obj
+      - /src/src/MtrxSys.Api/bin
+
+  dispatcher:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Dispatcher/Dockerfile
+      target: dev
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      DOTNET_USE_POLLING_FILE_WATCHER: "true"
+    volumes:
+      - ./:/src
+      - /src/src/MtrxSys.Core/obj
+      - /src/src/MtrxSys.Core/bin
+      - /src/src/MtrxSys.Infrastructure/obj
+      - /src/src/MtrxSys.Infrastructure/bin
+      - /src/src/MtrxSys.Dispatcher/obj
+      - /src/src/MtrxSys.Dispatcher/bin

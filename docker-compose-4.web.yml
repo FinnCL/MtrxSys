@@ -1,0 +1,22 @@
+# Override de DEV — HMR SO DO FRONT (Stack D). Use com o base:
+#   docker compose -f docker-compose-4.yml -f docker-compose-4.web.yml up -d --build
+# So o 'web' vira Vite dev server (recarrega ao editar .tsx). A api/dispatcher seguem
+# build normal (sem dotnet watch) — ao mexer em C#, rode: rebuild-backend.cmd
+services:
+  web:
+    build:
+      context: ./src/mtrxsys-web
+      dockerfile: Dockerfile
+      target: dev
+    # Vite na MESMA porta publicada (5177) pro websocket de HMR bater certo.
+    ports: !override
+      - "5177:5177"
+    volumes:
+      - ./src/mtrxsys-web:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+      VITE_API_URL: "http://localhost:5083"
+      VITE_APP_LABEL: "D"
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5177"]
