@@ -20,38 +20,23 @@ start.cmd     # ambiente A, prod-like → http://localhost:5173
 dev.cmd       # ambiente A com HMR completo (front + dotnet watch)
 
 up-all.cmd       # 10 stacks (prod-like) + landing → http://localhost:5175
-dev-all-front.cmd # 10 stacks, HMR no front (backend = build normal)
+dev-all-front.cmd # 10 stacks (HMR front) + banco compartilhado + dedup (Observe) — tudo num comando
 dev-all-hmr.cmd  # 10 stacks, HMR completo (front + backend) — pesado
 rebuild-backend.cmd # recompila api+dispatcher nos 10 (após mexer em C#)
-down-all.cmd     # derruba tudo (preserva dados)
+down-all.cmd     # derruba tudo (inclui o banco compartilhado; preserva dados)
 ```
 
-### Qual modo subir (HMR = editar e ver na hora, sem rebuild)
+### Qual modo subir
 
-Com hot-reload, o `--build` roda **uma vez**; depois, editar o código atualiza em tempo real (Vite re-empacota no browser; `dotnet watch` recompila no container). Só dependências (`package.json`, NuGet) ou o Dockerfile pedem novo build. Escolha o modo pelo que vai mexer:
+HMR = editar e ver na hora; o `--build` roda **uma vez** e o código atualiza em tempo real (só deps/Dockerfile pedem novo build). Escolha pelo que vai mexer — **um modo por vez** (`down-all.cmd` antes de trocar):
 
 | Vou desenvolver… | Comando | HMR | Peso |
 |---|---|---|---|
-| **Backend** (ou front), 1 chip basta | `dev.cmd` | front + backend | leve ✅ |
-| **Front** nos 10 | `dev-all-front.cmd` | só front (backend: `rebuild-backend.cmd` quando mexer em C#) | médio |
-| **Front + backend** nos 10 | `dev-all-hmr.cmd` | front + backend | pesado ⚠️ |
+| Backend (ou front), 1 chip | `dev.cmd` | front + backend | leve ✅ |
+| Front nos 10 | `dev-all-front.cmd` | front + dedup (Observe); C# → `rebuild-backend.cmd` | médio |
+| Front + backend nos 10 | `dev-all-hmr.cmd` | front + backend | pesado ⚠️ |
 
-Regra: **um modo por vez** (não rode dois sobrepostos — o `depends_on web→api` faz um recriar o container do outro). Pra trocar de modo, `down-all.cmd` antes.
-
-> Dica: o código é o **mesmo** nos 10 — pra escrever/testar lógica, `dev.cmd` (1 chip) já basta e é leve. Os 10 ambientes servem pra operar 10 chips, não pra desenvolver. Suba os 10 (`dev-all-hmr.cmd` / `dev-all-front.cmd`) quando precisar deles vivos.
-
-Equivalentes em PowerShell (cada stack tem `docker-compose-N.web.yml` = override do front; o backend em dev é o `docker-compose.backend-dev.yml`, **um só, compartilhado** pelos 10):
-
-```powershell
-# 10 com HMR no front (backend build normal)
-docker compose -f docker-compose.yml -f docker-compose.web.yml up -d --build; 2..10 | ForEach-Object { docker compose -f "docker-compose-$_.yml" -f "docker-compose-$_.web.yml" up -d --build }
-
-# 10 com HMR completo (front + backend): + o override de backend compartilhado
-docker compose -f docker-compose.yml -f docker-compose.web.yml -f docker-compose.backend-dev.yml up -d --build; 2..10 | ForEach-Object { docker compose -f "docker-compose-$_.yml" -f "docker-compose-$_.web.yml" -f docker-compose.backend-dev.yml up -d --build }
-
-# rebuild do backend nos 10 (modo front: após mexer em C#)
-docker compose up -d --build api dispatcher; 2..10 | ForEach-Object { docker compose -f "docker-compose-$_.yml" up -d --build api dispatcher }
-```
+> O código é o **mesmo** nos 10 — pra testar lógica, `dev.cmd` (1 chip) basta. Os 10 servem pra operar 10 chips, não pra desenvolver. Os `.cmd` só orquestram `docker compose -f ...`; pra variações, abra o script.
 
 ## URLs e logins
 
@@ -91,6 +76,14 @@ Principais em `src/MtrxSys.Dispatcher/appsettings.json` (a curva que manda é a 
 ```
 
 Env vars: ver `.env.example`. No multi-ambiente cada stack N usa sufixo (`PG{N}_PASS`, `WAHA{N}_API_KEY`, `JWT{N}_SIGNING_KEY`, `SEED{N}_ADMIN_*`).
+
+## Registro compartilhado (dedup entre ambientes + opt-out global)
+
+Os 10 bancos são isolados. Um **11º Postgres minúsculo** (`docker-compose.shared.yml`, tabela `phone_ledger`) liga os ambientes pelo **telefone**: se um chip já disparou/registrou opt-out pra um número, os outros **não reenviam** e a UI mostra **"Enviado · outro chip"**. Opcional, **fail-open** (falha nunca trava o disparo).
+
+O `dev-all-front.cmd` já sobe tudo em modo **Observe** (consulta/grava e só **loga** o que faria) — confira os logs `[ledger observe] ... SERIA pulado` e, quando confiar, troque pra `Enforce` na linha `set SHARED_LEDGER_MODE=` no topo do script. `Off` desliga. O `down-all.cmd` derruba o banco compartilhado junto.
+
+Opcional, 1× por chip — carrega o histórico: `POST localhost:5080/api/dispatch/ledger-backfill`. Apps alcançam o banco via `host.docker.internal:5440`.
 
 ## Notas
 

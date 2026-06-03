@@ -18,6 +18,7 @@ public sealed class WebhookIngestionService(
     IUnitOfWork uow,
     IClock clock,
     BrazilPhoneValidator phones,
+    ISharedPhoneLedger ledger,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<WebhookIngestionService> log) : IWebhookIngestionService
 {
@@ -139,6 +140,12 @@ public sealed class WebhookIngestionService(
             if (p.FromMe != true)
             {
                 newlyOptedOut = await ApplyInboundClassificationAsync(contact, bodyText, now, ct);
+                // Opt-out global: propaga pro registro compartilhado (fail-open, idempotente).
+                // É o lado seguro do erro — se algo falhar, no máximo a pessoa deixa de receber.
+                if (newlyOptedOut)
+                {
+                    await ledger.MarkOptOutAsync(contact.Phone.E164, ct);
+                }
             }
         }
 

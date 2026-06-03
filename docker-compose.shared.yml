@@ -1,0 +1,28 @@
+# Banco COMPARTILHADO entre os 10 ambientes — guarda só a tabela `phone_ledger` (dedup de disparo
+# cross-chip + opt-out global). É um 11º Postgres minúsculo, projeto próprio. Sobe UMA vez:
+#   docker compose -f docker-compose.shared.yml up -d
+# Os ambientes o alcançam via host.docker.internal:5440 (ver docker-compose-N.ledger.yml).
+# A tabela é criada pela própria aplicação (CREATE TABLE IF NOT EXISTS) no 1º uso.
+name: mtrx-shared
+services:
+  shared-postgres:
+    image: postgres:17-alpine
+    container_name: mtrx-shared-postgres
+    environment:
+      POSTGRES_DB: mtrx_shared
+      POSTGRES_USER: mtrx
+      POSTGRES_PASSWORD: ${PG_PASS:-mtrx}
+      TZ: UTC
+    ports:
+      - "5440:5432"
+    volumes:
+      - shared-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mtrx", "-d", "mtrx_shared"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  shared-pgdata:

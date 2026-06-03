@@ -1,0 +1,39 @@
+using FluentAssertions;
+using MtrxSys.Infrastructure.SharedLedger;
+using Xunit;
+
+namespace MtrxSys.Infrastructure.IntegrationTests.SharedLedger;
+
+// Trava o contrato de segurança: com o recurso DESLIGADO (NoOp, o padrão), tudo é inerte e nunca
+// lança — o disparo se comporta exatamente como se o registro compartilhado não existisse.
+public sealed class NoOpSharedPhoneLedgerTests
+{
+    private const string Phone = "+5571999999999";
+    private readonly NoOpSharedPhoneLedger _ledger = new();
+
+    [Fact]
+    public void Is_disabled_and_not_enforcing()
+    {
+        _ledger.IsEnabled.Should().BeFalse();
+        _ledger.IsEnforcing.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IsSuppressed_is_always_false()
+        => (await _ledger.IsSuppressedAsync(Phone, CancellationToken.None)).Should().BeFalse();
+
+    [Fact]
+    public async Task GetSuppressed_is_always_empty()
+        => (await _ledger.GetSuppressedAsync([Phone], CancellationToken.None)).Should().BeEmpty();
+
+    [Fact]
+    public async Task Marks_are_no_ops_and_never_throw()
+    {
+        var act = async () =>
+        {
+            await _ledger.MarkSentAsync(Phone, CancellationToken.None);
+            await _ledger.MarkOptOutAsync(Phone, CancellationToken.None);
+        };
+        await act.Should().NotThrowAsync();
+    }
+}

@@ -2,17 +2,32 @@
 setlocal enabledelayedexpansion
 pushd "%~dp0"
 
-echo === MtrxSys DEV (HMR no front): 10 ambientes + landing ===
+rem === Modo do registro compartilhado (dedup cross-chip + opt-out global) ===
+rem   Observe = consulta/grava e LOGA o que faria, sem suprimir (validacao segura) <- padrao
+rem   Enforce = suprime de fato (nao reenvia entre ambientes)
+rem   Off     = desliga a dedup (sobe sem o recurso)
+set SHARED_LEDGER_MODE=Observe
+
+echo === MtrxSys DEV (HMR no front + registro compartilhado): 10 ambientes + landing ===
 echo.
-echo Os 10 sobem com o 'web' em Vite dev server (HMR). Edite src\mtrxsys-web\src\...
-echo e os 10 recarregam sozinhos. O backend roda como build normal (sem dotnet watch).
-echo Ao mexer em C# (src\MtrxSys.*\...), rode:  rebuild-backend.cmd
+echo Front em Vite (HMR): edite src\mtrxsys-web\src\... e os 10 recarregam sozinhos.
+echo Backend = build normal; ao mexer em C# rode: rebuild-backend.cmd
+echo Dedup entre ambientes LIGADA em modo: %SHARED_LEDGER_MODE%  (troque no topo deste arquivo)
 echo.
 
-echo --- Stack 1 (Ambiente A) ---
-docker compose -f docker-compose.yml -f docker-compose.web.yml up -d --build
+echo --- Banco compartilhado (registro de dedup/opt-out) ---
+docker compose -f docker-compose.shared.yml up -d
 if errorlevel 1 (
-    echo Falha no Stack 1. Verifique se o Docker Desktop esta rodando.
+    echo Falha ao subir o banco compartilhado. Verifique se o Docker Desktop esta rodando.
+    popd
+    exit /b 1
+)
+
+echo.
+echo --- Stack 1 (Ambiente A) ---
+docker compose -f docker-compose.yml -f docker-compose.web.yml -f docker-compose.ledger.yml up -d --build
+if errorlevel 1 (
+    echo Falha no Stack 1.
     popd
     exit /b 1
 )
@@ -20,7 +35,7 @@ if errorlevel 1 (
 for %%N in (2 3 4 5 6 7 8 9 10) do (
     echo.
     echo --- Stack %%N ---
-    docker compose -f docker-compose-%%N.yml -f docker-compose-%%N.web.yml up -d --build
+    docker compose -f docker-compose-%%N.yml -f docker-compose-%%N.web.yml -f docker-compose-%%N.ledger.yml up -d --build
     if errorlevel 1 (
         echo Falha no Stack %%N.
         popd
@@ -51,9 +66,10 @@ goto wait
 
 :ready
 echo.
-echo === Tudo no ar (HMR de front nos 10). Abrindo landing em http://localhost:5175 ===
+echo === Tudo no ar (HMR de front + dedup em %SHARED_LEDGER_MODE% nos 10). Abrindo landing ===
 start "" "http://localhost:5175"
 echo.
+echo Dedup em Observe? confira os logs: docker compose -f docker-compose.yml -f docker-compose.ledger.yml logs dispatcher ^| findstr "ledger observe"
 echo Pra parar tudo: down-all.cmd
 popd
 endlocal

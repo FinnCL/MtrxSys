@@ -28,6 +28,7 @@ public sealed class DispatchEngine(
     IChatMessageRepository messages,
     IDispatchMetrics metrics,
     ISystemStateRepository systemState,
+    ISharedPhoneLedger ledger,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
 {
@@ -129,6 +130,24 @@ public sealed class DispatchEngine(
                 skipped++;
                 continue;
             }
+            // Dedup entre ambientes: outro chip já enviou/registrou opt-out pra este telefone?
+            // IsSuppressedAsync é fail-open (erro → false), então uma falha do registro nunca
+            // bloqueia o envio. Em Observe só loga; em Enforce pula de fato. Off não chega aqui.
+            if (ledger.IsEnabled && await ledger.IsSuppressedAsync(contact.Phone.E164, ct))
+            {
+                if (ledger.IsEnforcing)
+                {
+                    job.MarkSkipped("já enviado/opt-out em outro ambiente");
+                    await uow.SaveChangesAsync(ct);
+                    skipped++;
+                    log.LogInformation(
+                        "Job {JobId} pulado: {Phone} já consta no registro compartilhado.", job.Id, contact.Phone.E164);
+                    continue;
+                }
+                log.LogInformation(
+                    "[ledger observe] Job {JobId} ({Phone}) SERIA pulado (consta no registro compartilhado).",
+                    job.Id, contact.Phone.E164);
+            }
 
             try
             {
@@ -196,6 +215,12 @@ public sealed class DispatchEngine(
                 // (irreversível), então marcar enviado/auditoria/breaker não pode depender
                 // de nada opcional que venha depois.
                 await uow.SaveChangesAsync(ct);
+
+                // Registra no livro-razão compartilhado (dedup cross-ambiente). MELHOR-ESFORÇO e
+                // fail-open: o envio já está commitado, então uma falha aqui só é logada — nunca
+                // marca o job como falho nem abre o breaker. Só após o commit pra não registrar
+                // "enviado" globalmente algo que não persistiu localmente.
+                await ledger.MarkSentAsync(contact.Phone.E164, ct);
 
                 metrics.RecordSendSuccess((int)delayBefore.TotalMilliseconds, typingMs);
                 sent++;

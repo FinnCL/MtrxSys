@@ -13,6 +13,7 @@ public static class ContactsEndpoints
             string? stage,
             string? groupTag,
             IContactRepository contacts,
+            ISharedPhoneLedger ledger,
             CancellationToken ct) =>
         {
             ContactStage? parsedStage = null;
@@ -31,7 +32,10 @@ public static class ContactsEndpoints
                 GroupTag: string.IsNullOrWhiteSpace(groupTag) ? null : groupTag,
                 ExcludeOptedOut: false);
             var list = await contacts.ListByFilterAsync(filter, ct);
-            return Results.Ok(list.Select(ToDto));
+            // Marca quem consta no registro compartilhado (tratado por outro chip). GetSuppressedAsync
+            // já retorna vazio quando o recurso está desligado — então isto é no-op nesse caso.
+            var suppressed = await ledger.GetSuppressedAsync(list.Select(c => c.Phone.E164).ToArray(), ct);
+            return Results.Ok(list.Select(c => ToDto(c, suppressed.Contains(c.Phone.E164))));
         });
 
         group.MapGet("/group-tags", async (
@@ -234,7 +238,7 @@ public static class ContactsEndpoints
         return app;
     }
 
-    private static ContactDto ToDto(Contact c) => new(
+    private static ContactDto ToDto(Contact c, bool sentElsewhere = false) => new(
         c.Id,
         c.Phone.E164,
         c.Name,
@@ -244,7 +248,8 @@ public static class ContactsEndpoints
         c.StageChangedAt,
         c.OptInAt,
         c.OptOutAt,
-        c.LastSentAt);
+        c.LastSentAt,
+        sentElsewhere);
 
     private static ContactNoteDto ToDto(ContactNote n) => new(n.Id, n.ContactId, n.Body, n.CreatedAt, n.CreatedByUserId);
 
@@ -271,7 +276,11 @@ public static class ContactsEndpoints
         DateTimeOffset? StageChangedAt,
         DateTimeOffset? OptInAt,
         DateTimeOffset? OptOutAt,
-        DateTimeOffset? LastSentAt);
+        DateTimeOffset? LastSentAt,
+        // Consta no registro compartilhado (enviado/opt-out em algum ambiente). Só vira selo na UI
+        // quando o LastSentAt local é nulo — i.e., foi tratado por OUTRO chip. False quando o
+        // recurso está desligado.
+        bool SentElsewhere = false);
 
     public sealed record ContactNoteDto(Guid Id, Guid ContactId, string Body, DateTimeOffset CreatedAt, Guid CreatedByUserId);
 

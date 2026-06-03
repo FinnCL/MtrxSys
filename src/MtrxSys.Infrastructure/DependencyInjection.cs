@@ -16,6 +16,7 @@ using MtrxSys.Infrastructure.Metrics;
 using MtrxSys.Infrastructure.Persistence;
 using MtrxSys.Infrastructure.Persistence.Repositories;
 using MtrxSys.Infrastructure.Randomness;
+using MtrxSys.Infrastructure.SharedLedger;
 using MtrxSys.Infrastructure.Time;
 using MtrxSys.Infrastructure.Waha;
 
@@ -39,6 +40,26 @@ public static class DependencyInjection
 
         services.AddDbContext<MtrxDbContext>(o =>
             o.UseNpgsql(config.GetConnectionString("Postgres")));
+
+        // Registro compartilhado entre os 10 ambientes (dedup de disparo cross-chip + opt-out global).
+        // DESLIGADO por padrão: só ativa com SharedLedger:Mode != Off E uma connection string própria
+        // (ConnectionStrings:SharedLedger), apontando pro banco compartilhado. Sem isso → no-op, e o
+        // comportamento atual fica intacto. A implementação é fail-open (nunca trava o disparo).
+        services.AddOptions<SharedLedgerOptions>().Bind(config.GetSection(SharedLedgerOptions.SectionName));
+        var ledgerMode = config.GetSection(SharedLedgerOptions.SectionName)["Mode"];
+        var ledgerConn = config.GetConnectionString("SharedLedger");
+        var ledgerActive = !string.IsNullOrWhiteSpace(ledgerConn)
+            && !string.IsNullOrWhiteSpace(ledgerMode)
+            && !string.Equals(ledgerMode, nameof(SharedLedgerMode.Off), StringComparison.OrdinalIgnoreCase);
+        if (ledgerActive)
+        {
+            services.AddSingleton(_ => new SharedLedgerDataSource(ledgerConn!));
+            services.AddScoped<ISharedPhoneLedger, NpgsqlSharedPhoneLedger>();
+        }
+        else
+        {
+            services.AddSingleton<ISharedPhoneLedger, NoOpSharedPhoneLedger>();
+        }
 
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IRandomSource, CryptoRandomSource>();
