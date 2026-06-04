@@ -7,7 +7,7 @@
 #   - http://localhost:5175  → landing (no compose-2), agora com 9 cards (A, B, C, D, E, F, G, H, I)
 #   - http://localhost:5182  → web do Stack 9 (Ambiente I / Chip I)
 #   - http://localhost:5088  → API do Stack 9
-#   - http://localhost:5440  → Postgres do Stack 9 (porta diferente dos demais)
+#   - http://localhost:5442  → Postgres do Stack 9 (5440 fica reservada ao banco compartilhado)
 #   - http://localhost:3008  → WAHA do Stack 9 (parear o nono celular aqui)
 #
 # Defaults pra DEV LOCAL. Em outro setup sobrescreva via .env (não commitado).
@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: ${PG9_PASS:-mtrx}
       TZ: UTC
     ports:
-      - "5440:5432"
+      - "5442:5432"
     volumes:
       - pgdata9:/var/lib/postgresql/data
     healthcheck:

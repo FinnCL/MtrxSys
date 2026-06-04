@@ -9,6 +9,7 @@
   --inbound: #2a2f3a;
   --outbound: #2c6cd4;
   --danger: #d9596c;
+  --warn: #f59e0b;
   --border: #2a2f3a;
 }
 
@@ -237,7 +238,7 @@ input[type="checkbox"], input[type="radio"] {
 .report-renew:hover:not(:disabled) { background: var(--danger); }
 .stat-chip { padding: 4px 12px; border-radius: 4px; font-size: 12px; background: var(--bg-3); }
 .stat-all { background: var(--bg-3); color: var(--fg); font-weight: 600; }
-.stat-pending { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+.stat-pending { background: rgba(245, 158, 11, 0.2); color: var(--warn); }
 .stat-sent { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 .stat-failed { background: rgba(217, 89, 108, 0.2); color: var(--danger); }
 .stat-retrying { background: rgba(168, 85, 247, 0.2); color: #a855f7; }
@@ -377,7 +378,7 @@ input[type="checkbox"], input[type="radio"] {
 .status-row { display: flex; align-items: center; gap: 8px; justify-content: center; color: var(--muted); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .status-Stopped { background: #9ca3af; }
-.status-Starting { background: #f59e0b; animation: pulse 1.5s infinite; }
+.status-Starting { background: var(--warn); animation: pulse 1.5s infinite; }
 .status-ScanQrCode { background: var(--accent); animation: pulse 1.5s infinite; }
 .status-Working { background: #22c55e; }
 .status-Failed { background: var(--danger); }
@@ -465,7 +466,7 @@ input[type="checkbox"], input[type="radio"] {
 /* Painel de aquecimento do chip (acima do "Disparar"). */
 .warmup-panel { max-width: 640px; }
 .warmup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.warmup-head h3 { margin: 0; }
+.warmup-panel .warmup-head h3 { margin: 0; color: var(--warn); }
 .warmup-phone { color: var(--muted); font-weight: 400; font-size: 14px; }
 
 /* Válvula de teste: isolada num rodapé separado por uma linha, discreta mas visível. */
@@ -489,11 +490,11 @@ input[type="checkbox"], input[type="radio"] {
 }
 .test-wipe-link:hover:not(:disabled) { color: #fff; background: var(--accent); border-color: var(--accent); }
 .warmup-restart { background: var(--bg-3); color: var(--fg); padding: 6px 14px; font-size: 13px; flex-shrink: 0; }
-.warmup-restart:hover { background: #f59e0b; color: #1a1205; }
+.warmup-restart:hover { background: var(--warn); color: #1a1205; }
 .warmup-bar { height: 10px; background: var(--bg-3); border-radius: 6px; overflow: hidden; margin: 10px 0 8px; }
-.warmup-bar > span { display: block; height: 100%; background: #f59e0b; border-radius: 6px; transition: width 0.4s ease; }
+.warmup-bar > span { display: block; height: 100%; background: var(--warn); border-radius: 6px; transition: width 0.4s ease; }
 .warmup-line { font-size: 14px; margin: 0 0 8px; color: var(--fg); }
-.warmup-bonus { color: #f59e0b; font-weight: 600; }
+.warmup-bonus { color: var(--warn); font-weight: 600; }
 
 /* Modal de teto atingido (liberar mais envios). */
 .modal-overlay {
@@ -510,7 +511,7 @@ input[type="checkbox"], input[type="radio"] {
 .cap-stats { font-size: 14px; margin: 0 0 10px; }
 .cap-risk { font-size: 13px; font-weight: 600; border-radius: 6px; padding: 8px 12px; margin: 0 0 12px; }
 .cap-risk.risk-high { background: rgba(217, 83, 102, 0.15); color: var(--danger); border: 1px solid var(--danger); }
-.cap-risk.risk-mid { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
+.cap-risk.risk-mid { background: rgba(245, 158, 11, 0.12); color: var(--warn); }
 .cap-risk.risk-low { background: var(--bg-3); color: var(--muted); }
 .cap-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
 .cap-extra { display: flex; gap: 8px; }
@@ -533,7 +534,7 @@ input[type="checkbox"], input[type="radio"] {
 .paused-banner { color: var(--danger); font-size: 13px; font-weight: 600; }
 .clear-btn { background: var(--bg-3); color: var(--fg); padding: 12px 20px; }
 .clear-btn:hover { background: var(--danger); }
-.prepared-banner { color: #f59e0b; font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+.prepared-banner { color: var(--warn); font-size: 13px; font-weight: 600; margin: 0 0 10px; }
 .sending-banner { color: #22c55e; font-size: 13px; font-weight: 600; margin: 0 0 10px; }
 .add-new-row { margin-top: 12px; }
 /* Aviso do disjuntor: pausa automática por falhas, com horário de retomada. */
