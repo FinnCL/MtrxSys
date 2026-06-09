@@ -58,7 +58,21 @@ async function request<T>(path: string, init: RequestInit & { auth?: boolean } =
       finalHeaders.set("authorization", `Bearer ${token}`);
     }
   }
-  const resp = await fetch(`${baseUrl}${path}`, { ...rest, headers: finalHeaders });
+  const send = () => fetch(`${baseUrl}${path}`, { ...rest, headers: finalHeaders });
+  let resp = await send();
+  // Um 401 em request autenticada pode ser TRANSITÓRIO (API reiniciando, blip de rede) — antes de
+  // tratar como sessão expirada, tenta UMA vez de novo após um respiro; só desloga se persistir.
+  // Isso resolve o caso real: o polling (GET de 4-5s) capturava um 401 momentâneo e jogava o
+  // usuário pra fora no meio do disparo.
+  // SÓ re-tenta métodos IDEMPOTENTES (GET/HEAD). Um POST (ex.: /api/dispatch) NUNCA é re-tentado
+  // automaticamente: se a 1ª chamada chegou a rodar o handler e ainda assim retornou 401 (reinício/
+  // proxy), re-executar duplicaria a ação (enfileiraria o disparo 2x). Logout em POST é seguro.
+  const method = (rest.method ?? "GET").toUpperCase();
+  const isIdempotent = method === "GET" || method === "HEAD";
+  if (resp.status === 401 && auth && isIdempotent && getToken()) {
+    await new Promise((r) => setTimeout(r, 800));
+    resp = await send();
+  }
   if (!resp.ok) {
     if (resp.status === 401 && auth) {
       handleAuthExpired();

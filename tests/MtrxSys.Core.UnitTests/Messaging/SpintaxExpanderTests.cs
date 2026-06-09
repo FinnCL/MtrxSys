@@ -85,4 +85,21 @@ public sealed class SpintaxExpanderTests
         var result = Build().Expand(huge);
         result.Length.Should().BeLessThanOrEqualTo(4096);
     }
+
+    [Fact]
+    public void Truncation_does_not_split_an_emoji_surrogate_pair()
+    {
+        // 4095 'x' + emoji (😀 = 2 chars UTF-16) = 4097 → o corte em MaxOutput (4096) cairia
+        // exatamente no meio do emoji, deixando um high surrogate órfão. Não pode acontecer:
+        // UTF-16 inválido vira "�" no WAHA e estoura ao gravar em UTF-8 no Postgres.
+        var huge = new string('x', 4095) + "😀";
+
+        var result = Build().Expand(huge);
+
+        result.Length.Should().BeLessThanOrEqualTo(4096);
+        char.IsHighSurrogate(result[^1]).Should().BeFalse();
+        // Round-trip por UTF-8 sem perda confirma que não sobrou surrogate solto.
+        var roundTrip = System.Text.Encoding.UTF8.GetString(System.Text.Encoding.UTF8.GetBytes(result));
+        roundTrip.Should().Be(result);
+    }
 }

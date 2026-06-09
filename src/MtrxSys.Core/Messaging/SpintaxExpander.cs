@@ -1,5 +1,6 @@
 using System.Text;
 using MtrxSys.Core.Application.Abstractions;
+using MtrxSys.Core.Common;
 
 namespace MtrxSys.Core.Messaging;
 
@@ -16,7 +17,10 @@ public sealed class SpintaxExpander(IRandomSource rng)
         }
         var sb = new StringBuilder(Math.Min(template.Length * 2, MaxOutput));
         ExpandInto(template.AsMemory(), sb, depth: 0);
-        return sb.Length > MaxOutput ? sb.ToString(0, MaxOutput) : sb.ToString();
+        var result = sb.Length > MaxOutput ? sb.ToString(0, MaxOutput) : sb.ToString();
+        // O corte em MaxOutput (por índice de char UTF-16) pode partir um emoji ao meio; remove o
+        // high surrogate órfão pra não corromper a mensagem no WAHA nem estourar no Postgres.
+        return result.TrimDanglingHighSurrogate();
     }
 
     private void ExpandInto(ReadOnlyMemory<char> input, StringBuilder output, int depth)

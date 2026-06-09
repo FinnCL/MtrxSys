@@ -1,0 +1,24 @@
+# Override de TESTE E2E — projeto isolado "mtrxe2e": container_names próprios, portas separadas
+# e volumes vazios (namespaced pelo projeto). Simula uma MÁQUINA NOVA sem tocar nos dados nem
+# nos stacks existentes. Subir/derrubar:
+#   docker compose -p mtrxe2e -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
+#   docker compose -p mtrxe2e -f docker-compose.yml -f docker-compose.e2e.yml down -v
+# (!override troca a lista de portas em vez de concatenar com a do compose base.)
+services:
+  postgres:
+    container_name: mtrxe2e-postgres
+    ports: !override ["15432:5432"]
+  redis:
+    container_name: mtrxe2e-redis
+    ports: !override ["16379:6379"]
+  waha:
+    container_name: mtrxe2e-waha
+    ports: !override ["13000:3000"]
+  api:
+    container_name: mtrxe2e-api
+    ports: !override ["18080:8080"]
+  dispatcher:
+    container_name: mtrxe2e-dispatcher
+  web:
+    container_name: mtrxe2e-web
+    ports: !override ["15173:80"]

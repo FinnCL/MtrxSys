@@ -24,4 +24,12 @@ public static class StringExtensions
         }
         return s[..cut] + "…";
     }
+
+    /// <summary>
+    /// Remove um high surrogate "solto" no fim da string — sobra de um corte que partiu um par
+    /// surrogate (emoji) ao meio. Um high surrogate sem o low seguinte é UTF-16 inválido: vira "�"
+    /// em JSON e estoura ao gravar em UTF-8 no Postgres (EncoderFallbackException).
+    /// </summary>
+    public static string TrimDanglingHighSurrogate(this string s)
+        => s.Length > 0 && char.IsHighSurrogate(s[^1]) ? s[..^1] : s;
 }
