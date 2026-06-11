@@ -14,15 +14,9 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
 
     public async Task<WahaSessionStatus> GetSessionStatusAsync(string sessionId, CancellationToken ct)
     {
-        using var req = NewRequest(HttpMethod.Get, $"api/sessions/{Esc(sessionId)}");
-        using var resp = await http.SendAsync(req, ct);
-        if (resp.StatusCode == HttpStatusCode.NotFound)
-        {
-            return WahaSessionStatus.Stopped;
-        }
-        resp.EnsureSuccessStatusCode();
-        var body = await resp.Content.ReadFromJsonAsync<SessionDto>(Json, ct);
-        return ParseStatus(body?.Status);
+        // Delega pro snapshot (uma leitura só da sessão) e devolve apenas o status — evita duplicar
+        // a mesma lógica de 404→Stopped / não-sucesso→Unknown / parse em dois métodos.
+        return (await GetSessionSnapshotAsync(sessionId, ct)).Status;
     }
 
     public async Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct)
@@ -61,6 +55,27 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         return PhoneFromChatId(body?.Me?.Id); // ex.: "5511999999999@c.us" -> "+5511999999999"
     }
 
+    public async Task<WahaSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Get, $"api/sessions/{Esc(sessionId)}");
+        using var resp = await http.SendAsync(req, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            return new WahaSessionSnapshot(WahaSessionStatus.Stopped, null);
+        }
+        if (!resp.IsSuccessStatusCode)
+        {
+            return new WahaSessionSnapshot(WahaSessionStatus.Unknown, null);
+        }
+        var body = await resp.Content.ReadFromJsonAsync<SessionDto>(Json, ct);
+        var status = ParseStatus(body?.Status);
+        var phone = PhoneFromChatId(body?.Me?.Id);
+        var identity = phone is null
+            ? null
+            : new WahaIdentity(phone, string.IsNullOrWhiteSpace(body?.Me?.PushName) ? null : body!.Me!.PushName);
+        return new WahaSessionSnapshot(status, identity);
+    }
+
     public async Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct)
     {
         using var req = NewRequest(HttpMethod.Post, $"api/sessions/{Esc(sessionId)}/start");
@@ -93,6 +108,22 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         resp.EnsureSuccessStatusCode();
     }
 
+    public async Task DeleteSessionAsync(string sessionId, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Delete, $"api/sessions/{Esc(sessionId)}");
+        using var resp = await http.SendAsync(req, ct);
+        // Idempotente/tolerante: 404 = já não existe; 422/409 = estado em que o WAHA recusa o
+        // delete (ex.: sessão parando/engine instável) — não derruba o reset. O start seguinte
+        // recria/reinicia a sessão de qualquer forma.
+        if (resp.StatusCode is HttpStatusCode.NotFound
+            or HttpStatusCode.UnprocessableEntity
+            or HttpStatusCode.Conflict)
+        {
+            return;
+        }
+        resp.EnsureSuccessStatusCode();
+    }
+
     public async Task<byte[]> GetQrPngAsync(string sessionId, CancellationToken ct)
     {
         using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/auth/qr?format=image");
@@ -114,7 +145,12 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
     {
         using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/chats/overview?limit={limit}");
         using var resp = await http.SendAsync(req, ct);
-        resp.EnsureSuccessStatusCode();
+        // Histórico indisponível (ex.: NOWEB sem o "Store" → 400) = "sem chats", não erro fatal. O
+        // sync vira no-op (nada a importar) em vez de estourar 500 no /api/waha/sync.
+        if (!resp.IsSuccessStatusCode)
+        {
+            return [];
+        }
         var body = await resp.Content.ReadFromJsonAsync<List<ChatOverviewDto>>(Json, ct) ?? [];
         return body.Select(c => new WahaChat(
             Id: c.Id ?? string.Empty,
@@ -128,7 +164,11 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
     {
         using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/chats/{Esc(chatId)}/messages?limit={limit}&downloadMedia=false");
         using var resp = await http.SendAsync(req, ct);
-        resp.EnsureSuccessStatusCode();
+        // Mesma resiliência do overview: histórico indisponível (NOWEB sem store) → sem mensagens.
+        if (!resp.IsSuccessStatusCode)
+        {
+            return [];
+        }
         var body = await resp.Content.ReadFromJsonAsync<List<MessageDto>>(Json, ct) ?? [];
         return body
             .OrderBy(m => m.Timestamp ?? 0)

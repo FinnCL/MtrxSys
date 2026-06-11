@@ -68,12 +68,17 @@ public static class PresenceEndpoints
             IMemoryCache cache,
             CancellationToken ct) =>
         {
-            var status = await cache.GetOrCreateAsync("chip-session-status", async entry =>
+            // Status + identidade (número/nome) do chip num cache só (5s): a landing usa o número
+            // pra avisar quando o MESMO contato está conectado em dois ambientes. A identidade só é
+            // buscada quando Working (sessão sem número não tem "me"). Cache evita martelar o WAHA.
+            var info = await cache.GetOrCreateAsync("chip-session-info", async entry =>
             {
                 entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(5);
                 try
                 {
-                    return (await waha.GetSessionStatusAsync(dispatch.Value.SessionId, ct)).ToString();
+                    // Uma leitura só da sessão devolve status + número/nome (antes eram 2 GETs).
+                    var snap = await waha.GetSessionSnapshotAsync(dispatch.Value.SessionId, ct);
+                    return new ChipInfo(snap.Status.ToString(), snap.Identity?.PhoneE164, snap.Identity?.Name);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -82,10 +87,10 @@ public static class PresenceEndpoints
 #pragma warning disable CA1031
                 catch
                 {
-                    return WahaSessionStatus.Unknown.ToString();
+                    return new ChipInfo(WahaSessionStatus.Unknown.ToString(), null, null);
                 }
 #pragma warning restore CA1031
-            });
+            }) ?? new ChipInfo(WahaSessionStatus.Unknown.ToString(), null, null);
 
             bool breakerOpen;
             try
@@ -103,9 +108,12 @@ public static class PresenceEndpoints
             }
 #pragma warning restore CA1031
 
-            return Results.Ok(new { status, breakerOpen });
+            return Results.Ok(new { status = info.Status, breakerOpen, phone = info.Phone, name = info.Name });
         }).AllowAnonymous();
 
         return app;
     }
+
+    // Status + identidade do chip, cacheados juntos no /chip.
+    private sealed record ChipInfo(string Status, string? Phone, string? Name);
 }

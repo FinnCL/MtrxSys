@@ -1,4 +1,5 @@
 using MtrxSys.Core.Application.Abstractions;
+using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Domain.Contacts;
 
 namespace MtrxSys.Api.Endpoints;
@@ -205,6 +206,27 @@ public static class ContactsEndpoints
             return Results.Ok(new { deleted });
         });
 
+        // Cadastro manual: digita/cola uma lista de números (origem NÃO confiável, ao contrário do
+        // import de grupo). Normaliza pra E.164, auto-corrige o 9º dígito quando dá, dedup pelo
+        // E.164 e devolve o status de cada linha. Números avulsos caem no grupo "Avulsos" por padrão.
+        group.MapPost("/manual", async (
+            AddManualContactsRequest req,
+            AddManualContactsUseCase useCase,
+            CancellationToken ct) =>
+        {
+            if (req.Numbers is null || req.Numbers.Count == 0)
+            {
+                return Results.Problem("Cole ao menos um número.", statusCode: 400);
+            }
+            // Teto de sanidade contra um paste acidental gigante (tudo numa transação só).
+            if (req.Numbers.Count > 2000)
+            {
+                return Results.Problem("Máximo de 2000 números por vez.", statusCode: 400);
+            }
+            var result = await useCase.ExecuteAsync(req.Numbers, req.GroupTag, ct);
+            return Results.Ok(ToResponse(result));
+        });
+
         group.MapPost("/{id:guid}/notes", async (
             Guid id,
             CreateNoteRequest req,
@@ -253,6 +275,13 @@ public static class ContactsEndpoints
 
     private static ContactNoteDto ToDto(ContactNote n) => new(n.Id, n.ContactId, n.Body, n.CreatedAt, n.CreatedByUserId);
 
+    // Mapeia o resultado do use case pra resposta da API. Status vira string (ToString) — o projeto
+    // não tem conversor global de enum, e o front consome os nomes ("Ok"/"Corrected"/...).
+    private static ManualImportResponse ToResponse(ManualImportResult r) => new(
+        r.Total, r.Added, r.Duplicated, r.Corrected, r.Invalid,
+        r.Lines.Select(l => new ManualLineResponse(
+            l.Input, l.Status.ToString(), l.Phone, l.Correction, l.Reason)).ToList());
+
     private static StageChangeDto ToDto(ContactStageChange c) => new(
         c.Id,
         c.FromStage?.ToString(),
@@ -265,6 +294,14 @@ public static class ContactsEndpoints
     public sealed record CreateNoteRequest(string Body);
 
     public sealed record DeleteByGroupRequest(string GroupTag);
+
+    public sealed record AddManualContactsRequest(IReadOnlyList<string> Numbers, string? GroupTag);
+
+    public sealed record ManualImportResponse(
+        int Total, int Added, int Duplicated, int Corrected, int Invalid, IReadOnlyList<ManualLineResponse> Lines);
+
+    public sealed record ManualLineResponse(
+        string Input, string Status, string? Phone, string? Correction, string? Reason);
 
     public sealed record ContactDto(
         Guid Id,

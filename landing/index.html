@@ -72,6 +72,14 @@
     .chip-status.paired { color: var(--accent); }
     .chip-status.failed { color: var(--danger); }
     /* .disconnected não precisa de regra: a cor base de .chip-status já é var(--muted). */
+
+    /* Identidade do chip conectado (nome + número), abaixo da pílula de status. Fica vermelho
+       e em negrito quando o MESMO número está conectado em outro card (aviso de conflito). */
+    .chip-identity {
+      font-size: 11px; color: var(--muted); min-height: 1em; word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .chip-identity.dup { color: var(--danger); font-weight: 600; font-family: inherit; }
     .login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
     .login-card input {
       background: var(--bg);
@@ -480,7 +488,7 @@
     // presença (10s) porque é uma chamada ao WAHA — o backend ainda cacheia ~5s pra não martelar
     // o Chromium. Só grava o estado do chip; o renderStatus decide se ele aparece (perde pro
     // "Em uso"). Mapeamento:
-    //   FAILED                    → failed (sessão caiu)
+    //   FAILED + número           → failed (chip conectou e caiu); FAILED sem número → disconnected (nunca pareado)
     //   WORKING + breaker aberto  → failed (chip conectado mas não está disparando — troque)
     //   WORKING                   → paired (pareado e ativo, ninguém usando)
     //   resto/erro/queda          → disconnected (QR não lido / parado / fora do ar)
@@ -491,16 +499,66 @@
       chipByEnv[env] = state;
       renderStatus(env);
     }
+
+    // Identidade (número + nome) do chip conectado em cada ambiente, pra detectar o MESMO número
+    // conectado em dois cards e avisar em vermelho. Só vale entre ambientes que o landing alcança
+    // (mesma máquina/rede) — outra máquina não tem como ser detectada.
+    const phoneByEnv = {};
+    const nameByEnv = {};
+    function setIdentity(env, phone, name) {
+      if (phoneByEnv[env] === phone && nameByEnv[env] === name) return;
+      phoneByEnv[env] = phone;
+      nameByEnv[env] = name;
+      renderIdentities();
+    }
+    function renderIdentities() {
+      // Conta quantos ambientes reportam cada número (só os conectados têm número).
+      const counts = {};
+      for (const e of Object.keys(ENVS)) {
+        const p = phoneByEnv[e];
+        if (p) counts[p] = (counts[p] || 0) + 1;
+      }
+      for (const e of Object.keys(ENVS)) {
+        const el = document.querySelector(`form[data-env="${e}"] .chip-identity`);
+        if (!el) continue;
+        const p = phoneByEnv[e];
+        if (!p) {
+          if (el.dataset.k !== "") { el.dataset.k = ""; el.className = "chip-identity"; el.textContent = ""; }
+          continue;
+        }
+        const name = nameByEnv[e];
+        const dup = counts[p] > 1;
+        const others = Object.keys(ENVS)
+          .filter((o) => o !== e && phoneByEnv[o] === p)
+          .map((o) => o.toUpperCase());
+        const base = name ? `${name} · ${p}` : p;
+        const text = dup ? `${base} — também no card ${others.join(", ")}` : base;
+        const k = (dup ? "D:" : "") + text;
+        if (el.dataset.k === k) continue; // sem mudança → não toca no DOM
+        el.dataset.k = k;
+        el.className = "chip-identity" + (dup ? " dup" : "");
+        el.textContent = text;
+      }
+    }
     async function pollChip(env) {
       try {
         const resp = await fetch(`${ENVS[env].backend}/api/presence/chip`, { cache: "no-store" });
         const data = resp.ok ? await resp.json() : null;
-        if (!data) setCardChip(env, "disconnected");
-        else if (data.status === "Failed") setCardChip(env, "failed");
+        if (!data) {
+          setCardChip(env, "disconnected");
+          setIdentity(env, null, null);
+          return;
+        }
+        // FAILED COM número = chip que conectou e caiu (falha real → "Chip com falha"). FAILED SEM
+        // número = sessão que nunca foi pareada / QR expirou → "Desconectado", não "Chip com falha".
+        if (data.status === "Failed") setCardChip(env, data.phone ? "failed" : "disconnected");
         else if (data.status === "Working") setCardChip(env, data.breakerOpen ? "failed" : "paired");
         else setCardChip(env, "disconnected"); // ScanQrCode/Stopped/etc.: QR não lido
+        // O número/nome só vêm quando Working; nos demais estados ficam null (sem identidade).
+        setIdentity(env, data.phone || null, data.name || null);
       } catch {
         setCardChip(env, "disconnected"); // backend fora do ar → padrão
+        setIdentity(env, null, null);
       }
     }
     function pollAllChips() {
@@ -526,6 +584,13 @@
       chip.dataset.state = "disconnected";
       chip.textContent = "Desconectado";
       h1.insertAdjacentElement("afterend", chip);
+
+      // Linha de identidade (nome + número do chip conectado), logo abaixo da pílula.
+      const ident = document.createElement("div");
+      ident.className = "chip-identity";
+      ident.dataset.k = "";
+      chip.insertAdjacentElement("afterend", ident);
+
       renderStatus(form.dataset.env);
 
       form.addEventListener("submit", async (e) => {

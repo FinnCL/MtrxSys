@@ -5,6 +5,8 @@ public interface IWahaClient
     Task<WahaSessionStatus> GetSessionStatusAsync(string sessionId, CancellationToken ct);
     /// <summary>Telefone E.164 do número conectado na sessão ("me"), ou null se indisponível.</summary>
     Task<string?> GetOwnPhoneE164Async(string sessionId, CancellationToken ct);
+    /// <summary>Status + identidade (número/nome) da sessão numa ÚNICA leitura (evita 2 GETs).</summary>
+    Task<WahaSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken ct);
     /// <summary>Resolve um LID (@lid, número oculto) para o telefone E.164 real, ou null se não der.</summary>
     Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct);
     Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct);
@@ -12,6 +14,9 @@ public interface IWahaClient
     Task RestartSessionAsync(string sessionId, CancellationToken ct);
     /// <summary>Desconecta o número da sessão (logout no WhatsApp). Depois é preciso parear de novo via QR.</summary>
     Task LogoutSessionAsync(string sessionId, CancellationToken ct);
+    /// <summary>Apaga a sessão por completo (config + credenciais em disco). Diferente do logout, não
+    /// deixa resíduo pro WAHA restaurar — garante QR novo no próximo start. Idempotente (404 = ok).</summary>
+    Task DeleteSessionAsync(string sessionId, CancellationToken ct);
     Task<byte[]> GetQrPngAsync(string sessionId, CancellationToken ct);
     Task<string> GetQrRawAsync(string sessionId, CancellationToken ct);
 
@@ -40,6 +45,10 @@ public enum WahaSessionStatus
     Working,
     Failed,
 }
+
+public sealed record WahaIdentity(string PhoneE164, string? Name);
+
+public sealed record WahaSessionSnapshot(WahaSessionStatus Status, WahaIdentity? Identity);
 
 public sealed record WahaGroup(string Id, string Name, int? ParticipantsCount);
 

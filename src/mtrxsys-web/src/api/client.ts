@@ -13,6 +13,7 @@ import type {
   DispatchStats,
   Group,
   ImportResult,
+  ManualImportResult,
   LoginResponse,
   MessageSlot,
   MessageTemplate,
@@ -110,7 +111,10 @@ export const api = {
     }),
   wahaStatus: () => request<{ status: WahaStatus; session: string }>("/api/waha/status"),
   wahaStart: () => request<{ status: WahaStatus }>("/api/waha/start", { method: "POST" }),
-  wahaLogout: () => request<{ status: WahaStatus }>("/api/waha/logout", { method: "POST" }),
+  // Reset completo: desconecta E apaga a sessão (sem resíduo no volume) e recria → QR novo.
+  // Usado ao trocar de número, pra o pareamento ser dinâmico (não restaura o aparelho antigo).
+  // O endpoint /api/waha/logout continua existindo no backend, mas o front sempre usa o reset.
+  wahaReset: () => request<{ status: WahaStatus }>("/api/waha/reset", { method: "POST" }),
   // Religa conversas órfãs (sem contato) ao contato — auto-cura ao reconectar.
   relinkConversations: () =>
     request<{ linked: number }>("/api/conversations/relink", { method: "POST" }),
@@ -189,6 +193,11 @@ export const api = {
     request<ImportResult>(`/api/groups/${encodeURIComponent(groupId)}/import`, {
       method: "POST",
       body: JSON.stringify({ groupTag: groupTag ?? null }),
+    }),
+  addManualContacts: (numbers: string[], groupTag?: string) =>
+    request<ManualImportResult>("/api/contacts/manual", {
+      method: "POST",
+      body: JSON.stringify({ numbers, groupTag: groupTag ?? null }),
     }),
   listTemplates: () => request<MessageTemplate[]>("/api/templates"),
   createTemplate: (

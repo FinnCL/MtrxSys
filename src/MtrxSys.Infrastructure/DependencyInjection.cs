@@ -82,6 +82,7 @@ public static class DependencyInjection
         services.AddSingleton<ITokenService, JwtTokenService>();
 
         services.AddScoped<ImportGroupMembersUseCase>();
+        services.AddScoped<AddManualContactsUseCase>();
         services.AddScoped<MtrxSys.Core.Application.UseCases.Conversations.RelinkOrphanConversationsUseCase>();
         services.AddScoped<IWebhookIngestionService, WebhookIngestionService>();
         services.AddScoped<WhatsAppSyncService>();

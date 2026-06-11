@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { type Contact, type ContactGroupTag } from "../api/types";
+import { AddContactsModal } from "./AddContactsModal";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { StatusBadge } from "./StatusBadge";
 
@@ -20,6 +21,7 @@ export function ContactsScreen() {
   >(null);
   const [busy, setBusy] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -100,7 +102,12 @@ export function ContactsScreen() {
   return (
     <main className="contacts-screen">
       <header className="contacts-header">
-        <h2>Contatos por grupo</h2>
+        <div className="contacts-header-top">
+          <h2>Contatos por grupo</h2>
+          <button type="button" onClick={() => setShowAdd(true)}>
+            Adicionar números
+          </button>
+        </div>
         <p className="muted">Clique num grupo para abrir os contatos salvos dele.</p>
       </header>
 
@@ -254,6 +261,27 @@ export function ContactsScreen() {
           danger={pending.kind === "delete"}
           onConfirm={() => void confirmPending()}
           onCancel={() => setPending(null)}
+        />
+      )}
+
+      {showAdd && (
+        <AddContactsModal
+          onClose={() => setShowAdd(false)}
+          onSaved={async (r) => {
+            if (r.added === 0 && r.duplicated === 0) return;
+            try {
+              // Novos contatos podem ter criado/realimentado o grupo "Avulsos" → recarrega a lista
+              // de grupos e, se algum grupo afetado estiver aberto, rebusca seus contatos.
+              setGroups(await api.listContactGroupTags());
+              if (expanded) {
+                const list = await api.listContacts({ groupTag: expanded });
+                setContactsByGroup((prev) => ({ ...prev, [expanded]: list }));
+              }
+            } catch (ex) {
+              // O cadastro já foi salvo; só o refresh da lista falhou. Mostra o erro sem derrubar nada.
+              setError(ex instanceof Error ? ex.message : String(ex));
+            }
+          }}
         />
       )}
     </main>

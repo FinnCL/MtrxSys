@@ -53,6 +53,8 @@ services:
       - "3003:3000"
     environment:
       TZ: UTC
+      # Engine NOWEB (sem Chromium) — ver docker-compose.yml. Reparear o chip após a troca.
+      WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
       WAHA_DASHBOARD_ENABLED: "true"
       WAHA_DASHBOARD_USERNAME: ${WAHA4_DASH_USER:-admin}
       WAHA_DASHBOARD_PASSWORD: ${WAHA4_DASH_PASS:-admin}

@@ -159,6 +159,26 @@ export interface ImportResult {
   failures: ImportFailure[];
 }
 
+// Cadastro manual (digitar/colar números). Status por linha, na ordem em que foram colados.
+export type ManualLineStatus = "Ok" | "Corrected" | "Duplicate" | "Invalid";
+
+export interface ManualLineResult {
+  input: string; // o que o usuário colou nessa linha
+  status: ManualLineStatus;
+  phone: string | null; // E.164 final (null quando inválido)
+  correction: string | null; // rótulo da auto-correção (ex.: "9º dígito inserido")
+  reason: string | null; // motivo quando inválido
+}
+
+export interface ManualImportResult {
+  total: number;
+  added: number;
+  duplicated: number;
+  corrected: number;
+  invalid: number;
+  lines: ManualLineResult[];
+}
+
 export type MessageSlot = "Greeting" | "Intro" | "Hook" | "OptOut";
 
 export interface MessageTemplate {

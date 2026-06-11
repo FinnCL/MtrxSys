@@ -50,18 +50,25 @@ function Shell() {
     }
   }, []);
 
-  // Desconecta o número do WhatsApp (não é o mesmo que "Sair" do sistema). Some o número
-  // pareado; a tela de conexão reaparece sozinha (wahaWorking=false) pra escanear outro.
+  // Desconecta o número do WhatsApp (não é o mesmo que "Sair" do sistema). Faz RESET completo
+  // (logout + apaga a sessão + recria): sem isso, o WAHA restauraria o número antigo do volume e
+  // não mostraria QR novo. Assim o pareamento é dinâmico — a sessão cai em ScanQrCode e a tela de
+  // conexão reaparece sozinha (wahaWorking=false) pra escanear outro aparelho. Contatos no banco
+  // ficam intactos; só a sessão do WhatsApp é zerada.
   const disconnectWhatsApp = useCallback(async () => {
     setConfirmDisconnect(false);
     try {
-      await api.wahaLogout();
+      const r = await api.wahaReset();
       autoSyncTriggeredRef.current = false; // permite o auto-sync de novo ao reconectar
-      setWahaWorking(false);
+      // Pós-reset a sessão fica em ScanQrCode/Starting (nunca Working) → mostra o onboarding.
+      setWahaWorking(r.status === "Working");
     } catch (ex) {
       setSyncMsg(`Erro ao desconectar: ${ex instanceof Error ? ex.message : String(ex)}`);
+      // Falha parcial (ex.: sessão apagada mas o start falhou): sincroniza a UI com o estado REAL
+      // em vez de seguir mostrando "conectado" enganosamente. O auto-sync recria a sessão sozinho.
+      await checkWaha();
     }
-  }, []);
+  }, [checkWaha]);
 
   useEffect(() => {
     if (!user) return;

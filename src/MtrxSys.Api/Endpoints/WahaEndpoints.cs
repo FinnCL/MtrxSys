@@ -40,22 +40,7 @@ public static class WahaEndpoints
                 await waha.EnsureSessionStartedAsync(sessionId, ct);
             }
 
-            var hookUrl = wahaOpts.Value.WebhookCallbackUrl;
-            if (!string.IsNullOrWhiteSpace(hookUrl))
-            {
-                var log = logFactory.CreateLogger("WahaStart");
-                try
-                {
-                    await waha.EnsureWebhookConfiguredAsync(sessionId, hookUrl, wahaOpts.Value.WebhookEvents, ct);
-                    log.LogInformation("Webhook ensured after start at {Url}", hookUrl);
-                }
-#pragma warning disable CA1031
-                catch (Exception ex)
-                {
-                    log.LogWarning(ex, "Failed to ensure webhook after start; will retry on next status check");
-                }
-#pragma warning restore CA1031
-            }
+            await TryEnsureWebhookAsync(waha, sessionId, wahaOpts.Value, logFactory.CreateLogger("WahaStart"), ct);
 
             var status = await waha.GetSessionStatusAsync(sessionId, ct);
             return Results.Ok(new { status = status.ToString() });
@@ -70,6 +55,28 @@ public static class WahaEndpoints
         {
             await waha.LogoutSessionAsync(dispatch.Value.SessionId, ct);
             var status = await waha.GetSessionStatusAsync(dispatch.Value.SessionId, ct);
+            return Results.Ok(new { status = status.ToString() });
+        });
+
+        // Reset completo: desconecta E apaga a sessão (credenciais em disco), depois recria.
+        // Sem o delete, o WAHA restaura o número antigo do volume e nunca mostra um QR novo —
+        // é o que deixa o pareamento dinâmico (o próximo QR vale, o antigo é descartado). Os
+        // contatos/conversas ficam no Postgres, intactos; isto só zera a sessão do WhatsApp.
+        group.MapPost("/reset", async (
+            IWahaClient waha,
+            IOptions<DispatchOptions> dispatch,
+            IOptions<WahaOptions> wahaOpts,
+            ILoggerFactory logFactory,
+            CancellationToken ct) =>
+        {
+            var sessionId = dispatch.Value.SessionId;
+            await waha.LogoutSessionAsync(sessionId, ct);
+            await waha.DeleteSessionAsync(sessionId, ct);
+            // Recria a sessão: sem credenciais, o WAHA vai pra ScanQrCode com um QR novo.
+            await waha.EnsureSessionStartedAsync(sessionId, ct);
+            await TryEnsureWebhookAsync(waha, sessionId, wahaOpts.Value, logFactory.CreateLogger("WahaReset"), ct);
+
+            var status = await waha.GetSessionStatusAsync(sessionId, ct);
             return Results.Ok(new { status = status.ToString() });
         });
 
@@ -102,5 +109,28 @@ public static class WahaEndpoints
         });
 
         return app;
+    }
+
+    // Reaplica o webhook na sessão (best-effort): falha aqui não derruba o start/reset — o
+    // ensurer de startup e o próximo /status tentam de novo. Compartilhado por /start e /reset.
+    private static async Task TryEnsureWebhookAsync(
+        IWahaClient waha, string sessionId, WahaOptions opts, ILogger log, CancellationToken ct)
+    {
+        var hookUrl = opts.WebhookCallbackUrl;
+        if (string.IsNullOrWhiteSpace(hookUrl))
+        {
+            return;
+        }
+        try
+        {
+            await waha.EnsureWebhookConfiguredAsync(sessionId, hookUrl, opts.WebhookEvents, ct);
+            log.LogInformation("Webhook ensured at {Url}", hookUrl);
+        }
+#pragma warning disable CA1031
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Failed to ensure webhook; will retry on next status check");
+        }
+#pragma warning restore CA1031
     }
 }

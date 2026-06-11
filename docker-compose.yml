@@ -39,6 +39,10 @@ services:
       - "3000:3000"
     environment:
       TZ: UTC
+      # Engine NOWEB (sem Chromium): conexão direta por WebSocket, ~5-10x menos RAM que o WEBJS.
+      # Permite rodar muitos ambientes na mesma máquina sem o engine cair ("browser disconnected").
+      # Trocar de engine exige reparear o chip (a sessão antiga WEBJS não serve pro NOWEB).
+      WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
       WAHA_DASHBOARD_ENABLED: "true"
       WAHA_DASHBOARD_USERNAME: ${WAHA_DASH_USER:-admin}
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASH_PASS:-admin}
