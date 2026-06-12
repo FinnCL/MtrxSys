@@ -55,6 +55,11 @@ services:
       TZ: UTC
       # Engine NOWEB (sem Chromium) — ver docker-compose.yml. Reparear o chip após a troca.
       WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
+      # Proxy por chip (anti-correlacao de IP). Vazio = SEM proxy (comportamento atual).
+      # Ligar: defina WAHA_PROXY_3=ip:porta (e _USER/_PASS) num .env e recrie o waha.
+      WHATSAPP_PROXY_SERVER: ${WAHA_PROXY_3:-}
+      WHATSAPP_PROXY_SERVER_USERNAME: ${WAHA_PROXY_3_USER:-}
+      WHATSAPP_PROXY_SERVER_PASSWORD: ${WAHA_PROXY_3_PASS:-}
       WAHA_DASHBOARD_ENABLED: "true"
       WAHA_DASHBOARD_USERNAME: ${WAHA3_DASH_USER:-admin}
       WAHA_DASHBOARD_PASSWORD: ${WAHA3_DASH_PASS:-admin}

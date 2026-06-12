@@ -43,6 +43,11 @@ services:
       # Permite rodar muitos ambientes na mesma máquina sem o engine cair ("browser disconnected").
       # Trocar de engine exige reparear o chip (a sessão antiga WEBJS não serve pro NOWEB).
       WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
+      # Proxy por chip (anti-correlacao de IP). Vazio = SEM proxy (comportamento atual).
+      # Ligar: defina WAHA_PROXY_1=ip:porta (e _USER/_PASS) num .env e recrie o waha.
+      WHATSAPP_PROXY_SERVER: ${WAHA_PROXY_1:-}
+      WHATSAPP_PROXY_SERVER_USERNAME: ${WAHA_PROXY_1_USER:-}
+      WHATSAPP_PROXY_SERVER_PASSWORD: ${WAHA_PROXY_1_PASS:-}
       WAHA_DASHBOARD_ENABLED: "true"
       WAHA_DASHBOARD_USERNAME: ${WAHA_DASH_USER:-admin}
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASH_PASS:-admin}
