@@ -25,6 +25,9 @@ function Shell() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [view, setView] = useState<ViewTab>("chat");
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  // Estável (useCallback) pra não recriar os efeitos do WhatsAppOnboarding (polling/auto-retry do
+  // QR) a cada render deste pai — uma arrow inline mudaria de referência todo render.
+  const handleWahaWorking = useCallback(() => setWahaWorking(true), []);
   const autoSyncTriggeredRef = useRef(false);
 
   const runSync = useCallback(async (silent = false) => {
@@ -159,7 +162,7 @@ function Shell() {
           </button>
         </div>
       ) : !wahaWorking ? (
-        <WhatsAppOnboarding onWorking={() => setWahaWorking(true)} />
+        <WhatsAppOnboarding onWorking={handleWahaWorking} />
       ) : view === "groups" ? (
         <GroupsScreen />
       ) : view === "contacts" ? (

@@ -43,6 +43,71 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         return string.IsNullOrEmpty(digits) ? null : "+" + digits;
     }
 
+    // Extrai o telefone real (+DDDnúmero) de um participante de grupo, tolerante às duas engines da
+    // WAHA: a NOWEB expõe o número em `phoneNumber` (e o `id` vira o @lid oculto), enquanto a WEBJS
+    // trazia no próprio `id` (objeto {user, server}). Retorna null pra quem não tem número real —
+    // participante só-@lid ou pseudo-id sem dígito significativo —, que viraria contato-lixo.
+    private static string? PhoneFromParticipant(JsonElement p)
+    {
+        if (p.TryGetProperty("phoneNumber", out var pn) && pn.ValueKind == JsonValueKind.String)
+        {
+            return RealPhoneOrNull(PhoneFromChatId(pn.GetString()));
+        }
+        if (!p.TryGetProperty("id", out var id))
+        {
+            return null;
+        }
+        if (id.ValueKind == JsonValueKind.String)
+        {
+            var raw = id.GetString() ?? string.Empty;
+            return raw.Contains("@lid", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : RealPhoneOrNull(PhoneFromChatId(raw));
+        }
+        if (id.ValueKind == JsonValueKind.Object)
+        {
+            var server = id.TryGetProperty("server", out var sv) ? sv.GetString() : null;
+            if (string.Equals(server, "lid", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+            var user = id.TryGetProperty("user", out var us) ? us.GetString() : null;
+            return RealPhoneOrNull(PhoneFromChatId(user));
+        }
+        return null;
+    }
+
+    // Descarta números sem nenhum dígito significativo (ex.: "+0", "+000"): pseudo-ids que
+    // virariam contato-lixo no disparo. PhoneFromChatId já garante ao menos um dígito.
+    private static string? RealPhoneOrNull(string? phone) =>
+        phone is not null && phone.Any(ch => char.IsDigit(ch) && ch != '0') ? phone : null;
+
+    // Admin do grupo, tolerante às duas engines: NOWEB usa `admin` ("admin"/"superadmin"),
+    // WEBJS usava `role` ("ADMIN"/"SUPERADMIN").
+    private static bool IsAdminRole(JsonElement p)
+    {
+        var role = (p.TryGetProperty("admin", out var a) ? a.GetString() : null)
+            ?? (p.TryGetProperty("role", out var r) ? r.GetString() : null);
+        return string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "superadmin", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Mapeia um grupo no formato NOWEB (objeto com `id` string, nome em `subject` e `participants`
+    // inline) pro modelo do app. O número do grupo é o trecho antes do @ do JID.
+    private static WahaGroup MapNowebGroup(JsonElement g)
+    {
+        var jid = g.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
+            ? idEl.GetString() ?? string.Empty
+            : string.Empty;
+        var at = jid.IndexOf('@', StringComparison.Ordinal);
+        var groupNumber = at > 0 ? jid[..at] : jid;
+        var name = g.TryGetProperty("subject", out var subjEl) ? subjEl.GetString() ?? string.Empty : string.Empty;
+        int? count = g.TryGetProperty("participants", out var partsEl) && partsEl.ValueKind == JsonValueKind.Array
+            ? partsEl.GetArrayLength()
+            : null;
+        return new WahaGroup(groupNumber, name, count);
+    }
+
     public async Task<string?> GetOwnPhoneE164Async(string sessionId, CancellationToken ct)
     {
         using var req = NewRequest(HttpMethod.Get, $"api/sessions/{Esc(sessionId)}");
@@ -80,6 +145,27 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
     {
         using var req = NewRequest(HttpMethod.Post, $"api/sessions/{Esc(sessionId)}/start");
         using var resp = await http.SendAsync(req, ct);
+        if (resp.StatusCode is HttpStatusCode.UnprocessableEntity or HttpStatusCode.Conflict)
+        {
+            return;
+        }
+        // Engine NOWEB: o /start NÃO cria a sessão — só inicia uma que já existe. Quando ela ainda
+        // não foi criada (ex.: stack novo, ou logo após um delete no reset), o WAHA responde 404.
+        // Nesse caso criamos a sessão já iniciando; o webhook é aplicado em seguida pelo ensurer.
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            await CreateSessionAsync(sessionId, ct);
+            return;
+        }
+        resp.EnsureSuccessStatusCode();
+    }
+
+    private async Task CreateSessionAsync(string sessionId, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Post, "api/sessions");
+        req.Content = JsonContent.Create(new { name = sessionId, start = true }, options: Json);
+        using var resp = await http.SendAsync(req, ct);
+        // 422/409 = corrida: a sessão já foi criada nesse meio-tempo. Considera concluído.
         if (resp.StatusCode is HttpStatusCode.UnprocessableEntity or HttpStatusCode.Conflict)
         {
             return;
@@ -187,7 +273,23 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/groups");
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
-        var body = await resp.Content.ReadFromJsonAsync<List<GroupDto>>(Json, ct) ?? [];
+        using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        var root = doc.RootElement;
+
+        // Engine NOWEB: /groups devolve um OBJETO indexado por JID ({ "<jid>@g.us": {...} }), com o
+        // nome em `subject` e os `participants` inline — e só lista grupos dos quais ainda sou
+        // membro. Mapeia direto, sem as chamadas extras de /participants que a WEBJS exige pra
+        // decidir a participação. (WEBJS devolvia um ARRAY; tratado no caminho abaixo.)
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            return root.EnumerateObject()
+                .Select(prop => MapNowebGroup(prop.Value))
+                .Where(g => !string.IsNullOrEmpty(g.Id))
+                .ToList();
+        }
+
+        var body = root.Deserialize<List<GroupDto>>(Json) ?? [];
 
         // Esconde grupos onde o número conectado já não é mais membro (saiu pelo celular). A WAHA
         // continua listando esse grupo enquanto o chat não for "Apagar conversa" no celular —
@@ -295,16 +397,28 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/groups/{Esc(groupJid)}/participants");
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
-        var body = await resp.Content.ReadFromJsonAsync<List<ParticipantDto>>(Json, ct) ?? [];
-        return body
-            .Where(p => p.Id is not null && IsRealContactId(p.Id))
-            .Select(p => new WahaParticipant(
-                Id: p.Id!.RawId ?? p.Id.User ?? "",
-                PhoneE164: "+" + (p.Id.User ?? string.Empty),
-                Name: p.PushName,
-                IsAdmin: string.Equals(p.Role, "ADMIN", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(p.Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase)))
-            .ToList();
+        using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+        var result = new List<WahaParticipant>();
+        foreach (var p in doc.RootElement.EnumerateArray())
+        {
+            var phone = PhoneFromParticipant(p);
+            if (phone is null)
+            {
+                continue;
+            }
+            var name = p.TryGetProperty("pushName", out var nmEl) ? nmEl.GetString() : null;
+            result.Add(new WahaParticipant(
+                Id: phone.TrimStart('+'),
+                PhoneE164: phone,
+                Name: string.IsNullOrWhiteSpace(name) ? null : name,
+                IsAdmin: IsAdminRole(p)));
+        }
+        return result;
     }
 
     public async Task<WahaGroup> JoinGroupByInviteAsync(string sessionId, string inviteCodeOrUrl, CancellationToken ct)
@@ -329,8 +443,7 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         }, options: Json);
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
-        var body = await resp.Content.ReadFromJsonAsync<SendResponseDto>(Json, ct);
-        return body?.Id?.Id ?? body?.Id?.Serialized ?? string.Empty;
+        return await ReadSentMessageIdAsync(resp, ct);
     }
 
     public async Task<string> SendImageAsync(
@@ -351,8 +464,52 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         }, options: Json);
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
-        var body = await resp.Content.ReadFromJsonAsync<SendResponseDto>(Json, ct);
-        return body?.Id?.Id ?? body?.Id?.Serialized ?? string.Empty;
+        return await ReadSentMessageIdAsync(resp, ct);
+    }
+
+    // O sucesso do ENVIO já foi decidido pelo status HTTP (EnsureSuccessStatusCode acima); extrair
+    // o id da mensagem é best-effort e NÃO pode lançar. A forma da resposta varia entre engines
+    // (NOWEB devolve `id` como string ou objeto {id, _serialized}; WEBJS, objeto) — um formato
+    // inesperado retorna id vazio, jamais exceção: a mensagem já saiu (irreversível) e lançar aqui
+    // a marcaria como falha, gerando reenvio duplicado no retry.
+    private static async Task<string> ReadSentMessageIdAsync(HttpResponseMessage resp, CancellationToken ct)
+    {
+        try
+        {
+            using var stream = await resp.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            if (!doc.RootElement.TryGetProperty("id", out var id))
+            {
+                return string.Empty;
+            }
+            if (id.ValueKind == JsonValueKind.String)
+            {
+                return id.GetString() ?? string.Empty;
+            }
+            if (id.ValueKind == JsonValueKind.Object)
+            {
+                if (id.TryGetProperty("_serialized", out var ser) && ser.ValueKind == JsonValueKind.String)
+                {
+                    return ser.GetString() ?? string.Empty;
+                }
+                if (id.TryGetProperty("id", out var inner) && inner.ValueKind == JsonValueKind.String)
+                {
+                    return inner.GetString() ?? string.Empty;
+                }
+            }
+            return string.Empty;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031
+        catch (Exception)
+        {
+            // Corpo ausente/ilegível ou formato inesperado: id vazio, sem comprometer o envio.
+            return string.Empty;
+        }
+#pragma warning restore CA1031
     }
 
     private static string ExtensionFor(string mimeType) => mimeType switch
@@ -486,23 +643,8 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
     private sealed record ChatLastMessageDto(string? Body, long? Timestamp);
     private sealed record ChatOverviewDto(string? Id, string? Name, ChatLastMessageDto? LastMessage);
     private sealed record MessageDto(string? Id, string? From, string? Author, bool? FromMe, string? Body, long? Timestamp);
-    // Participante "real" = número de telefone de verdade. Ignora número oculto (@lid) e
-    // pseudo-ids sem dígito real, que virariam contato-lixo (ex.: "+<lid>", "+0").
-    private static bool IsRealContactId(GroupIdDto id)
-    {
-        if (string.Equals(id.Server, "lid", StringComparison.OrdinalIgnoreCase)
-            || (id.RawId?.Contains("@lid", StringComparison.OrdinalIgnoreCase) ?? false))
-        {
-            return false;
-        }
-        var user = id.User;
-        return !string.IsNullOrWhiteSpace(user) && user.Any(ch => char.IsDigit(ch) && ch != '0');
-    }
-
     private sealed record GroupIdDto(string? Server, string? User, string? RawId);
     private sealed record GroupDto(GroupIdDto? Id, string? Name, List<ParticipantDto>? Participants);
     private sealed record ParticipantDto(GroupIdDto? Id, string? PushName, string? Role);
     private sealed record JoinResponseDto(string? Id, string? Name);
-    private sealed record SendResponseIdDto(string? Id, string? Serialized);
-    private sealed record SendResponseDto(SendResponseIdDto? Id);
 }
