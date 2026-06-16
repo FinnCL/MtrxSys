@@ -185,6 +185,10 @@ input[type="checkbox"], input[type="radio"] {
 .import-summary { color: #22c55e; font-size: 12px; margin-top: 4px; }
 .import-btn { background: var(--bg-3); color: var(--fg); padding: 6px 14px; font-size: 13px; flex-shrink: 0; }
 .import-btn:hover:not(:disabled) { background: var(--accent); }
+/* Ações por grupo (importar + sair) lado a lado, sem quebrar o space-between da linha. */
+.group-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
+.leave-btn { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 6px 14px; font-size: 13px; flex-shrink: 0; }
+.leave-btn:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
 /* Excluir contatos do grupo: link discreto, só dentro do grupo aberto (evita miss-click). */
 .group-delete-row { display: flex; justify-content: flex-end; margin-top: 10px; }
 .group-delete-link {
@@ -658,6 +662,9 @@ input[type="checkbox"], input[type="radio"] {
   /* grupos: linha empilha o botão embaixo */
   .group-row { flex-direction: column; align-items: stretch; gap: 8px; }
   .import-btn { width: 100%; }
+  /* No mobile, as ações empilham e cada botão ocupa a largura total da linha. */
+  .group-actions { width: 100%; }
+  .group-actions .import-btn, .group-actions .leave-btn { flex: 1; }
 
   /* disparo: público/grupo e botão em largura total */
   .audience-row { flex-direction: column; }

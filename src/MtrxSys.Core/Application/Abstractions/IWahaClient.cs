@@ -25,6 +25,10 @@ public interface IWahaClient
 
     Task<IReadOnlyList<WahaGroup>> ListGroupsAsync(string sessionId, CancellationToken ct);
     Task<IReadOnlyList<WahaParticipant>> ListGroupParticipantsAsync(string sessionId, string groupId, CancellationToken ct);
+    /// <summary>Faz o número conectado SAIR do grupo. Só 404 (já não é membro ou grupo inexistente)
+    /// conta como sucesso; 422/409/5xx sobem como erro, pra não dar falso "saiu" deixando o usuário
+    /// ainda no grupo.</summary>
+    Task LeaveGroupAsync(string sessionId, string groupId, CancellationToken ct);
     Task<WahaGroup> JoinGroupByInviteAsync(string sessionId, string inviteCodeOrUrl, CancellationToken ct);
 
     Task<string> SendTextAsync(string sessionId, string phoneOrChatId, string text, CancellationToken ct);

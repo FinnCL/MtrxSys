@@ -45,6 +45,22 @@ public static class GroupsEndpoints
             });
         });
 
+        // Sai do grupo (número conectado deixa o grupo via WAHA). O client trata 404 (já não é
+        // membro) como sucesso; demais erros sobem pro usuário saber que a saída não funcionou.
+        group.MapPost("/{groupId}/leave", async (
+            string groupId,
+            IWahaClient waha,
+            IOptions<DispatchOptions> dispatch,
+            CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(groupId))
+            {
+                return Results.Problem("groupId is required", statusCode: 400);
+            }
+            await waha.LeaveGroupAsync(dispatch.Value.SessionId, groupId, ct);
+            return Results.Ok(new { left = true });
+        });
+
         return app;
     }
 

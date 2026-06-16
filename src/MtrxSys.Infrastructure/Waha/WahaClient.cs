@@ -334,7 +334,7 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
             }
             try
             {
-                var groupJid = groupKey.Contains('@', StringComparison.Ordinal) ? groupKey : groupKey + "@g.us";
+                var groupJid = EnsureGroupJid(groupKey);
                 var isMember = await IsCurrentMemberOfAsync(sessionId, groupJid, ownDigits, ct);
                 return (Group: g, IsMember: isMember);
             }
@@ -393,7 +393,7 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         // A WAHA (engine WEBJS) resolve o grupo via getChatById, que exige o JID completo.
         // No app circula só o número do grupo (sem sufixo), então garantimos o @g.us aqui;
         // sem isso o getChatById não encontra o grupo e a WAHA devolve 500.
-        var groupJid = groupId.Contains('@', StringComparison.Ordinal) ? groupId : groupId + "@g.us";
+        var groupJid = EnsureGroupJid(groupId);
         using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/groups/{Esc(groupJid)}/participants");
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
@@ -419,6 +419,23 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
                 IsAdmin: IsAdminRole(p)));
         }
         return result;
+    }
+
+    public async Task LeaveGroupAsync(string sessionId, string groupId, CancellationToken ct)
+    {
+        var groupJid = EnsureGroupJid(groupId);
+        using var req = NewRequest(HttpMethod.Post, $"api/{Esc(sessionId)}/groups/{Esc(groupJid)}/leave");
+        using var resp = await http.SendAsync(req, ct);
+        // SÓ 404 conta como sucesso: significa que o número já não é membro (grupo inexistente ou
+        // listagem-fantasma) — o objetivo de "não estar mais no grupo" está atingido.
+        // 422/409/5xx NÃO são tolerados de propósito: num leave, esses códigos não garantem a saída,
+        // e tolerá-los daria um falso "saiu" deixando o usuário ainda no grupo. Deixamos o erro subir
+        // pra ele saber que não funcionou (a linha permanece, com a mensagem de erro).
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            return;
+        }
+        resp.EnsureSuccessStatusCode();
     }
 
     public async Task<WahaGroup> JoinGroupByInviteAsync(string sessionId, string inviteCodeOrUrl, CancellationToken ct)
@@ -601,6 +618,10 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
     }
 
     private static string Esc(string segment) => Uri.EscapeDataString(segment);
+
+    // Garante o JID completo do grupo: a WAHA exige <numero>@g.us, mas no app circula só o número.
+    private static string EnsureGroupJid(string groupId) =>
+        groupId.Contains('@', StringComparison.Ordinal) ? groupId : groupId + "@g.us";
 
     private static bool IsGroupChat(string? id) =>
         id is not null && WahaChatIdentifier.IsGroup(id);

@@ -194,6 +194,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ groupTag: groupTag ?? null }),
     }),
+  // Sai do grupo (número conectado deixa o grupo). Tolerante a grupo-fantasma no backend.
+  leaveGroup: (groupId: string) =>
+    request<{ left: boolean }>(`/api/groups/${encodeURIComponent(groupId)}/leave`, {
+      method: "POST",
+    }),
   addManualContacts: (numbers: string[], groupTag?: string) =>
     request<ManualImportResult>("/api/contacts/manual", {
       method: "POST",

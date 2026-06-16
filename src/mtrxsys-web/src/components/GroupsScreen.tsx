@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { Group, ImportResult } from "../api/types";
 import { downloadContactsXlsx } from "../utils/exportContacts";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface GroupRow {
   group: Group;
@@ -14,6 +15,9 @@ export function GroupsScreen() {
   const [rows, setRows] = useState<GroupRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Grupo aguardando confirmação de saída (abre o modal); e o id em processo de saída (trava o botão).
+  const [confirmLeave, setConfirmLeave] = useState<Group | null>(null);
+  const [leavingId, setLeavingId] = useState<string | null>(null);
   // Bumpar a chave dispara o useEffect (re-busca da WAHA) preservando a proteção
   // 'cancelled' contra setState pós-unmount.
   const [reloadKey, setReloadKey] = useState(0);
@@ -75,6 +79,30 @@ export function GroupsScreen() {
     }
   }
 
+  // Sai do grupo de verdade (número conectado deixa o grupo). Confirmado pelo modal. Em sucesso,
+  // remove a linha na hora; o backend é tolerante a grupo-fantasma (sempre "saiu" do ponto do usuário).
+  async function leaveGroup(group: Group) {
+    // Fecha o modal JÁ na confirmação: o leave do WAHA pode demorar (até o timeout de 60s) e,
+    // se o modal ficasse aberto, daria pra clicar "Sim, sair" de novo e disparar leaves duplicados.
+    // O feedback durante a espera fica no botão da própria linha ("Saindo...").
+    setConfirmLeave(null);
+    setLeavingId(group.id);
+    try {
+      await api.leaveGroup(group.id);
+      setRows((prev) => prev.filter((r) => r.group.id !== group.id));
+    } catch (ex) {
+      setRows((prev) =>
+        prev.map((r) =>
+          r.group.id === group.id
+            ? { ...r, error: ex instanceof Error ? ex.message : String(ex) }
+            : r,
+        ),
+      );
+    } finally {
+      setLeavingId(null);
+    }
+  }
+
   // No primeiro load (rows vazia) mostra "Carregando..." cheio. Em refresh, mantém a lista
   // antiga visível com o botão em "Atualizando..." pra não dar flash de tela em branco.
   if (loading && rows.length === 0) return <div className="loading">Carregando grupos...</div>;
@@ -116,17 +144,48 @@ export function GroupsScreen() {
               )}
               {row.error && <span className="error small">{row.error}</span>}
             </div>
-            <button
-              type="button"
-              onClick={() => void importOne(i)}
-              disabled={row.importing}
-              className="import-btn"
-            >
-              {row.importing ? "Importando..." : "Importar contatos"}
-            </button>
+            <div className="group-actions">
+              <button
+                type="button"
+                onClick={() => void importOne(i)}
+                disabled={row.importing}
+                className="import-btn"
+              >
+                {row.importing ? "Importando..." : "Importar contatos"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmLeave(row.group)}
+                disabled={leavingId === row.group.id}
+                className="leave-btn"
+                title="Faz o número conectado sair deste grupo"
+              >
+                {leavingId === row.group.id ? "Saindo..." : "Sair"}
+              </button>
+            </div>
           </li>
         ))}
       </ul>
+
+      {confirmLeave && (
+        <ConfirmDialog
+          title="Sair deste grupo?"
+          message={
+            <>
+              O número conectado vai <strong>sair de "{confirmLeave.name || "(sem nome)"}"</strong>.
+              <br />
+              <br />
+              Essa ação é <strong>irreversível</strong> e afeta o WhatsApp de verdade. Para voltar ao
+              grupo, só com um novo convite. Serve para sair de grupos que não aparecem no seu celular.
+            </>
+          }
+          confirmLabel="Sim, sair do grupo"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void leaveGroup(confirmLeave)}
+          onCancel={() => setConfirmLeave(null)}
+        />
+      )}
     </main>
   );
 }
