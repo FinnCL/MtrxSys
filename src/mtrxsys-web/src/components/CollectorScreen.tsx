@@ -14,9 +14,10 @@ const STATUS_LABEL: Record<GroupLinkStatus, string> = {
   Foreign: "Estrangeiro",
 };
 
-// Formata segundos de espera pra exibição curta (ex.: "45s", "3min").
-function fmtWait(seconds: number): string {
-  return seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)}min`;
+// Contagem regressiva m:ss (ex.: "2:05"; abaixo de 1 min mostra "45s").
+function fmtCountdown(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 export function CollectorScreen() {
@@ -49,8 +50,19 @@ export function CollectorScreen() {
     remaining: number;
     waitSeconds: number;
   } | null>(null);
+  // Modal de bloqueio anti-ban ao tentar entrar rápido demais (countdown até liberar).
+  const [joinBlock, setJoinBlock] = useState<{ secondsLeft: number; daily: boolean } | null>(null);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // Conta regressiva do bloqueio anti-ban: decrementa 1s; o modal libera quando zera.
+  useEffect(() => {
+    if (!joinBlock || joinBlock.daily || joinBlock.secondsLeft <= 0) return;
+    const id = window.setTimeout(() => {
+      setJoinBlock((b) => (b && !b.daily ? { ...b, secondsLeft: b.secondsLeft - 1 } : b));
+    }, 1000);
+    return () => window.clearTimeout(id);
+  }, [joinBlock]);
 
   // Persiste só a BUSCA ativa (não a página): ao sair e voltar pra aba, recarrega o que você
   // procurou, sempre na 1ª página. Persistir a página causava offset além dos resultados numa
@@ -84,6 +96,24 @@ export function CollectorScreen() {
       cancelled = true;
     };
   }, [reloadTick]);
+
+  // Conta regressiva AO VIVO do "aguarde" no card — tica de 1 em 1s, sem depender de refresh.
+  useEffect(() => {
+    if (!joinStatus || joinStatus.waitSeconds <= 0) return;
+    const id = window.setTimeout(() => {
+      setJoinStatus((s) => (s && s.waitSeconds > 0 ? { ...s, waitSeconds: s.waitSeconds - 1 } : s));
+    }, 1000);
+    return () => window.clearTimeout(id);
+  }, [joinStatus]);
+
+  // Ressincroniza o status de entrada com o servidor a cada 15s (pega novas entradas e a virada do
+  // dia sem o usuário precisar atualizar a página). O tick acima suaviza entre as sincronizações.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      api.collectorJoinStatus().then(setJoinStatus).catch(() => {});
+    }, 15000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Carrega SÓ a página atual (paginação server-side): payload pequeno e render limitado.
   useEffect(() => {
@@ -208,8 +238,16 @@ export function CollectorScreen() {
       );
       setReloadTick((t) => t + 1);
     } catch (ex) {
-      // ApiError já traz mensagem clara (429 = trava anti-ban; 422 = convite inválido/expirado/cheio).
-      if (ex instanceof ApiError) {
+      if (ex instanceof ApiError && ex.status === 429) {
+        // Trava anti-ban: abre o modal com a contagem regressiva real (tempo vindo do /join-status).
+        try {
+          const s = await api.collectorJoinStatus();
+          setJoinStatus(s);
+          setJoinBlock({ secondsLeft: s.waitSeconds, daily: s.remaining <= 0 });
+        } catch {
+          setJoinBlock({ secondsLeft: 0, daily: false });
+        }
+      } else if (ex instanceof ApiError) {
         setNotice(ex.message);
         if (ex.status === 422) setReloadTick((t) => t + 1); // link virou Inválido → some da lista
       } else {
@@ -263,7 +301,7 @@ export function CollectorScreen() {
               {joinStatus.remaining <= 0
                 ? " · limite do dia atingido"
                 : joinStatus.waitSeconds > 0
-                  ? ` · aguarde ${fmtWait(joinStatus.waitSeconds)}`
+                  ? ` · aguarde ${fmtCountdown(joinStatus.waitSeconds)}`
                   : " · pode entrar"}
             </span>
           )}
@@ -422,6 +460,34 @@ export function CollectorScreen() {
           >
             Próxima →
           </button>
+        </div>
+      )}
+
+      {joinBlock && (
+        <div className="modal-overlay" onClick={() => setJoinBlock(null)}>
+          <div className="modal-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <h3>Espere para entrar no próximo (anti-ban)</h3>
+            <div className="modal-body">
+              {joinBlock.daily ? (
+                <p>
+                  Você atingiu o <strong>limite diário</strong> de entradas. Tente novamente amanhã — esse teto
+                  é o que protege o número de bloqueio.
+                </p>
+              ) : joinBlock.secondsLeft > 0 ? (
+                <p>
+                  Entrar em vários grupos em sequência rápida arrisca o <strong>ban do número</strong>. Aguarde{" "}
+                  <strong>{fmtCountdown(joinBlock.secondsLeft)}</strong> para entrar no próximo.
+                </p>
+              ) : (
+                <p>✅ Pode entrar no próximo grupo agora.</p>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setJoinBlock(null)}>
+                Entendi
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>

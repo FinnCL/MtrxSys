@@ -23,6 +23,9 @@ internal sealed class GroupLinkConfiguration : IEntityTypeConfiguration<GroupLin
         b.Property(x => x.WhatsAppGroupId).HasColumnName("whatsapp_group_id").HasMaxLength(120);
         b.Property(x => x.CollectedAt).HasColumnName("collected_at");
         b.Property(x => x.ResolvedAt).HasColumnName("resolved_at");
+        b.Property(x => x.JoinedAt).HasColumnName("joined_at");
+        // Contador anti-ban persistente: "entradas do dia" filtra por joined_at.
+        b.HasIndex(x => x.JoinedAt);
         // Filtros quentes da tela do Coletor: por status e por palavra-chave de origem.
         b.HasIndex(x => x.Status);
         b.HasIndex(x => x.MatchedKeyword);

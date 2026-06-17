@@ -22,6 +22,9 @@ public sealed class GroupLink : Entity<Guid>
     public string? WhatsAppGroupId { get; private set; }
     public DateTimeOffset CollectedAt { get; private set; }
     public DateTimeOffset? ResolvedAt { get; private set; }
+    /// <summary>Quando o número conectado ENTROU no grupo. Base do contador anti-ban persistente
+    /// (entradas do dia + intervalo) — sobrevive a restart, ao contrário de um contador em memória.</summary>
+    public DateTimeOffset? JoinedAt { get; private set; }
 
     private GroupLink() { }
 
@@ -66,14 +69,16 @@ public sealed class GroupLink : Entity<Guid>
         ResolvedAt = at;
     }
 
-    /// <summary>Entrou no grupo (clique manual). Guarda o id do grupo no WhatsApp pra importar depois.</summary>
-    public void MarkJoined(string? whatsAppGroupId)
+    /// <summary>Entrou no grupo (clique manual). Guarda o id do grupo no WhatsApp pra importar depois
+    /// e carimba JoinedAt — fonte durável do contador anti-ban (entradas do dia + intervalo).</summary>
+    public void MarkJoined(string? whatsAppGroupId, DateTimeOffset at)
     {
         if (!string.IsNullOrWhiteSpace(whatsAppGroupId))
         {
             WhatsAppGroupId = whatsAppGroupId;
         }
         Status = GroupLinkStatus.Joined;
+        JoinedAt = at;
     }
 
     public void MarkImported() => Status = GroupLinkStatus.Imported;

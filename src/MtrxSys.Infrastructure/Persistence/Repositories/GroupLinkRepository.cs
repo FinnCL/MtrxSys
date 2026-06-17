@@ -63,6 +63,12 @@ internal sealed class GroupLinkRepository(MtrxDbContext db) : IGroupLinkReposito
             .Take(Math.Clamp(limit, 1, 200))
             .ToListAsync(ct);
 
+    public Task<int> CountJoinedSinceAsync(DateTimeOffset sinceUtc, CancellationToken ct) =>
+        db.GroupLinks.CountAsync(x => x.JoinedAt != null && x.JoinedAt >= sinceUtc, ct);
+
+    public async Task<DateTimeOffset?> MaxJoinedAtAsync(CancellationToken ct) =>
+        await db.GroupLinks.Where(x => x.JoinedAt != null).MaxAsync(x => (DateTimeOffset?)x.JoinedAt, ct);
+
     private static IQueryable<GroupLink> ApplyFilter(IQueryable<GroupLink> q, string? keyword, GroupLinkStatus? status)
     {
         if (status is { } s)

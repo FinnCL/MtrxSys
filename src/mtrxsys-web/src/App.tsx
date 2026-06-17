@@ -243,8 +243,35 @@ export default function App() {
     // Mesmo fallback do client.ts: o Ambiente A não injeta VITE_API_URL no build, então
     // sem isto a conexão de presença não abriria e o card A nunca travaria na landing.
     const apiUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:5080";
-    const es = new EventSource(`${apiUrl}/api/presence/connect`);
-    return () => es.close();
+    // Reconexão com BACKOFF (em vez do retry padrão agressivo do EventSource): quando a conexão cai
+    // — ex.: API reiniciou — fecha e reconecta com intervalo crescente (2s→...→30s), resetando ao
+    // reconectar. Reduz o martelar no servidor e o ruído de erros de rede no console durante o boot.
+    // (Os erros de rede no console são do navegador e não dá pra suprimir via JS; isto só os diminui.)
+    let es: EventSource | null = null;
+    let retryMs = 2000;
+    let timer: number | undefined;
+    let closed = false;
+
+    const connect = () => {
+      if (closed) return;
+      es = new EventSource(`${apiUrl}/api/presence/connect`);
+      es.onopen = () => {
+        retryMs = 2000; // reconectou com sucesso → zera o backoff
+      };
+      es.onerror = () => {
+        es?.close();
+        if (closed) return;
+        timer = window.setTimeout(connect, retryMs);
+        retryMs = Math.min(retryMs * 2, 30000);
+      };
+    };
+    connect();
+
+    return () => {
+      closed = true;
+      if (timer) window.clearTimeout(timer);
+      es?.close();
+    };
   }, []);
 
   return (

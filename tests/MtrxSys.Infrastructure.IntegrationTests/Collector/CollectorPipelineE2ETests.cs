@@ -115,7 +115,7 @@ public sealed class CollectorPipelineE2ETests : IAsyncLifetime
         var uow = new UnitOfWork(_db);
         var link = await repo.GetByCodeAsync(Code, CancellationToken.None);
         var joined = await waha.JoinGroupByInviteAsync(Session, link!.InviteCode, CancellationToken.None);
-        link.MarkJoined(joined.Id);
+        link.MarkJoined(joined.Id, new DateTimeOffset(2026, 6, 16, 12, 0, 0, TimeSpan.Zero));
         await repo.UpdateAsync(link, CancellationToken.None);
         await uow.SaveChangesAsync(CancellationToken.None);
         return link.WhatsAppGroupId;

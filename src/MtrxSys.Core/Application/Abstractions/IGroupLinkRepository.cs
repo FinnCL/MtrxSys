@@ -24,4 +24,12 @@ public interface IGroupLinkRepository
     /// <summary>Found ainda não resolvidos de um NICHO específico (matched_keyword), mais antigos
     /// primeiro — pra re-validar os achados daquele nicho a cada nova busca dele.</summary>
     Task<IReadOnlyList<GroupLink>> ListForEnrichmentByKeywordAsync(string keyword, int limit, CancellationToken ct);
+
+    /// <summary>Quantos grupos foram ENTRADOS desde <paramref name="sinceUtc"/> (joined_at >= since).
+    /// Base do contador anti-ban diário, persistente (sobrevive a restart).</summary>
+    Task<int> CountJoinedSinceAsync(DateTimeOffset sinceUtc, CancellationToken ct);
+
+    /// <summary>Data/hora da ÚLTIMA entrada em grupo (max joined_at), ou null se nunca. Base do
+    /// intervalo anti-ban entre entradas.</summary>
+    Task<DateTimeOffset?> MaxJoinedAtAsync(CancellationToken ct);
 }

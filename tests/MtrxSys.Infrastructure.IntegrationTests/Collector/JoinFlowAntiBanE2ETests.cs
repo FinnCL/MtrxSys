@@ -1,127 +1,149 @@
 using System.Net;
 using System.Text;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Groups;
 using MtrxSys.Core.Safety;
+using MtrxSys.Infrastructure.Persistence;
+using MtrxSys.Infrastructure.Persistence.Repositories;
 using MtrxSys.Infrastructure.Waha;
-using NSubstitute;
 
 namespace MtrxSys.Infrastructure.IntegrationTests.Collector;
 
 /// <summary>
-/// E2E do caminho ANTI-BAN da entrada em grupo, replicando o miolo do endpoint POST /links/{code}/join
-/// com JoinThrottle + WahaClient REAIS (servidor WAHA simulado). Prova o que protege o processo:
-///   - uma entrada bem-sucedida REGISTRA e a próxima é BLOQUEADA dentro do intervalo (o espaçamento
-///     que evita o ban); passado o intervalo, libera;
-///   - um convite inválido (4xx) NÃO consome a trava — não queima a vaga do dia nem o intervalo.
-/// (O fix de UI desta rodada — uma ação por vez — garante que as entradas chegam SERIALIZADAS aqui.)
+/// E2E do caminho ANTI-BAN da entrada contra Postgres REAL, replicando o miolo do endpoint
+/// POST /links/{code}/join. Agora o contador é PERSISTENTE (joined_at no banco), então prova:
+///   - entrada conta e a próxima é bloqueada dentro do intervalo;
+///   - convite inválido (4xx) NÃO conta (sem joined_at);
+///   - PERSISTÊNCIA: um novo DbContext (simula restart) ainda enxerga a entrada — o teto não zera.
 /// </summary>
-public sealed class JoinFlowAntiBanE2ETests
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "Design", "CA1001", Justification = "Descarte de _db/_pg em IAsyncLifetime.DisposeAsync.")]
+public sealed class JoinFlowAntiBanE2ETests : IAsyncLifetime
 {
+    private const string Session = "default";
     private static readonly DateTimeOffset T0 = new(2026, 6, 17, 12, 0, 0, TimeSpan.Zero);
+
+    private readonly Testcontainers.PostgreSql.PostgreSqlContainer _pg =
+        new Testcontainers.PostgreSql.PostgreSqlBuilder().WithImage("postgres:16-alpine").Build();
+    private MtrxDbContext _db = null!;
+
+    public async Task InitializeAsync()
+    {
+        await _pg.StartAsync();
+        _db = new MtrxDbContext(new DbContextOptionsBuilder<MtrxDbContext>().UseNpgsql(_pg.GetConnectionString()).Options);
+        await _db.Database.MigrateAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _db.DisposeAsync();
+        await _pg.DisposeAsync();
+    }
 
     private sealed class JoinStub(HttpStatusCode status, string body) : HttpMessageHandler
     {
-        public int JoinCalls { get; private set; }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        {
-            if (request.RequestUri!.AbsolutePath.EndsWith("/groups/join", StringComparison.Ordinal))
-            {
-                JoinCalls++;
-            }
-            return Task.FromResult(new HttpResponseMessage(status)
-            {
-                Content = new StringContent(body, Encoding.UTF8, "application/json"),
-            });
-        }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
     }
 
-    private static JoinThrottle Throttle(int interval = 120, int maxPerDay = 15)
+    private static JoinThrottle Throttle(int maxPerDay = 15) =>
+        new(Options.Create(new CollectorOptions { MaxJoinsPerDay = maxPerDay }));
+
+    private static WahaClient Waha(HttpStatusCode status, string body) =>
+        new(new HttpClient(new JoinStub(status, body)) { BaseAddress = new Uri("http://waha.test/") }, Options.Create(new WahaOptions()));
+
+    private async Task SeedResolvedAsync(string code)
     {
-        var rng = Substitute.For<IRandomSource>();
-        rng.NextInt(Arg.Any<int>(), Arg.Any<int>()).Returns(interval);
-        return new JoinThrottle(rng, Options.Create(new CollectorOptions { MaxJoinsPerDay = maxPerDay }));
+        var repo = new GroupLinkRepository(_db);
+        var link = GroupLink.Create(Guid.NewGuid(), code, $"https://chat.whatsapp.com/{code}", "serper", "bet", T0);
+        link.Resolve("Grupo BR", null, T0);
+        await repo.AddAsync(link, CancellationToken.None);
+        await new UnitOfWork(_db).SaveChangesAsync(CancellationToken.None);
+        _db.ChangeTracker.Clear();
     }
 
-    private static WahaClient Waha(JoinStub stub) =>
-        new(new HttpClient(stub) { BaseAddress = new Uri("http://waha.test/") }, Options.Create(new WahaOptions()));
-
-    // Link já validado (Resolved) — é o único estado em que o usuário pode clicar "Entrar".
-    private static GroupLink Link(string code)
+    // Espelha o endpoint: contagem/última entrada vêm do BANCO; sucesso carimba joined_at.
+    private async Task<string> TryJoinAsync(JoinThrottle throttle, WahaClient waha, string code, DateTimeOffset now)
     {
-        var l = GroupLink.Create(Guid.NewGuid(), code, $"https://chat.whatsapp.com/{code}", "serper", "bet", T0);
-        l.Resolve("Grupo BR", null, T0);
-        return l;
-    }
-
-    // Espelha o endpoint: Check (antes) → join → 4xx vira Invalid (sem registrar) → sucesso registra.
-    private static async Task<string> TryJoinAsync(JoinThrottle throttle, WahaClient waha, GroupLink link, DateTimeOffset now)
-    {
-        if (!throttle.Check(now).Allowed)
+        var repo = new GroupLinkRepository(_db);
+        var uow = new UnitOfWork(_db);
+        var link = await repo.GetByCodeAsync(code, CancellationToken.None);
+        var joinsToday = await repo.CountJoinedSinceAsync(JoinThrottle.StartOfTodayBrazil(now), CancellationToken.None);
+        var last = await repo.MaxJoinedAtAsync(CancellationToken.None);
+        if (!throttle.Check(joinsToday, last, now).Allowed)
         {
             return "blocked";
         }
         WahaGroup joined;
         try
         {
-            joined = await waha.JoinGroupByInviteAsync("default", link.InviteCode, CancellationToken.None);
+            joined = await waha.JoinGroupByInviteAsync(Session, link!.InviteCode, CancellationToken.None);
         }
         catch (HttpRequestException ex) when (ex.StatusCode is >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError)
         {
-            link.MarkInvalid(now);
+            link!.MarkInvalid(now);
+            await repo.UpdateAsync(link, CancellationToken.None);
+            await uow.SaveChangesAsync(CancellationToken.None);
             return "invalid";
         }
-        throttle.RegisterJoin(now);
-        link.MarkJoined(joined.Id);
+        link!.MarkJoined(joined.Id, now);
+        await repo.UpdateAsync(link, CancellationToken.None);
+        await uow.SaveChangesAsync(CancellationToken.None);
+        _db.ChangeTracker.Clear();
         return "joined";
     }
 
     [Fact]
-    public async Task Entrada_registra_e_bloqueia_a_proxima_dentro_do_intervalo()
+    public async Task Entrada_conta_e_a_proxima_no_intervalo_e_bloqueada()
     {
-        var stub = new JoinStub(HttpStatusCode.OK, """{ "id": "120363111@g.us", "name": "Grupo BR" }""");
-        var throttle = Throttle(interval: 120);
-        var waha = Waha(stub);
-        var a = Link("AAAAAAAAAAAA");
-        var b = Link("BBBBBBBBBBBB");
+        var throttle = Throttle();
+        var waha = Waha(HttpStatusCode.OK, """{ "id": "120363111@g.us", "name": "Grupo BR" }""");
+        await SeedResolvedAsync("AAAAAAAAAAAA");
+        await SeedResolvedAsync("BBBBBBBBBBBB");
 
-        // 1ª entrada (T0): entra e registra.
-        (await TryJoinAsync(throttle, waha, a, T0)).Should().Be("joined");
-        a.Status.Should().Be(GroupLinkStatus.Joined);
-        a.WhatsAppGroupId.Should().Be("120363111@g.us");
+        (await TryJoinAsync(throttle, waha, "AAAAAAAAAAAA", T0)).Should().Be("joined");
+        (await TryJoinAsync(throttle, waha, "BBBBBBBBBBBB", T0.AddSeconds(10))).Should().Be("blocked");
+        // Passado o teto máximo do intervalo (300s), libera.
+        (await TryJoinAsync(throttle, waha, "BBBBBBBBBBBB", T0.AddSeconds(301))).Should().Be("joined");
 
-        // 2ª entrada 10s depois: BLOQUEADA (intervalo de 120s não passou) — nem chama o WAHA.
-        (await TryJoinAsync(throttle, waha, b, T0.AddSeconds(10))).Should().Be("blocked");
-        b.Status.Should().Be(GroupLinkStatus.Resolved, "não entrou: ficou como estava");
-
-        // Passado o intervalo: libera.
-        (await TryJoinAsync(throttle, waha, b, T0.AddSeconds(130))).Should().Be("joined");
-
-        // Só 2 chamadas REAIS de join ao WAHA (a bloqueada não tocou o servidor).
-        stub.JoinCalls.Should().Be(2);
-        throttle.GetStatus(T0.AddSeconds(130)).JoinsToday.Should().Be(2);
+        var repo = new GroupLinkRepository(_db);
+        (await repo.CountJoinedSinceAsync(JoinThrottle.StartOfTodayBrazil(T0), CancellationToken.None)).Should().Be(2);
     }
 
     [Fact]
-    public async Task Convite_invalido_4xx_nao_consome_a_trava()
+    public async Task Convite_invalido_4xx_nao_conta()
     {
-        var stub = new JoinStub(HttpStatusCode.BadRequest, "{}"); // WAHA recusa o convite (4xx)
         var throttle = Throttle();
-        var waha = Waha(stub);
-        var morto = Link("CCCCCCCCCCCC");
+        var waha = Waha(HttpStatusCode.BadRequest, "{}");
+        await SeedResolvedAsync("CCCCCCCCCCCC");
 
-        var r = await TryJoinAsync(throttle, waha, morto, T0);
+        (await TryJoinAsync(throttle, waha, "CCCCCCCCCCCC", T0)).Should().Be("invalid");
 
-        r.Should().Be("invalid");
-        morto.Status.Should().Be(GroupLinkStatus.Invalid);
-        // A trava NÃO foi consumida: nenhuma entrada contabilizada, teto cheio, sem espera.
-        var s = throttle.GetStatus(T0);
-        s.JoinsToday.Should().Be(0);
-        s.Remaining.Should().Be(15);
-        s.WaitSeconds.Should().Be(0, "uma entrada que falhou não pode bloquear a próxima tentativa");
+        var repo = new GroupLinkRepository(_db);
+        (await repo.CountJoinedSinceAsync(JoinThrottle.StartOfTodayBrazil(T0), CancellationToken.None))
+            .Should().Be(0, "uma entrada que falhou não é carimbada (joined_at fica null)");
+    }
+
+    [Fact]
+    public async Task Contador_persiste_apos_restart_simulado()
+    {
+        var throttle = Throttle();
+        var waha = Waha(HttpStatusCode.OK, """{ "id": "120363222@g.us", "name": "Grupo BR" }""");
+        await SeedResolvedAsync("DDDDDDDDDDDD");
+        (await TryJoinAsync(throttle, waha, "DDDDDDDDDDDD", T0)).Should().Be("joined");
+
+        // "Restart": novo DbContext no MESMO banco, contador novo (sem estado em memória).
+        await using var db2 = new MtrxDbContext(
+            new DbContextOptionsBuilder<MtrxDbContext>().UseNpgsql(_pg.GetConnectionString()).Options);
+        var repo2 = new GroupLinkRepository(db2);
+        var joinsToday = await repo2.CountJoinedSinceAsync(JoinThrottle.StartOfTodayBrazil(T0), CancellationToken.None);
+        var last = await repo2.MaxJoinedAtAsync(CancellationToken.None);
+
+        joinsToday.Should().Be(1, "a entrada persistiu — o teto NÃO zera num restart");
+        Throttle().GetStatus(joinsToday, last, T0.AddSeconds(301)).JoinsToday.Should().Be(1);
     }
 }

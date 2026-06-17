@@ -29,13 +29,20 @@ public sealed class WhatsAppSyncService(
         var messagesImported = 0;
         var contactsCreated = 0;
         var failures = new List<string>();
+        // Dedup de wa_message_id DENTRO da rodada: o GetByWaMessageIdAsync só enxerga o banco
+        // commitado, não os Adds pendentes — sem isto, o mesmo id vindo 2x do WAHA numa rodada
+        // viraria insert duplicado e violaria o índice único.
+        var seenMessageIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var chat in chats)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                var result = await SyncOneAsync(chat, messagesPerChat, ct);
+                var result = await SyncOneAsync(chat, messagesPerChat, seenMessageIds, ct);
+                // Salva POR CHAT (em vez de um save único no fim): isola falhas — uma duplicata/conflito
+                // não derruba o lote inteiro — e encolhe a janela da corrida com o webhook em tempo real.
+                await uow.SaveChangesAsync(ct);
                 chatsTouched++;
                 messagesImported += result.MessagesImported;
                 if (result.ContactCreated)
@@ -50,17 +57,20 @@ public sealed class WhatsAppSyncService(
 #pragma warning disable CA1031
             catch (Exception ex)
             {
+                // Descarta o pendente deste chat pra NÃO contaminar o save do próximo (ex.: conflito
+                // raro de chave com o webhook). A próxima sync repesca o que faltou (auto-cura).
+                uow.DiscardChanges();
                 failures.Add($"{chat.Id}: {ex.Message}");
                 log.LogWarning(ex, "Sync: failed for chat {ChatId}", chat.Id);
             }
 #pragma warning restore CA1031
         }
 
-        await uow.SaveChangesAsync(ct);
         return new SyncResult(chatsTouched, messagesImported, contactsCreated, failures);
     }
 
-    private async Task<ChatSyncResult> SyncOneAsync(WahaChat chat, int messagesPerChat, CancellationToken ct)
+    private async Task<ChatSyncResult> SyncOneAsync(
+        WahaChat chat, int messagesPerChat, HashSet<string> seenMessageIds, CancellationToken ct)
     {
         // Pula a conta de sistema do WhatsApp (0@c.us / status@broadcast) — avisos como
         // "WhatsApp Business", não conversa de contato. Coerente com o webhook.
@@ -159,6 +169,11 @@ public sealed class WhatsAppSyncService(
                     latestPreview = m.Body;
                 }
 
+                // Já contabilizado NESTA rodada (WAHA repetiu o id) → pula antes de tentar inserir.
+                if (!seenMessageIds.Add(m.Id))
+                {
+                    continue;
+                }
                 var existing = await messages.GetByWaMessageIdAsync(m.Id, ct);
                 if (existing is not null)
                 {

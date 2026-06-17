@@ -28,10 +28,14 @@ public static class CollectorEndpoints
             }));
 
         // Estado da trava anti-ban de ENTRADA (pro painel deixar o limite explícito): entradas hoje,
-        // teto diário, quantas restam e segundos até a próxima.
-        group.MapGet("/join-status", (JoinThrottle throttle, IClock clock) =>
+        // teto diário, quantas restam e segundos até a próxima. Lê do BANCO (joined_at) — persistente,
+        // sobrevive a restart; o teto zera à meia-noite de Brasília.
+        group.MapGet("/join-status", async (JoinThrottle throttle, IGroupLinkRepository repo, IClock clock, CancellationToken ct) =>
         {
-            var s = throttle.GetStatus(clock.UtcNow);
+            var now = clock.UtcNow;
+            var joinsToday = await repo.CountJoinedSinceAsync(JoinThrottle.StartOfTodayBrazil(now), ct);
+            var lastJoinedAt = await repo.MaxJoinedAtAsync(ct);
+            var s = throttle.GetStatus(joinsToday, lastJoinedAt, now);
             return Results.Ok(new { joinsToday = s.JoinsToday, maxPerDay = s.MaxPerDay, remaining = s.Remaining, waitSeconds = s.WaitSeconds });
         });
 
@@ -85,7 +89,12 @@ public static class CollectorEndpoints
                 return Results.NotFound();
             }
 
-            var decision = throttle.Check(clock.UtcNow);
+            // Trava anti-ban a partir do estado PERSISTIDO (entradas do dia + última entrada do banco):
+            // sobrevive a restart e zera à meia-noite de Brasília.
+            var now = clock.UtcNow;
+            var joinsToday = await repo.CountJoinedSinceAsync(JoinThrottle.StartOfTodayBrazil(now), ct);
+            var lastJoinedAt = await repo.MaxJoinedAtAsync(ct);
+            var decision = throttle.Check(joinsToday, lastJoinedAt, now);
             if (!decision.Allowed)
             {
                 return Results.Problem(detail: decision.Reason, statusCode: StatusCodes.Status429TooManyRequests);
@@ -99,7 +108,7 @@ public static class CollectorEndpoints
             catch (HttpRequestException ex)
             {
                 // 4xx do WAHA = convite inválido/expirado/cheio → marca o link e avisa com clareza
-                // (não é erro de servidor). Sem consumir a trava (RegisterJoin só roda no sucesso).
+                // (não é erro de servidor). NÃO conta no anti-ban: só uma entrada de fato (joined_at).
                 if (ex.StatusCode is >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError)
                 {
                     link.MarkInvalid(clock.UtcNow);
@@ -112,8 +121,8 @@ public static class CollectorEndpoints
                 return Results.Problem(detail: $"Falha ao entrar: {ex.Message}", statusCode: 502);
             }
 
-            throttle.RegisterJoin(clock.UtcNow);
-            link.MarkJoined(joined.Id);
+            // Carimba joined_at → ESTA é a contabilização anti-ban (persistente). Sem contador em memória.
+            link.MarkJoined(joined.Id, now);
             await repo.UpdateAsync(link, ct);
             await uow.SaveChangesAsync(ct);
 
