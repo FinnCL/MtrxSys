@@ -28,13 +28,29 @@ public sealed class ImportGroupMembersUseCase(
 
         // 1ª passada: normaliza os telefones (capturando falhas individuais) e descarta o próprio
         // número. Faz isso ANTES do banco pra poder carregar os já-existentes num lote só.
+        var onlyBrazilian = opts.Value.OnlyBrazilianContacts;
         var pending = new List<(WahaParticipant Member, PhoneNumber Phone)>();
         foreach (var member in members)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                var phone = phones.NormalizeTrusted(member.PhoneE164);
+                PhoneNumber phone;
+                if (onlyBrazilian)
+                {
+                    // Só números válidos para o BR; estrangeiros são ignorados (não viram contato).
+                    var validated = phones.Validate(member.PhoneE164);
+                    if (!validated.IsSuccess || validated.Value is null)
+                    {
+                        failures.Add(new ImportFailure(member.Id, member.PhoneE164, "Número não brasileiro (ignorado)."));
+                        continue;
+                    }
+                    phone = validated.Value;
+                }
+                else
+                {
+                    phone = phones.NormalizeTrusted(member.PhoneE164);
+                }
                 if (ownNumber is not null && phone.E164 == ownNumber)
                 {
                     continue; // pula o próprio número do remetente

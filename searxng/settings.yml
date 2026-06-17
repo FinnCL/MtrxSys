@@ -1,0 +1,19 @@
+# Config do SearXNG usado pelo Coletor (busca de grupos por nicho).
+# Herda os defaults do SearXNG e só sobrescreve o necessário pra uso via API (JSON).
+use_default_settings: true
+
+server:
+  # Chave de assinatura de sessão do SearXNG (obrigatória). Dev/local — troque em produção.
+  secret_key: "mtrxsys-dev-searxng-secret-change-me"
+  # Desliga o limiter/bot-detection: as chamadas são servidor→servidor (a api do MtrxSys),
+  # não navegador, então o limiter bloquearia indevidamente.
+  limiter: false
+  image_proxy: false
+
+search:
+  # Habilita a saída JSON (o default só liga HTML) — é o que a fonte SearxngSearchSource consome.
+  formats:
+    - html
+    - json
+  safe_search: 0
+  default_lang: pt-BR

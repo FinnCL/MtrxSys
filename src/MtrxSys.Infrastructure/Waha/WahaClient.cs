@@ -446,7 +446,65 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<JoinResponseDto>(Json, ct);
-        return new WahaGroup(body?.Id ?? code, body?.Name ?? "", null);
+
+        // O id do grupo é o JID (<número>@g.us) — NUNCA o código do convite (base62, com letras).
+        // Cair pro código aqui faria o import chamar /participants num JID inexistente e importar 0
+        // EM SILÊNCIO. Se o join não trouxe um JID utilizável (resposta mínima de alguns engines),
+        // resolvemos pelo /groups casando o nome — daí o import recebe o id certo.
+        var name = body?.Name;
+        if (LooksLikeGroupJid(body?.Id))
+        {
+            return new WahaGroup(body!.Id!, name ?? string.Empty, null);
+        }
+        var resolved = await TryResolveJoinedGroupAsync(sessionId, name, ct);
+        return new WahaGroup(resolved?.Id ?? string.Empty, resolved?.Name ?? name ?? string.Empty, null);
+    }
+
+    // Best-effort: descobre o JID do grupo recém-entrado casando o NOME no /groups (que só lista
+    // grupos dos quais ainda sou membro). Casamento ambíguo (>1 com o mesmo nome) ou nenhum → null,
+    // pra NUNCA devolver id errado — preferimos "sem id" (import desabilitado) a "id de outro grupo".
+    private async Task<WahaGroup?> TryResolveJoinedGroupAsync(string sessionId, string? name, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+        try
+        {
+            var groups = await ListGroupsAsync(sessionId, ct);
+            var matches = groups
+                .Where(g => !string.IsNullOrEmpty(g.Id)
+                    && string.Equals(g.Name?.Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase))
+                .Take(2)
+                .ToList();
+            return matches.Count == 1 ? matches[0] : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031
+        catch
+        {
+            return null;
+        }
+#pragma warning restore CA1031
+    }
+
+    // Um id de GRUPO é o JID (contém @g.us) ou o número do grupo (só dígitos, formato novo; dígitos
+    // com '-' no legado). O código do convite é base62 (tem letras) e não casa nenhum — é assim que
+    // distinguimos um id de grupo real de um código de convite indevidamente colocado no lugar.
+    private static bool LooksLikeGroupJid(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+        if (id.Contains("@g.us", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        return id.Length >= 15 && id.All(c => char.IsDigit(c) || c == '-');
     }
 
     public async Task<string> SendTextAsync(string sessionId, string phoneOrChatId, string text, CancellationToken ct)

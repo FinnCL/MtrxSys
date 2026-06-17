@@ -79,6 +79,8 @@ services:
       Waha__WebhookCallbackUrl: "http://api:8080/webhooks/waha"
       Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}
       Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
+      # Busca de grupos por nicho (Coletor) via SearXNG (container abaixo). Vazio = usa Telegram.
+      Collector__SearxngBaseUrl: ${COLLECTOR_SEARXNG_URL:-http://searxng:8080}
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,6 +130,19 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: mtrx-searxng
+    environment:
+      TZ: UTC
+      # URL pública (porta publicada abaixo). Não afeta a chamada interna da api (http://searxng:8080).
+      SEARXNG_BASE_URL: http://localhost:8888/
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    ports:
+      - "8888:8080"
     restart: unless-stopped
 
   cli:

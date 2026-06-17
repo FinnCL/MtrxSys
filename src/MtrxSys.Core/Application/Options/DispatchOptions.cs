@@ -25,4 +25,9 @@ public sealed class DispatchOptions
     // Falha transitória abaixo desse teto reenvia sem contar pro circuit breaker; ao atingir
     // o teto, vira Failed e aí sim conta (chip genuinamente quebrado acaba pausando).
     public int MaxSendAttempts { get; set; } = 2;
+
+    // Na importação de participantes de grupo, só cadastra números VÁLIDOS para o Brasil (+55,
+    // DDD/9º dígito corretos via libphonenumber). Números estrangeiros são ignorados. É a garantia
+    // real de "contatos para brasileiros" — independe de o grupo parecer ou não brasileiro.
+    public bool OnlyBrazilianContacts { get; set; } = true;
 }

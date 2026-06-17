@@ -145,6 +145,30 @@ export interface ContactGroupTag {
   count: number;
 }
 
+// Coletor de grupos: link de convite captado por busca, Telegram ou entrada manual.
+export type GroupLinkStatus = "Found" | "Resolved" | "Invalid" | "Joined" | "Imported" | "Foreign";
+
+export interface GroupLink {
+  inviteCode: string;
+  inviteUrl: string;
+  sourceChannel: string | null;
+  groupName: string | null;
+  participantCount: number | null;
+  status: GroupLinkStatus;
+  matchedKeyword: string | null;
+  whatsAppGroupId: string | null;
+  collectedAt: string;
+  resolvedAt: string | null;
+}
+
+// Página de links (paginação server-side da aba Coletor).
+export interface GroupLinkPage {
+  items: GroupLink[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface ImportFailure {
   participantId: string;
   phone: string;

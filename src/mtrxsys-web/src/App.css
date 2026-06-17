@@ -168,6 +168,14 @@ input[type="checkbox"], input[type="radio"] {
 .groups-header .muted { margin: 0; font-size: 13px; }
 .groups-header-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
+.collector-search { display: flex; gap: 8px; margin-top: 10px; max-width: 800px; }
+.collector-search input { flex: 1; }
+/* Entrada manual de links: textarea + botão empilhados. */
+.collector-manual { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-width: 800px; }
+.collector-manual textarea { width: 100%; resize: vertical; font-family: ui-monospace, monospace; font-size: 12px; }
+.collector-manual button { align-self: flex-start; }
+.collector-pager { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 14px; max-width: 800px; }
+
 .groups-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; max-width: 800px; }
 .group-row {
   display: flex;

@@ -1,0 +1,326 @@
+import { useEffect, useState } from "react";
+import { api, ApiError } from "../api/client";
+import type { GroupLink, GroupLinkStatus } from "../api/types";
+import { downloadContactsXlsx } from "../utils/exportContacts";
+
+const PAGE_SIZE = 25;
+
+const STATUS_LABEL: Record<GroupLinkStatus, string> = {
+  Found: "Resolvendo…",
+  Resolved: "Pronto",
+  Invalid: "Inválido",
+  Joined: "Entrou",
+  Imported: "Importado",
+  Foreign: "Estrangeiro",
+};
+
+export function CollectorScreen() {
+  const [keyword, setKeyword] = useState("");
+  const [activeKeyword, setActiveKeyword] = useState("");
+  const [links, setLinks] = useState<GroupLink[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [collecting, setCollecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busyCode, setBusyCode] = useState<string | null>(null);
+  // Bumpar dispara o recarregamento da página atual (busca, polling, ações, "Atualizar").
+  const [reloadTick, setReloadTick] = useState(0);
+  // Entrada manual de links (colar um por linha).
+  const [manualText, setManualText] = useState("");
+  const [manualBusy, setManualBusy] = useState(false);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // Carrega SÓ a página atual (paginação server-side): payload pequeno e render limitado.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      // Sem busca ativa, a lista fica VAZIA (não despeja o acúmulo antigo) — só mostra o que você busca.
+      if (!activeKeyword) {
+        setLinks([]);
+        setTotal(0);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      try {
+        const res = await api.collectorLinks({
+          keyword: activeKeyword,
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+        });
+        if (!cancelled) {
+          setLinks(res.items);
+          setTotal(res.total);
+          setError(null);
+        }
+      } catch (ex) {
+        if (!cancelled) setError(ex instanceof Error ? ex.message : String(ex));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeKeyword, page, reloadTick]);
+
+  // Enquanto "coletando", recarrega a página atual a cada 4s (a coleta roda em background).
+  // Para sozinho após ~1min.
+  useEffect(() => {
+    if (!collecting) return;
+    let ticks = 0;
+    const id = window.setInterval(() => {
+      ticks += 1;
+      setReloadTick((t) => t + 1);
+      // Busca por nicho agora resolve só os próprios achados (rápida). ~40s cobre com folga.
+      if (ticks >= 10) {
+        setCollecting(false);
+        setNotice(
+          "Busca concluída. Se não apareceu nada, o nicho rendeu poucos links vivos — tente outro termo ou cole links no campo abaixo.",
+        );
+      }
+    }, 4000);
+    return () => window.clearInterval(id);
+  }, [collecting]);
+
+  async function search() {
+    const kw = keyword.trim();
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await api.collectorCollect(kw || undefined);
+      setActiveKeyword(kw);
+      setPage(0);
+      setReloadTick((t) => t + 1);
+      setCollecting(true);
+      setNotice(
+        kw
+          ? res.searchConfigured
+            ? `Buscando grupos de "${kw}" na web… os resultados aparecem aos poucos.`
+            : `Busca por nicho indisponível (SearXNG fora do ar). Mostrando grupos variados do Telegram.`
+          : "Buscando grupos variados… os resultados aparecem aos poucos.",
+      );
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    }
+  }
+
+  // Entrada manual: cola links (um por linha) → valida na hora → só os vivos viram "Pronto".
+  async function addManual() {
+    const lines = manualText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) return;
+    setManualBusy(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const tag = keyword.trim() || "manual";
+      const r = await api.collectorAddManual(lines, tag);
+      setManualText("");
+      setActiveKeyword(tag); // mostra os recém-adicionados sob a tag/nicho
+      setPage(0);
+      setReloadTick((t) => t + 1);
+      const parts = [`${r.live} válido(s)`, `${r.dead} morto(s)`];
+      if (r.duplicates) parts.push(`${r.duplicates} já existia(m)`);
+      if (r.pendingValidation) parts.push(`${r.pendingValidation} pendente(s) — WhatsApp offline`);
+      setNotice(`Links processados: ${parts.join(" · ")}.`);
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setManualBusy(false);
+    }
+  }
+
+  async function join(link: GroupLink) {
+    setBusyCode(link.inviteCode);
+    setNotice(null);
+    try {
+      const r = await api.collectorJoin(link.inviteCode);
+      const groupLabel = r.name || link.groupName || "grupo";
+      setNotice(
+        r.canImport
+          ? `Entrou em "${groupLabel}". Já dá pra importar os contatos.`
+          : `Entrou em "${groupLabel}", mas não consegui identificar o grupo p/ importar automaticamente — importe pela aba Grupos.`,
+      );
+      setReloadTick((t) => t + 1);
+    } catch (ex) {
+      // ApiError já traz mensagem clara (429 = trava anti-ban; 422 = convite inválido/expirado/cheio).
+      if (ex instanceof ApiError) {
+        setNotice(ex.message);
+        if (ex.status === 422) setReloadTick((t) => t + 1); // link virou Inválido → some da lista
+      } else {
+        setNotice(`Falha ao entrar: ${String(ex)}`);
+      }
+    } finally {
+      setBusyCode(null);
+    }
+  }
+
+  async function importContacts(link: GroupLink) {
+    if (!link.whatsAppGroupId) return;
+    setBusyCode(link.inviteCode);
+    setNotice(null);
+    try {
+      const tag = link.groupName?.trim() || link.whatsAppGroupId;
+      const result = await api.importGroup(link.whatsAppGroupId, tag);
+      setNotice(`${result.imported} importados · ${result.duplicated} duplicados de "${tag}".`);
+      try {
+        const saved = await api.listContacts({ groupTag: tag });
+        if (saved.length > 0) downloadContactsXlsx(saved, tag);
+      } catch {
+        // download é extra
+      }
+      setReloadTick((t) => t + 1);
+    } catch (ex) {
+      setNotice(`Falha ao importar: ${ex instanceof Error ? ex.message : String(ex)}`);
+    } finally {
+      setBusyCode(null);
+    }
+  }
+
+  if (loading && links.length === 0) return <div className="loading">Carregando coletor...</div>;
+
+  return (
+    <main className="groups-screen">
+      <header className="groups-header">
+        <div className="groups-header-row">
+          <h2>Coletor de grupos</h2>
+        </div>
+        <p className="muted">
+          Digite um nicho (ex.: "bet") para buscar grupos de WhatsApp desse tema na web, ou deixe vazio
+          para grupos variados de canais de Telegram. Entrar é manual, com trava anti-ban.
+        </p>
+        <div className="collector-search">
+          <input
+            type="text"
+            placeholder='Nicho (ex.: "bet", "marketing"). Vazio = variado.'
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void search();
+            }}
+          />
+          <button type="button" className="import-btn" onClick={() => void search()}>
+            Buscar
+          </button>
+          <button
+            type="button"
+            className="import-btn"
+            onClick={() => setReloadTick((t) => t + 1)}
+            disabled={loading}
+            title="Re-busca a lista no servidor"
+          >
+            {loading ? "Atualizando…" : "Atualizar"}
+          </button>
+        </div>
+        <div className="collector-manual">
+          <label className="muted small" htmlFor="manual-links">
+            Já tem links? Cole aqui (um por linha). O sistema valida e só os <strong>ativos</strong> entram:
+          </label>
+          <textarea
+            id="manual-links"
+            rows={3}
+            placeholder={"https://chat.whatsapp.com/AbCdEf...\nhttps://chat.whatsapp.com/GhIjKl..."}
+            value={manualText}
+            onChange={(e) => setManualText(e.target.value)}
+          />
+          <button
+            type="button"
+            className="import-btn"
+            onClick={() => void addManual()}
+            disabled={manualBusy || manualText.trim().length === 0}
+          >
+            {manualBusy ? "Validando…" : "Validar e adicionar"}
+          </button>
+        </div>
+      </header>
+
+      {notice && <p className="muted">{notice}</p>}
+      {error && <p className="error">{error}</p>}
+      {total === 0 && !error && (
+        <p className="muted">
+          {activeKeyword
+            ? `Nenhum grupo ativo encontrado para "${activeKeyword}".`
+            : "Busque um nicho acima (ou cole links) para ver os grupos."}
+        </p>
+      )}
+
+      <ul className="groups-list">
+        {links.map((link) => {
+          const busy = busyCode === link.inviteCode;
+          // Só os validados (Resolved) podem ser clicados — evita tentar entrar num link ainda
+          // não-checado (Found) que pode estar morto. Found aparece como "Resolvendo…" desabilitado.
+          const canJoin = link.status === "Resolved";
+          const canImport = link.status === "Joined" && !!link.whatsAppGroupId;
+          return (
+            <li key={link.inviteCode} className="group-row">
+              <div className="group-info">
+                <span className="group-name">{link.groupName || link.inviteUrl}</span>
+                <span className="muted small">
+                  {link.participantCount !== null ? `${link.participantCount} participantes · ` : ""}
+                  {STATUS_LABEL[link.status]}
+                  {link.sourceChannel ? ` · via @${link.sourceChannel}` : ""}
+                </span>
+              </div>
+              {link.status === "Imported" ? (
+                <span className="import-summary">Importado</span>
+              ) : canImport ? (
+                <button
+                  type="button"
+                  className="import-btn"
+                  onClick={() => void importContacts(link)}
+                  disabled={busy}
+                >
+                  {busy ? "Importando…" : "Importar contatos"}
+                </button>
+              ) : link.status === "Joined" ? (
+                // Entrou, mas sem JID do grupo: não dá pra importar daqui (importaria 0). Orienta.
+                <span className="muted small">Entrou · importe pela aba Grupos</span>
+              ) : (
+                <button
+                  type="button"
+                  className="import-btn"
+                  onClick={() => void join(link)}
+                  disabled={busy || !canJoin}
+                  title={canJoin ? "Entra no grupo pelo número conectado" : "Aguardando validação do link"}
+                >
+                  {busy ? "Entrando…" : "Entrar"}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {total > 0 && (
+        <div className="collector-pager">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page <= 0}
+          >
+            ← Anterior
+          </button>
+          <span className="muted small">
+            Página {page + 1} de {totalPages} · {total} resultados
+          </span>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+          >
+            Próxima →
+          </button>
+        </div>
+      )}
+    </main>
+  );
+}

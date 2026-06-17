@@ -12,6 +12,7 @@ using MtrxSys.Core.Messaging;
 using MtrxSys.Core.Safety;
 using MtrxSys.Core.Validation;
 using MtrxSys.Infrastructure.Auth;
+using MtrxSys.Infrastructure.Collector;
 using MtrxSys.Infrastructure.Metrics;
 using MtrxSys.Infrastructure.Persistence;
 using MtrxSys.Infrastructure.Persistence.Repositories;
@@ -27,6 +28,7 @@ public static class DependencyInjection
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration config)
     {
         services.AddOptions<DispatchOptions>().Bind(config.GetSection(DispatchOptions.SectionName));
+        services.AddOptions<CollectorOptions>().Bind(config.GetSection(CollectorOptions.SectionName));
         services.AddOptions<CircuitBreakerOptions>().Bind(config.GetSection(CircuitBreakerOptions.SectionName));
         services.AddOptions<WarmupOptions>().Bind(config.GetSection(WarmupOptions.SectionName));
         services.AddOptions<WahaOptions>()
@@ -77,12 +79,14 @@ public static class DependencyInjection
         services.AddScoped<IContactNoteRepository, ContactNoteRepository>();
         services.AddScoped<IContactTagRepository, ContactTagRepository>();
         services.AddScoped<IContactStageChangeRepository, ContactStageChangeRepository>();
+        services.AddScoped<IGroupLinkRepository, GroupLinkRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();
 
         services.AddScoped<ImportGroupMembersUseCase>();
         services.AddScoped<AddManualContactsUseCase>();
+        services.AddScoped<MtrxSys.Core.Application.UseCases.Groups.CollectGroupLinksUseCase>();
         services.AddScoped<MtrxSys.Core.Application.UseCases.Conversations.RelinkOrphanConversationsUseCase>();
         services.AddScoped<IWebhookIngestionService, WebhookIngestionService>();
         services.AddScoped<WhatsAppSyncService>();
@@ -95,6 +99,10 @@ public static class DependencyInjection
         services.AddScoped<TypingSimulator>();
         services.AddScoped<CircuitBreaker>();
         services.AddScoped<WarmupManager>();
+
+        // Coletor de grupos: fila em memória (endpoint → worker) e trava anti-ban da entrada.
+        services.AddSingleton<IGroupCollectorChannel, InMemoryGroupCollectorChannel>();
+        services.AddSingleton<JoinThrottle>();
 
         // Timeout efetivo das chamadas ao WAHA. O default do handler de resiliência é 30s e
         // IGNORA o Waha:TimeoutSeconds — por isso lemos a config aqui e configuramos o Polly.
@@ -125,6 +133,43 @@ public static class DependencyInjection
             // app (DispatchEngine), de forma controlada. NB: MaxRetryAttempts=0 é REJEITADO pela
             // validação do handler (precisa ser >= 1) — por isso desligamos via ShouldHandle.
             options.Retry.DisableForUnsafeHttpMethods();
+            // 1 retry (em vez de 3): o join-info de um convite MORTO devolve 500 que NÃO se recupera
+            // re-tentando — 3 retries só desperdiçavam ~10s por link morto e entupiam o enriquecimento.
+            options.Retry.MaxRetryAttempts = 1;
+        });
+
+        // Fonte do Coletor: lê a prévia web de canais públicos de Telegram (HTML, sem login/JS).
+        // Sai pelo IP da máquina (o proxy é só do container WAHA) — ok pra localhost.
+        services.AddHttpClient<IGroupLinkSource, TelegramChannelSource>(client =>
+        {
+            client.BaseAddress = new Uri("https://t.me/");
+            client.Timeout = TimeSpan.FromSeconds(20);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; MtrxSysCollector/1.0)");
+        })
+        .AddStandardResilienceHandler();
+
+        // Fonte de BUSCA por nicho (SearXNG auto-hospedado — web inteira, sem chave). A URL do
+        // SearXNG vem das opções (Collector:SearxngBaseUrl); vazia = fonte não-configurada → cai no
+        // Telegram. Sem BaseAddress nem retry/breaker: a fonte usa URLs absolutas (o SearXNG E as
+        // páginas de resultado que ela visita pra varrer o corpo) e tolera falha por página — o
+        // retry/circuit-breaker padrão atrapalharia ao varrer muitas páginas externas.
+        services.AddHttpClient<IGroupLinkSearchSource, SearxngSearchSource>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(15);
+            // Teto de 5 MB por resposta: a fonte baixa páginas arbitrárias da web; sem isso, uma
+            // página gigante/maliciosa poderia estourar a memória (ReadAsStringAsync lança ao exceder).
+            client.MaxResponseContentBufferSize = 5_000_000;
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; MtrxSysCollector/1.0)");
+        });
+
+        // Validação de convite pela página pública (chat.whatsapp.com) — sem WAHA, rápida.
+        services.AddHttpClient<IWhatsAppInviteValidator, WhatsAppInviteValidator>(client =>
+        {
+            client.BaseAddress = new Uri("https://chat.whatsapp.com/");
+            client.Timeout = TimeSpan.FromSeconds(10);
+            client.MaxResponseContentBufferSize = 2_000_000;
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; MtrxSysCollector/1.0)");
+            client.DefaultRequestHeaders.AcceptLanguage.ParseAdd("pt-BR");
         });
 
         services.AddLogging(b => b.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning));

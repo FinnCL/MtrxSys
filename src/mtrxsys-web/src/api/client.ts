@@ -12,6 +12,8 @@ import type {
   DispatchReportItem,
   DispatchStats,
   Group,
+  GroupLinkPage,
+  GroupLinkStatus,
   ImportResult,
   ManualImportResult,
   LoginResponse,
@@ -198,6 +200,43 @@ export const api = {
   leaveGroup: (groupId: string) =>
     request<{ left: boolean }>(`/api/groups/${encodeURIComponent(groupId)}/leave`, {
       method: "POST",
+    }),
+  // Coletor de grupos: dispara uma coleta (background), lista os links e entra num grupo.
+  collectorCollect: (keyword?: string) =>
+    request<{ queued: boolean; keyword: string | null; searchConfigured: boolean }>(
+      "/api/collector/collect",
+      {
+        method: "POST",
+        body: JSON.stringify({ keyword: keyword ?? null }),
+      },
+    ),
+  collectorLinks: (
+    params: { keyword?: string; status?: GroupLinkStatus; limit?: number; offset?: number } = {},
+  ) => {
+    const q = new URLSearchParams();
+    if (params.keyword) q.set("keyword", params.keyword);
+    if (params.status) q.set("status", params.status);
+    if (params.limit !== undefined) q.set("limit", String(params.limit));
+    if (params.offset !== undefined) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return request<GroupLinkPage>(`/api/collector/links${qs ? `?${qs}` : ""}`);
+  },
+  collectorJoin: (code: string) =>
+    request<{ joined: boolean; groupId: string; name: string; canImport: boolean }>(
+      `/api/collector/links/${encodeURIComponent(code)}/join`,
+      { method: "POST" },
+    ),
+  // Entrada manual: cola links (um por linha), valida na hora (só vivos aparecem como "Pronto").
+  collectorAddManual: (links: string[], keyword?: string) =>
+    request<{
+      added: number;
+      live: number;
+      dead: number;
+      duplicates: number;
+      pendingValidation: number;
+    }>("/api/collector/links/manual", {
+      method: "POST",
+      body: JSON.stringify({ links, keyword: keyword ?? null }),
     }),
   addManualContacts: (numbers: string[], groupTag?: string) =>
     request<ManualImportResult>("/api/contacts/manual", {

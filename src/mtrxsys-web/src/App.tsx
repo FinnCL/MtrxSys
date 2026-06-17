@@ -7,6 +7,7 @@ import { ChatThread } from "./components/ChatThread";
 import { ContactPanel } from "./components/ContactPanel";
 import { WhatsAppOnboarding } from "./components/WhatsAppOnboarding";
 import { GroupsScreen } from "./components/GroupsScreen";
+import { CollectorScreen } from "./components/CollectorScreen";
 import { ContactsScreen } from "./components/ContactsScreen";
 import { CampaignsScreen } from "./components/CampaignsScreen";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -15,7 +16,7 @@ import type { Conversation } from "./api/types";
 import { emptyContactPaneMessage } from "./utils/chatLabels";
 import "./App.css";
 
-type ViewTab = "chat" | "groups" | "contacts" | "campaigns";
+type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns";
 
 function Shell() {
   const { user, ready, logout } = useAuth();
@@ -117,6 +118,13 @@ function Shell() {
             </button>
             <button
               type="button"
+              className={`tab-btn${view === "collector" ? " active" : ""}`}
+              onClick={() => setView("collector")}
+            >
+              Coletor
+            </button>
+            <button
+              type="button"
               className={`tab-btn${view === "groups" ? " active" : ""}`}
               onClick={() => setView("groups")}
             >
@@ -163,6 +171,8 @@ function Shell() {
         </div>
       ) : !wahaWorking ? (
         <WhatsAppOnboarding onWorking={handleWahaWorking} />
+      ) : view === "collector" ? (
+        <CollectorScreen />
       ) : view === "groups" ? (
         <GroupsScreen />
       ) : view === "contacts" ? (
