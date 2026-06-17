@@ -14,6 +14,27 @@ public static class CollectorEndpoints
     {
         var group = app.MapGroup("/api/collector");
 
+        // Info do motor de busca pro painel (SEM expor URL/credencial): qual motor está ativo e
+        // quantas requisições já foram feitas (informativo — reinício zera). Sem busca configurada,
+        // o Coletor usa o Telegram (modo variado).
+        group.MapGet("/search-info", async (
+            IGroupLinkSearchSource search, ISearchUsageMeter meter, ISearchStatus status, CancellationToken ct) =>
+            Results.Ok(new
+            {
+                engine = search.IsConfigured ? search.Engine : "Telegram",
+                configured = search.IsConfigured,
+                requestCount = await meter.GetCountAsync(ct),
+                lastError = status.LastError,
+            }));
+
+        // Estado da trava anti-ban de ENTRADA (pro painel deixar o limite explícito): entradas hoje,
+        // teto diário, quantas restam e segundos até a próxima.
+        group.MapGet("/join-status", (JoinThrottle throttle, IClock clock) =>
+        {
+            var s = throttle.GetStatus(clock.UtcNow);
+            return Results.Ok(new { joinsToday = s.JoinsToday, maxPerDay = s.MaxPerDay, remaining = s.Remaining, waitSeconds = s.WaitSeconds });
+        });
+
         // Dispara uma coleta em background. keyword vazio = modo variado.
         group.MapPost("/collect", (CollectRequestDto? body, IGroupCollectorChannel queue, IGroupLinkSearchSource search) =>
         {

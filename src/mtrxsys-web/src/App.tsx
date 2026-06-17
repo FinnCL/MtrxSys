@@ -18,13 +18,20 @@ import "./App.css";
 
 type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns";
 
+// Persiste a aba ativa pra sobreviver ao F5/atualizar — sem isso, recarregar sempre cai no Chat.
+const VIEW_TABS: ViewTab[] = ["chat", "collector", "groups", "contacts", "campaigns"];
+function loadView(): ViewTab {
+  const v = localStorage.getItem("app.view");
+  return VIEW_TABS.includes(v as ViewTab) ? (v as ViewTab) : "chat";
+}
+
 function Shell() {
   const { user, ready, logout } = useAuth();
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [wahaWorking, setWahaWorking] = useState<boolean | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [view, setView] = useState<ViewTab>("chat");
+  const [view, setView] = useState<ViewTab>(loadView);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   // Estável (useCallback) pra não recriar os efeitos do WhatsAppOnboarding (polling/auto-retry do
   // QR) a cada render deste pai — uma arrow inline mudaria de referência todo render.
@@ -87,6 +94,11 @@ function Shell() {
   useEffect(() => {
     if (wahaWorking === false) autoSyncTriggeredRef.current = false;
   }, [wahaWorking]);
+
+  // Lembra a aba ativa: ao atualizar a página, volta pra mesma aba (não cai sempre no Chat).
+  useEffect(() => {
+    localStorage.setItem("app.view", view);
+  }, [view]);
 
   useEffect(() => {
     if (wahaWorking !== true) return;

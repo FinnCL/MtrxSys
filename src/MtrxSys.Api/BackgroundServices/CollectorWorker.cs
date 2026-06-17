@@ -11,6 +11,7 @@ namespace MtrxSys.Api.BackgroundServices;
 public sealed class CollectorWorker(
     IServiceProvider services,
     IGroupCollectorChannel queue,
+    ISearchUsageMeter searchMeter,
     ILogger<CollectorWorker> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -21,13 +22,20 @@ public sealed class CollectorWorker(
             {
                 await using var scope = services.CreateAsyncScope();
                 var useCase = scope.ServiceProvider.GetRequiredService<CollectGroupLinksUseCase>();
+                var search = scope.ServiceProvider.GetRequiredService<IGroupLinkSearchSource>();
+                // Mede quantas requisições de busca ESTA coleta gastou (delta) + o total acumulado —
+                // vira histórico timestampado no log do container (docker logs mtrx-api).
+                var reqBefore = await searchMeter.GetCountAsync(stoppingToken);
                 var r = await useCase.ExecuteAsync(request.Keyword, stoppingToken);
+                var reqTotal = await searchMeter.GetCountAsync(stoppingToken);
+                var reqUsed = reqTotal - reqBefore;
                 log.LogInformation(
                     "Coleta concluída (keyword={Keyword}): {Total} vistos, +{New} novos, {Resolved} resolvidos, "
                     + "{Invalid} inválidos, {Foreign} estrangeiros, {Pending} ainda na fila, "
-                    + "{Visited} canais ({Failed} falharam).",
+                    + "{Visited} canais ({Failed} falharam) | busca {Engine}: +{ReqUsed} req (total {ReqTotal}).",
                     request.Keyword ?? "(variado)", r.TotalSeen, r.NewLinks, r.Resolved, r.Invalid,
-                    r.Foreign, r.RemainingPending, r.ChannelsVisited, r.ChannelsFailed);
+                    r.Foreign, r.RemainingPending, r.ChannelsVisited, r.ChannelsFailed,
+                    search.Engine, reqUsed, reqTotal);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

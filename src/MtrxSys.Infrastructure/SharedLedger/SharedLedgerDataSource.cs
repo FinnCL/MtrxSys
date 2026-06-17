@@ -3,8 +3,9 @@ using Npgsql;
 namespace MtrxSys.Infrastructure.SharedLedger;
 
 // Encapsula o NpgsqlDataSource do registro compartilhado (um banco SEPARADO dos 10, fora do
-// MtrxDbContext) e garante a tabela `phone_ledger` uma única vez por processo, de forma idempotente
-// (CREATE TABLE IF NOT EXISTS — seguro sob concorrência entre os ambientes). Registrado como singleton.
+// MtrxDbContext) e garante as tabelas compartilhadas (`phone_ledger` e `search_usage`) uma única vez
+// por processo, de forma idempotente (CREATE TABLE IF NOT EXISTS — seguro sob concorrência entre os
+// ambientes). Registrado como singleton.
 public sealed class SharedLedgerDataSource : IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
@@ -12,7 +13,18 @@ public sealed class SharedLedgerDataSource : IAsyncDisposable
     private bool _ready;
 
     public SharedLedgerDataSource(string connectionString)
-        => _dataSource = new NpgsqlDataSourceBuilder(connectionString).Build();
+    {
+        // Blindagem: timeouts CURTOS. Este banco é auxiliar e fail-open (phone_ledger no disparo,
+        // contador de busca na coleta). Com os defaults (connect 15s), um banco compartilhado
+        // configurado mas FORA do ar travaria a coleta ~15s por chamada antes de cair no fail-open.
+        // 5s pra conectar e 10s por comando bastam e mantêm o fluxo responsivo na má configuração.
+        var csb = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            Timeout = 5,
+            CommandTimeout = 10,
+        };
+        _dataSource = new NpgsqlDataSourceBuilder(csb.ConnectionString).Build();
+    }
 
     // Abre uma conexão, garantindo antes que a tabela exista. Se o banco estiver fora, a exceção
     // sobe pro chamador (que é fail-open e a engole) e _ready continua false → tenta de novo depois.
@@ -43,7 +55,12 @@ public sealed class SharedLedgerDataSource : IAsyncDisposable
                     status     smallint     NOT NULL,
                     chip       varchar(8),
                     updated_at timestamptz  NOT NULL DEFAULT now()
-                )
+                );
+                CREATE TABLE IF NOT EXISTS search_usage (
+                    id         smallint     PRIMARY KEY,
+                    count      bigint       NOT NULL DEFAULT 0,
+                    updated_at timestamptz  NOT NULL DEFAULT now()
+                );
                 """,
                 conn);
             await cmd.ExecuteNonQueryAsync(ct);

@@ -210,6 +210,17 @@ export const api = {
         body: JSON.stringify({ keyword: keyword ?? null }),
       },
     ),
+  // Info do motor de busca pro card (sem URL): qual motor, requisições feitas e o último erro
+  // (ex.: "Serper recusou: limite/sem crédito") pra mostrar POR QUE a busca parou.
+  collectorSearchInfo: () =>
+    request<{ engine: string; configured: boolean; requestCount: number; lastError: string | null }>(
+      "/api/collector/search-info",
+    ),
+  // Estado da trava anti-ban de entrada (deixa o limite explícito no painel).
+  collectorJoinStatus: () =>
+    request<{ joinsToday: number; maxPerDay: number; remaining: number; waitSeconds: number }>(
+      "/api/collector/join-status",
+    ),
   collectorLinks: (
     params: { keyword?: string; status?: GroupLinkStatus; limit?: number; offset?: number } = {},
   ) => {

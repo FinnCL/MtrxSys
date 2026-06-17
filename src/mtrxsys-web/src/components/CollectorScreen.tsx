@@ -14,9 +14,15 @@ const STATUS_LABEL: Record<GroupLinkStatus, string> = {
   Foreign: "Estrangeiro",
 };
 
+// Formata segundos de espera pra exibição curta (ex.: "45s", "3min").
+function fmtWait(seconds: number): string {
+  return seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)}min`;
+}
+
 export function CollectorScreen() {
-  const [keyword, setKeyword] = useState("");
-  const [activeKeyword, setActiveKeyword] = useState("");
+  // Restaura a última busca ao voltar pra aba (senão o componente remonta e a lista some).
+  const [keyword, setKeyword] = useState(() => localStorage.getItem("collector.keyword") ?? "");
+  const [activeKeyword, setActiveKeyword] = useState(() => localStorage.getItem("collector.keyword") ?? "");
   const [links, setLinks] = useState<GroupLink[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -30,8 +36,54 @@ export function CollectorScreen() {
   // Entrada manual de links (colar um por linha).
   const [manualText, setManualText] = useState("");
   const [manualBusy, setManualBusy] = useState(false);
+  // Info do motor de busca (nome + requisições feitas + último erro), só pra exibir no card.
+  const [searchInfo, setSearchInfo] = useState<{
+    engine: string;
+    requestCount: number;
+    lastError: string | null;
+  } | null>(null);
+  // Estado da trava anti-ban de entrada (limite explícito no painel).
+  const [joinStatus, setJoinStatus] = useState<{
+    joinsToday: number;
+    maxPerDay: number;
+    remaining: number;
+    waitSeconds: number;
+  } | null>(null);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // Persiste só a BUSCA ativa (não a página): ao sair e voltar pra aba, recarrega o que você
+  // procurou, sempre na 1ª página. Persistir a página causava offset além dos resultados numa
+  // busca menor → lista vazia com paginador.
+  useEffect(() => {
+    if (activeKeyword) localStorage.setItem("collector.keyword", activeKeyword);
+    else localStorage.removeItem("collector.keyword");
+  }, [activeKeyword]);
+
+  // Carrega a info do motor de busca + estado da trava de entrada — atualiza junto com a lista/ações.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .collectorSearchInfo()
+      .then((info) => {
+        if (!cancelled)
+          setSearchInfo({ engine: info.engine, requestCount: info.requestCount, lastError: info.lastError });
+      })
+      .catch(() => {
+        /* info é só decorativa: silencia falha */
+      });
+    api
+      .collectorJoinStatus()
+      .then((s) => {
+        if (!cancelled) setJoinStatus(s);
+      })
+      .catch(() => {
+        /* idem */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadTick]);
 
   // Carrega SÓ a página atual (paginação server-side): payload pequeno e render limitado.
   useEffect(() => {
@@ -52,6 +104,12 @@ export function CollectorScreen() {
           offset: page * PAGE_SIZE,
         });
         if (!cancelled) {
+          // Defensivo: se a página atual passou do fim (itens vazios mas total>0), volta pra 1ª e
+          // recarrega — em vez de mostrar lista vazia com paginador.
+          if (page > 0 && res.items.length === 0 && res.total > 0) {
+            setPage(0);
+            return;
+          }
           setLinks(res.items);
           setTotal(res.total);
           setError(null);
@@ -191,32 +249,64 @@ export function CollectorScreen() {
       <header className="groups-header">
         <div className="groups-header-row">
           <h2>Coletor de grupos</h2>
+          {searchInfo && (
+            <span className="muted small" title="Motor de busca ativo e requisições feitas (informativo)">
+              Busca: {searchInfo.engine} · {searchInfo.requestCount} requisições
+            </span>
+          )}
+          {joinStatus && (
+            <span
+              className="muted small"
+              title="Trava anti-ban: teto diário de entradas e intervalo entre cada (protege o número de bloqueio)"
+            >
+              Entradas hoje: {joinStatus.joinsToday}/{joinStatus.maxPerDay}
+              {joinStatus.remaining <= 0
+                ? " · limite do dia atingido"
+                : joinStatus.waitSeconds > 0
+                  ? ` · aguarde ${fmtWait(joinStatus.waitSeconds)}`
+                  : " · pode entrar"}
+            </span>
+          )}
         </div>
         <p className="muted">
           Digite um nicho (ex.: "bet") para buscar grupos de WhatsApp desse tema na web, ou deixe vazio
           para grupos variados de canais de Telegram. Entrar é manual, com trava anti-ban.
         </p>
         <div className="collector-search">
-          <input
-            type="text"
-            placeholder='Nicho (ex.: "bet", "marketing"). Vazio = variado.'
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void search();
-            }}
-          />
+          <div className="search-input-wrap">
+            <input
+              type="text"
+              placeholder='Nicho (ex.: "bet", "marketing"). Vazio = variado.'
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void search();
+              }}
+            />
+            {keyword && (
+              <button
+                type="button"
+                className="search-clear"
+                aria-label="Limpar"
+                title="Limpar"
+                onClick={() => setKeyword("")}
+              >
+                ×
+              </button>
+            )}
+          </div>
           <button type="button" className="import-btn" onClick={() => void search()}>
             Buscar
           </button>
           <button
             type="button"
-            className="import-btn"
+            className="icon-btn"
             onClick={() => setReloadTick((t) => t + 1)}
             disabled={loading}
-            title="Re-busca a lista no servidor"
+            title="Atualizar"
+            aria-label="Atualizar"
           >
-            {loading ? "Atualizando…" : "Atualizar"}
+            {loading ? "…" : "↻"}
           </button>
         </div>
         <div className="collector-manual">
@@ -241,6 +331,14 @@ export function CollectorScreen() {
         </div>
       </header>
 
+      {searchInfo?.lastError && (
+        <p
+          className="error"
+          title="Motivo informado pelo motor de busca — por isso a busca pode parar de trazer resultados"
+        >
+          ⚠ {searchInfo.lastError}
+        </p>
+      )}
       {notice && <p className="muted">{notice}</p>}
       {error && <p className="error">{error}</p>}
       {total === 0 && !error && (
@@ -254,6 +352,11 @@ export function CollectorScreen() {
       <ul className="groups-list">
         {links.map((link) => {
           const busy = busyCode === link.inviteCode;
+          // Anti-ban: enquanto QUALQUER entrada/importação está em curso, desabilita as ações de
+          // TODAS as linhas. Sem isso, cliques rápidos em vários grupos lançariam joins concorrentes
+          // que furam o INTERVALO da trava (Check acontece antes do RegisterJoin no servidor) — e é
+          // o espaçamento entre entradas que protege o número de ban.
+          const anyBusy = busyCode !== null;
           // Só os validados (Resolved) podem ser clicados — evita tentar entrar num link ainda
           // não-checado (Found) que pode estar morto. Found aparece como "Resolvendo…" desabilitado.
           const canJoin = link.status === "Resolved";
@@ -275,7 +378,7 @@ export function CollectorScreen() {
                   type="button"
                   className="import-btn"
                   onClick={() => void importContacts(link)}
-                  disabled={busy}
+                  disabled={anyBusy}
                 >
                   {busy ? "Importando…" : "Importar contatos"}
                 </button>
@@ -287,7 +390,7 @@ export function CollectorScreen() {
                   type="button"
                   className="import-btn"
                   onClick={() => void join(link)}
-                  disabled={busy || !canJoin}
+                  disabled={anyBusy || !canJoin}
                   title={canJoin ? "Entra no grupo pelo número conectado" : "Aguardando validação do link"}
                 >
                   {busy ? "Entrando…" : "Entrar"}

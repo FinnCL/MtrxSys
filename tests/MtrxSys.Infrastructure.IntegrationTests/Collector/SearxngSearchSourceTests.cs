@@ -38,7 +38,9 @@ public sealed class SearxngSearchSourceTests
     {
         var http = new HttpClient(handler);
         opts ??= new CollectorOptions { SearxngBaseUrl = "http://searxng.test" };
-        return new SearxngSearchSource(http, Options.Create(opts), NullLogger<SearxngSearchSource>.Instance);
+        return new SearxngSearchSource(
+            http, Options.Create(opts), new InMemorySearchUsageMeter(),
+            new InMemorySearchStatus(), NullLogger<SearxngSearchSource>.Instance);
     }
 
     // SearXNG lista 2 páginas; uma tem convites no corpo, a outra está vazia.

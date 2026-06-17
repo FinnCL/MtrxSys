@@ -23,4 +23,6 @@ RUN npm run build
 
 FROM nginx:alpine AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
+# Config que NÃO cacheia o index.html (pega deploy novo sem hard-refresh) e cacheia os assets com hash.
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

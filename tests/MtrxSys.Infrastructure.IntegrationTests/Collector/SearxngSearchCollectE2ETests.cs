@@ -84,7 +84,8 @@ public sealed class SearxngSearchCollectE2ETests : IAsyncLifetime
         var collectorOpts = new CollectorOptions { SearxngBaseUrl = "http://searxng.test", MaxResultsPerSearch = 30 };
         var http = new HttpClient(new RouteHandler());
         var search = new SearxngSearchSource(
-            http, Options.Create(collectorOpts), NullLogger<SearxngSearchSource>.Instance);
+            http, Options.Create(collectorOpts), new InMemorySearchUsageMeter(),
+            new InMemorySearchStatus(), NullLogger<SearxngSearchSource>.Instance);
 
         // Validador (página pública) mockado: todos os achados são VIVOS, com nome BR.
         var validator = Substitute.For<IWhatsAppInviteValidator>();

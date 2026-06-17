@@ -170,6 +170,22 @@ input[type="checkbox"], input[type="radio"] {
 
 .collector-search { display: flex; gap: 8px; margin-top: 10px; max-width: 800px; }
 .collector-search input { flex: 1; }
+/* Input de busca com "x" pra limpar dentro dele. */
+.search-input-wrap { position: relative; flex: 1; display: flex; }
+.search-input-wrap input { flex: 1; padding-right: 26px; }
+.search-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 2px 4px;
+}
+.search-clear:hover { color: var(--fg); }
+/* "Atualizar" como ícone discreto: re-lê a lista do servidor (refresh GRÁTIS, sem custo de crédito). */
+.icon-btn {
+  background: transparent; color: var(--muted); border: 1px solid var(--border);
+  padding: 6px 10px; font-size: 14px; flex-shrink: 0; cursor: pointer;
+}
+.icon-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--accent); }
+.icon-btn:disabled { opacity: 0.5; cursor: default; }
 /* Entrada manual de links: textarea + botão empilhados. */
 .collector-manual { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-width: 800px; }
 .collector-manual textarea { width: 100%; resize: vertical; font-family: ui-monospace, monospace; font-size: 12px; }

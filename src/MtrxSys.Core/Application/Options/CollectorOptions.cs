@@ -33,6 +33,14 @@ public sealed class CollectorOptions
     // URL do serviço. Vazio = desligado: o Coletor cai no Telegram (modo "variados").
     public string? SearxngBaseUrl { get; set; }
 
+    /// <summary>Chave da API do Serper (google.serper.dev) — busca pelo índice do Google, com faixa
+    /// grátis (~2.500 buscas). PREENCHIDA = a busca por nicho usa o Serper no lugar do SearXNG;
+    /// vazia = usa o SearXNG (ou Telegram). Reusa SearchQueryTemplate e DirectorySites.</summary>
+    public string? SerperApiKey { get; set; }
+
+    /// <summary>Endpoint do Serper. Default público; raramente muda.</summary>
+    public string SerperBaseUrl { get; set; } = "https://google.serper.dev";
+
     /// <summary>Quantos resultados buscar por nicho (várias páginas; teto 200). 30 ≈ 2-3 páginas.</summary>
     public int MaxResultsPerSearch { get; set; } = 30;
 

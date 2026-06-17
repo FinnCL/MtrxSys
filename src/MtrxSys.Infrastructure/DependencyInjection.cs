@@ -50,12 +50,20 @@ public static class DependencyInjection
         services.AddOptions<SharedLedgerOptions>().Bind(config.GetSection(SharedLedgerOptions.SectionName));
         var ledgerMode = config.GetSection(SharedLedgerOptions.SectionName)["Mode"];
         var ledgerConn = config.GetConnectionString("SharedLedger");
-        var ledgerActive = !string.IsNullOrWhiteSpace(ledgerConn)
+        // Há banco compartilhado disponível? (só a connection string, independente do Mode.) O contador
+        // de busca compartilhado usa ESTE banco mesmo com o phone-ledger desligado (Mode=Off).
+        var hasSharedDb = !string.IsNullOrWhiteSpace(ledgerConn);
+        var ledgerActive = hasSharedDb
             && !string.IsNullOrWhiteSpace(ledgerMode)
             && !string.Equals(ledgerMode, nameof(SharedLedgerMode.Off), StringComparison.OrdinalIgnoreCase);
-        if (ledgerActive)
+        // A fonte do banco compartilhado é registrada sempre que há connection string (a usam o
+        // phone-ledger E o contador de busca). O phone-ledger em si só liga com Mode != Off.
+        if (hasSharedDb)
         {
             services.AddSingleton(_ => new SharedLedgerDataSource(ledgerConn!));
+        }
+        if (ledgerActive)
+        {
             services.AddScoped<ISharedPhoneLedger, NpgsqlSharedPhoneLedger>();
         }
         else
@@ -100,9 +108,20 @@ public static class DependencyInjection
         services.AddScoped<CircuitBreaker>();
         services.AddScoped<WarmupManager>();
 
-        // Coletor de grupos: fila em memória (endpoint → worker) e trava anti-ban da entrada.
+        // Coletor de grupos: fila em memória (endpoint → worker), trava anti-ban da entrada, motivo
+        // da última falha de busca (pro painel) e medidor de uso da busca. O medidor é COMPARTILHADO
+        // (agrega os 10 ambientes, persistente) quando há banco compartilhado; senão, local em memória.
         services.AddSingleton<IGroupCollectorChannel, InMemoryGroupCollectorChannel>();
         services.AddSingleton<JoinThrottle>();
+        services.AddSingleton<ISearchStatus, InMemorySearchStatus>();
+        if (hasSharedDb)
+        {
+            services.AddSingleton<ISearchUsageMeter, SharedSearchUsageMeter>();
+        }
+        else
+        {
+            services.AddSingleton<ISearchUsageMeter, InMemorySearchUsageMeter>();
+        }
 
         // Timeout efetivo das chamadas ao WAHA. O default do handler de resiliência é 30s e
         // IGNORA o Waha:TimeoutSeconds — por isso lemos a config aqui e configuramos o Polly.
@@ -148,19 +167,26 @@ public static class DependencyInjection
         })
         .AddStandardResilienceHandler();
 
-        // Fonte de BUSCA por nicho (SearXNG auto-hospedado — web inteira, sem chave). A URL do
-        // SearXNG vem das opções (Collector:SearxngBaseUrl); vazia = fonte não-configurada → cai no
-        // Telegram. Sem BaseAddress nem retry/breaker: a fonte usa URLs absolutas (o SearXNG E as
-        // páginas de resultado que ela visita pra varrer o corpo) e tolera falha por página — o
-        // retry/circuit-breaker padrão atrapalharia ao varrer muitas páginas externas.
-        services.AddHttpClient<IGroupLinkSearchSource, SearxngSearchSource>(client =>
+        // Fonte de BUSCA por nicho. Se há chave do Serper (índice do Google, faixa grátis), usa o
+        // Serper; senão, o SearXNG auto-hospedado. Ambos baixam o CORPO das páginas de resultado pra
+        // extrair os convites — por isso o teto de 5 MB (uma página gigante/maliciosa estouraria a
+        // memória) e o User-Agent. Sem BaseAddress nem retry/breaker: usam URLs absolutas e toleram
+        // falha por página (o retry/circuit-breaker padrão atrapalharia ao varrer muitas páginas).
+        void ConfigureSearchClient(System.Net.Http.HttpClient client)
         {
             client.Timeout = TimeSpan.FromSeconds(15);
-            // Teto de 5 MB por resposta: a fonte baixa páginas arbitrárias da web; sem isso, uma
-            // página gigante/maliciosa poderia estourar a memória (ReadAsStringAsync lança ao exceder).
             client.MaxResponseContentBufferSize = 5_000_000;
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; MtrxSysCollector/1.0)");
-        });
+        }
+        // Ambas as fontes ficam disponíveis (cada uma com seu HttpClient). O CompositeSearchSource
+        // tenta o Serper (quando há chave) e CAI no SearXNG quando o Serper esgota/erra — a busca por
+        // nicho não morre quando a cota grátis acaba. Sem chave do Serper, usa direto o SearXNG.
+        services.AddHttpClient<SerperSearchSource>(ConfigureSearchClient);
+        services.AddHttpClient<SearxngSearchSource>(ConfigureSearchClient);
+        services.AddTransient<IGroupLinkSearchSource>(sp => new CompositeSearchSource(
+            primary: sp.GetRequiredService<SerperSearchSource>(),
+            secondary: sp.GetRequiredService<SearxngSearchSource>(),
+            sp.GetRequiredService<ISearchStatus>()));
 
         // Validação de convite pela página pública (chat.whatsapp.com) — sem WAHA, rápida.
         services.AddHttpClient<IWhatsAppInviteValidator, WhatsAppInviteValidator>(client =>

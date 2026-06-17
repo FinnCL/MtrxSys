@@ -43,6 +43,30 @@ public sealed class JoinThrottle(IRandomSource rng, IOptions<CollectorOptions> o
         }
     }
 
+    /// <summary>Snapshot do estado pro painel (não muta): quantas entradas hoje, o teto diário,
+    /// quantas ainda restam e quantos segundos faltam pra próxima (0 = liberado agora).</summary>
+    public JoinThrottleStatus GetStatus(DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            var o = opts.Value;
+            var max = Math.Max(1, o.MaxJoinsPerDay);
+            var today = DateOnly.FromDateTime(now.UtcDateTime);
+            var count = _countDay == today ? _countToday : 0;
+            var wait = 0;
+            if (_lastJoinAt is { } last)
+            {
+                var need = TimeSpan.FromSeconds(_currentIntervalSeconds);
+                var elapsed = now - last;
+                if (elapsed < need)
+                {
+                    wait = (int)Math.Ceiling((need - elapsed).TotalSeconds);
+                }
+            }
+            return new JoinThrottleStatus(count, max, Math.Max(0, max - count), wait);
+        }
+    }
+
     /// <summary>Registra uma entrada bem-sucedida: incrementa o contador do dia e sorteia o
     /// próximo intervalo mínimo.</summary>
     public void RegisterJoin(DateTimeOffset now)
@@ -66,3 +90,7 @@ public sealed class JoinThrottle(IRandomSource rng, IOptions<CollectorOptions> o
 }
 
 public sealed record JoinDecision(bool Allowed, int RetryAfterSeconds, string? Reason);
+
+/// <summary>Estado da trava de entrada pro painel: entradas hoje, teto diário, quantas restam e
+/// segundos até a próxima liberação (0 = pode entrar agora).</summary>
+public sealed record JoinThrottleStatus(int JoinsToday, int MaxPerDay, int Remaining, int WaitSeconds);
