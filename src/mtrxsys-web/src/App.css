@@ -424,6 +424,26 @@ input[type="checkbox"], input[type="radio"] {
 }
 .qr-frame img { display: block; max-width: 100%; height: auto; }
 
+.pairing-alt {
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.pairing-row { display: flex; gap: 8px; margin-top: 8px; }
+.pairing-row input { flex: 1; }
+.pairing-code-box { margin-top: 12px; }
+.pairing-code {
+  margin-top: 8px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-align: center;
+  padding: 10px;
+  background: var(--bg-3);
+  border-radius: 6px;
+  user-select: all;
+}
+
 .onboarding-escape {
   margin-top: 12px;
   padding-top: 16px;

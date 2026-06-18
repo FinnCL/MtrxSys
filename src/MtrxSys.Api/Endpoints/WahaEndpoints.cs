@@ -98,6 +98,31 @@ public static class WahaEndpoints
             return Results.File(bytes, "image/png");
         });
 
+        // Alternativa ao QR: pareia por CÓDIGO de número (NOWEB). Imune ao timing de rotação do QR
+        // — é o caminho robusto quando o scan não fecha (QR expira antes de o celular completar).
+        // O usuário digita o código no WhatsApp em "Conectar com número de telefone".
+        group.MapPost("/pairing-code", async (
+            WahaPairingCodeRequest body,
+            IWahaClient waha,
+            IOptions<DispatchOptions> dispatch,
+            CancellationToken ct) =>
+        {
+            var sessionId = dispatch.Value.SessionId;
+            var status = await waha.GetSessionStatusAsync(sessionId, ct);
+            if (status != WahaSessionStatus.ScanQrCode)
+            {
+                return Results.Problem(detail: $"session not scanning (status={status})", statusCode: 409);
+            }
+            var digits = new string((body.PhoneNumber ?? string.Empty).Where(char.IsDigit).ToArray());
+            if (digits.Length < 12)
+            {
+                return Results.Problem(
+                    detail: "informe o número com DDI+DDD (ex.: 5571999998888)", statusCode: 400);
+            }
+            var code = await waha.RequestPairingCodeAsync(sessionId, digits, ct);
+            return Results.Ok(new { code });
+        });
+
         group.MapPost("/sync", async (
             int? messagesPerChat,
             WhatsAppSyncService sync,
@@ -133,4 +158,6 @@ public static class WahaEndpoints
         }
 #pragma warning restore CA1031
     }
+
+    public sealed record WahaPairingCodeRequest(string? PhoneNumber);
 }

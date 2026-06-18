@@ -227,6 +227,16 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         return dto?.Value ?? string.Empty;
     }
 
+    public async Task<string> RequestPairingCodeAsync(string sessionId, string phoneNumber, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Post, $"api/{Esc(sessionId)}/auth/request-code");
+        req.Content = JsonContent.Create(new { phoneNumber }, options: Json);
+        using var resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+        var dto = await resp.Content.ReadFromJsonAsync<PairingCodeDto>(Json, ct);
+        return dto?.Code ?? string.Empty;
+    }
+
     public async Task<IReadOnlyList<WahaChat>> ListChatsOverviewAsync(string sessionId, int limit, CancellationToken ct)
     {
         using var req = NewRequest(HttpMethod.Get, $"api/{Esc(sessionId)}/chats/overview?limit={limit}");
@@ -719,6 +729,7 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
     private sealed record MeDto(string? Id, string? PushName);
     private sealed record LidDto(string? Lid, string? Pn);
     private sealed record QrRawDto(string? Value);
+    private sealed record PairingCodeDto(string? Code);
     private sealed record ChatLastMessageDto(string? Body, long? Timestamp);
     private sealed record ChatOverviewDto(string? Id, string? Name, ChatLastMessageDto? LastMessage);
     private sealed record MessageDto(string? Id, string? From, string? Author, bool? FromMe, string? Body, long? Timestamp);

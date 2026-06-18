@@ -12,6 +12,9 @@ interface Props {
 // suficiente pra quem está prestes a escanear, sem ficar gerando QR pra sempre se ninguém vai.
 const MAX_AUTO_RETRIES = 8;
 
+// Mínimo de dígitos plausível pra um número brasileiro: DDI (55) + DDD (2) + número (≥7).
+const MIN_PHONE_DIGITS = 12;
+
 export function WhatsAppOnboarding({ onWorking }: Props) {
   const { logout } = useAuth();
   const [status, setStatus] = useState<WahaStatus>("Unknown");
@@ -19,7 +22,13 @@ export function WhatsAppOnboarding({ onWorking }: Props) {
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [autoRetries, setAutoRetries] = useState(0);
+  // Já começa com o DDI do Brasil (55) — o tool é Brasil-only; o usuário completa com DDD + número.
+  const [phoneInput, setPhoneInput] = useState("55");
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingBusy, setPairingBusy] = useState(false);
   const previousBlobRef = useRef<string | null>(null);
+  // Só os dígitos — base única pra validar e habilitar o botão (sem repetir regex/limite na tela).
+  const phoneDigits = phoneInput.replace(/\D/g, "");
 
   const pollStatus = useCallback(async () => {
     try {
@@ -52,6 +61,9 @@ export function WhatsAppOnboarding({ onWorking }: Props) {
       // Teardown do efeito que gerencia o blob do QR (recurso externo) ao sair do scan.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setQrUrl(null);
+      // Código de pareamento também perde validade ao sair do scan (ex.: pareou ou reiniciou).
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPairingCode(null);
       return;
     }
 
@@ -68,12 +80,16 @@ export function WhatsAppOnboarding({ onWorking }: Props) {
         }
         previousBlobRef.current = url;
         setQrUrl(url);
-      } catch (ex) {
-        if (!cancelled) setError(ex instanceof Error ? ex.message : String(ex));
+      } catch {
+        // QR é best-effort: uma falha transitória (ex.: 409 quando a sessão pisca pra fora do
+        // scan no ciclo do NOWEB) se auto-corrige no próximo fetch. O estado real vem do
+        // pollStatus, então não poluímos a tela com erro de QR.
       }
     }
     void loadQr();
-    const handle = setInterval(loadQr, 18_000);
+    // Recarrega o QR mais rápido que a rotação do WAHA (~20s) pra ele nunca ficar velho na tela —
+    // escanear um QR expirado é a causa do "confirma e volta" sem parear.
+    const handle = setInterval(loadQr, 10_000);
     return () => {
       cancelled = true;
       clearInterval(handle);
@@ -111,6 +127,30 @@ export function WhatsAppOnboarding({ onWorking }: Props) {
   // Recupera uma sessão FAILED: reset (delete + recria) é o que gera um QR realmente novo, já que
   // aqui o pareamento falhou. Usado pelo botão manual e pelo auto-retry.
   const retrySession = useCallback(() => runWahaAction(api.wahaReset), [runWahaAction]);
+
+  // Conexão por CÓDIGO (alternativa ao QR, imune ao timing do scan): manda o número com DDI e
+  // mostra o código pra digitar no WhatsApp. O polling de status vira "Working" quando parear.
+  const requestPairingCode = useCallback(async () => {
+    if (phoneDigits.length < MIN_PHONE_DIGITS) {
+      setError("Informe o número com DDI+DDD, ex.: 5571999998888.");
+      return;
+    }
+    setPairingBusy(true);
+    setError(null);
+    setPairingCode(null);
+    try {
+      const { code } = await api.wahaPairingCode(phoneDigits);
+      if (!code) {
+        setError("O WhatsApp não retornou o código. Tente de novo em alguns segundos.");
+        return;
+      }
+      setPairingCode(code);
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setPairingBusy(false);
+    }
+  }, [phoneDigits]);
 
   // Auto-retry do QR: ao expirar (Failed), regenera sozinho — sem clique — até MAX_AUTO_RETRIES.
   // O contador zera ao conectar (Working); passado o teto, cai no botão manual abaixo.
@@ -169,6 +209,39 @@ export function WhatsAppOnboarding({ onWorking }: Props) {
               )}
             </div>
             <p className="muted tiny">O QR rotaciona a cada ~20s automaticamente.</p>
+
+            <div className="pairing-alt">
+              <p className="muted tiny">
+                O scan não fecha? Conecte <b>por código</b> (não depende do timing do QR):
+              </p>
+              <div className="pairing-row">
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  placeholder="Ex.: 5571999998888"
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                  disabled={pairingBusy}
+                  aria-label="Número do WhatsApp com DDI e DDD"
+                />
+                <button
+                  type="button"
+                  onClick={() => void requestPairingCode()}
+                  disabled={pairingBusy || phoneDigits.length < MIN_PHONE_DIGITS}
+                >
+                  {pairingBusy ? "Gerando..." : "Gerar código"}
+                </button>
+              </div>
+              {pairingCode && (
+                <div className="pairing-code-box">
+                  <p className="muted tiny">
+                    No celular: <b>Aparelhos conectados → Conectar um aparelho → Conectar com número
+                    de telefone</b>, e digite:
+                  </p>
+                  <div className="pairing-code">{pairingCode}</div>
+                </div>
+              )}
+            </div>
           </>
         )}
 

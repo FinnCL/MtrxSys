@@ -140,6 +140,13 @@ export const api = {
     const blob = await resp.blob();
     return URL.createObjectURL(blob);
   },
+  // Conexão por código (alternativa ao QR): manda o número (com DDI) e recebe o código de
+  // pareamento pra digitar no WhatsApp em "Conectar com número de telefone".
+  wahaPairingCode: (phoneNumber: string) =>
+    request<{ code: string }>("/api/waha/pairing-code", {
+      method: "POST",
+      body: JSON.stringify({ phoneNumber }),
+    }),
   listConversations: (opts: { status?: ConversationStatus; search?: string; limit?: number; offset?: number } = {}) => {
     const q = new URLSearchParams();
     if (opts.status) q.set("status", opts.status);

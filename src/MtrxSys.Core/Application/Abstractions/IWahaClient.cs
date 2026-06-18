@@ -19,6 +19,10 @@ public interface IWahaClient
     Task DeleteSessionAsync(string sessionId, CancellationToken ct);
     Task<byte[]> GetQrPngAsync(string sessionId, CancellationToken ct);
     Task<string> GetQrRawAsync(string sessionId, CancellationToken ct);
+    /// <summary>Pede um código de pareamento por número (NOWEB) — alternativa ao QR, imune ao timing
+    /// de rotação do QR. O usuário digita o código no WhatsApp em "Conectar com número de telefone".
+    /// phoneNumber deve ser só dígitos com DDI (ex.: 5571999998888). Retorna o código (ex.: "ABCD-EFGH").</summary>
+    Task<string> RequestPairingCodeAsync(string sessionId, string phoneNumber, CancellationToken ct);
 
     Task<IReadOnlyList<WahaChat>> ListChatsOverviewAsync(string sessionId, int limit, CancellationToken ct);
     Task<IReadOnlyList<WahaMessage>> GetChatMessagesAsync(string sessionId, string chatId, int limit, CancellationToken ct);
