@@ -338,7 +338,7 @@ public static class CampaignsEndpoints
             ISystemStateRepository state, IClock clock, IUnitOfWork uow, CancellationToken ct) =>
         {
             var s = await state.GetAsync(ct);
-            s.RestartWarmup(DateOnly.FromDateTime(clock.UtcNow.UtcDateTime));
+            s.RestartWarmup(IClock.ToBrasiliaDate(clock.UtcNow));
             await state.UpdateAsync(s, ct);
             await uow.SaveChangesAsync(ct);
             return Results.Ok(new { startedOn = s.WarmupStartedOn });
@@ -367,7 +367,7 @@ public static class CampaignsEndpoints
             ReleaseWarmupRequest req,
             ISystemStateRepository state, IClock clock, IUnitOfWork uow, CancellationToken ct) =>
         {
-            var today = DateOnly.FromDateTime(clock.UtcNow.UtcDateTime);
+            var today = IClock.ToBrasiliaDate(clock.UtcNow);
             var s = await state.GetAsync(ct);
             if (req.All)
             {
@@ -474,7 +474,7 @@ public static class CampaignsEndpoints
     {
         var phone = await waha.GetOwnPhoneE164Async(sessionId, ct);
         var s = await state.GetAsync(ct);
-        var changed = s.ReconcileWarmupPhone(phone, DateOnly.FromDateTime(clock.UtcNow.UtcDateTime));
+        var changed = s.ReconcileWarmupPhone(phone, IClock.ToBrasiliaDate(clock.UtcNow));
         // Persiste sempre: o primeiro registro do número também muta (e retorna false).
         // Sem mudança real, o SaveChanges é no-op (não emite SQL).
         await state.UpdateAsync(s, ct);

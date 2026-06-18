@@ -63,7 +63,7 @@ UI com 4 abas (após o WhatsApp conectar): **Chat · Grupos · Contatos · Dispa
 
 ## Anti-ban (motor de envio)
 
-Pote de templates (cada contato sorteia um) · Spintax `{a|b}` + placeholders · rodapé de opt-out na 1ª msg · delay 60–180s + typing simulado · **warm-up** por curva (`[10,15,25,40,50]`, teto **50/dia**, avança por dias de uso) · circuit breaker · pausa manual · guarda de sessão WAHA. **Auto-start** (`Waha:AutoStart`) religa sessão `Stopped` sem QR pro disparo rodar desassistido.
+Pote de templates (cada contato sorteia um) · Spintax `{a|b}` + placeholders · rodapé de opt-out na 1ª msg · delay 60–180s + typing simulado · **warm-up** por curva (`[10,15,25,40,50,65,80,100]`, teto **100/dia**, avança por dias de uso) · circuit breaker · pausa manual · guarda de sessão WAHA. **Auto-start** (`Waha:AutoStart`) religa sessão `Stopped` sem QR pro disparo rodar desassistido.
 
 ## Configuração
 
@@ -72,7 +72,7 @@ Principais em `src/MtrxSys.Dispatcher/appsettings.json` (a curva que manda é a 
 ```json
 "Dispatch": { "DelayMinSeconds": 60, "DelayMaxSeconds": 180, "PauseWhenSessionDown": true },
 "CircuitBreaker": { "FailureThreshold": 3, "OpenDurationMinutes": 120 },
-"Warmup": { "Curve": [10, 15, 25, 40, 50] }, "Waha": { "AutoStart": true }
+"Warmup": { "Curve": [10, 15, 25, 40, 50, 65, 80, 100] }, "Waha": { "AutoStart": true }
 ```
 
 Env vars: ver `.env.example`. No multi-ambiente cada stack N usa sufixo (`PG{N}_PASS`, `WAHA{N}_API_KEY`, `JWT{N}_SIGNING_KEY`, `SEED{N}_ADMIN_*`).

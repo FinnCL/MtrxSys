@@ -13,7 +13,7 @@ public sealed class WarmupManager(
 {
     // Curva-padrão conservadora, usada se o appsettings não trouxer uma. Nunca "ilimitado":
     // um teto ausente anularia o aquecimento (o ponto todo é segurar o volume cedo).
-    private static readonly int[] DefaultCurve = [10, 15, 25, 40, 50];
+    private static readonly int[] DefaultCurve = [10, 15, 25, 40, 50, 65, 80, 100];
 
     public async Task<bool> CanSendAsync(CancellationToken ct)
     {
@@ -53,7 +53,7 @@ public sealed class WarmupManager(
     private async Task<int> DayIndexAsync(DateOnly today, CancellationToken ct)
         => await counts.CountActiveDaysBeforeAsync(today, ct);
 
-    private DateOnly Today() => DateOnly.FromDateTime(clock.UtcNow.UtcDateTime);
+    private DateOnly Today() => IClock.ToBrasiliaDate(clock.UtcNow);
 }
 
 // Estado do aquecimento num instante. DayIndex é base-0 (dia 0 = primeiro dia).

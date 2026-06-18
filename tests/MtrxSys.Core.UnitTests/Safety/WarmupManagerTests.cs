@@ -26,7 +26,9 @@ public sealed class WarmupManagerTests
     }
 
     private void SetToday(DateOnly today) =>
-        _clock.UtcNow.Returns(new DateTimeOffset(today.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero));
+        // Meio-dia UTC: a data de Brasília (UTC-3) coincide com a data UTC, então os asserts valem
+        // sem ambiguidade na fronteira do dia (à meia-noite UTC as duas datas divergiriam).
+        _clock.UtcNow.Returns(new DateTimeOffset(today.ToDateTime(new TimeOnly(12, 0)), TimeSpan.Zero));
 
     private async Task<int> TodayLimit(WarmupManager svc) =>
         (await svc.GetSnapshotAsync(CancellationToken.None)).TodayLimit;
