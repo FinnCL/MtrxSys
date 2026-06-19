@@ -61,27 +61,53 @@ O WhatsApp **NÃO bane IP. Ele bane o CHIP (o número).** O IP é só o "fio" qu
    # ... até WAHA_PROXY_10
    ```
 
-2. Recrie o WAHA do ambiente correspondente:
+2. Recrie a **`api`** do ambiente correspondente (é ela que aplica o proxy na sessão):
 
    ```powershell
-   docker compose -f docker-compose.yml   up -d --force-recreate waha   # ambiente 1
-   docker compose -f docker-compose-2.yml up -d --force-recreate waha   # ambiente 2
+   docker compose -f docker-compose.yml   up -d --force-recreate api   # ambiente 1
+   docker compose -f docker-compose-2.yml up -d --force-recreate api   # ambiente 2
    # ...
    ```
 
-3. O chip passa a sair pelo IP do proxy. Deixar a variável vazia volta ao normal (sem proxy).
+3. No startup, a `api` injeta o proxy no **config da sessão** do WAHA e **religa a sessão** (reusa
+   a auth salva — SEM QR), pra o chip reconectar pelo IP do proxy. Variável vazia = sem proxy.
 
 ### Como funciona por baixo
-Cada `docker-compose-N.yml` tem, no serviço `waha`:
+> ⚠️ **NÃO use a env var `WHATSAPP_PROXY_SERVER` do WAHA.** Comprovado empiricamente: o WAHA
+> 2026.x (tier **CORE**, engine **NOWEB**) a **IGNORA silenciosamente** — a sessão conecta direto
+> pelo IP da máquina, sem erro e sem aviso. O proxy SÓ pega via **config da sessão** (API).
+
+As mesmas vars `WAHA_PROXY_N(_USER/_PASS)` do `.env` agora alimentam o serviço **`api`**:
 
 ```yaml
-WHATSAPP_PROXY_SERVER: ${WAHA_PROXY_N:-}
-WHATSAPP_PROXY_SERVER_USERNAME: ${WAHA_PROXY_N_USER:-}
-WHATSAPP_PROXY_SERVER_PASSWORD: ${WAHA_PROXY_N_PASS:-}
+# serviço api de cada docker-compose-N.yml
+Waha__ProxyServer:   ${WAHA_PROXY_N:-}
+Waha__ProxyUsername: ${WAHA_PROXY_N_USER:-}
+Waha__ProxyPassword: ${WAHA_PROXY_N_PASS:-}
 ```
 
-Vazio (`:-`) = sem proxy. O WAHA trata `WHATSAPP_PROXY_SERVER=""` como "sem proxy" (verificado:
-o container sobe normal, em `SCAN_QR_CODE`, sem erro).
+O `WahaClient` (na `api`) injeta isso no `config.proxy` da sessão — tanto ao **criar** a sessão
+quanto no **ensurer de startup** (`WahaWebhookEnsurer`), que grava `config.proxy` + webhook juntos
+e religa a sessão se o proxy mudou. Vazio (`:-`) = sem proxy (sai pelo IP da máquina).
+
+## Verificação (antes e depois de recriar)
+
+Dois scripts ajudam a não cair nos dois erros silenciosos do proxy:
+
+```powershell
+# ANTES de recriar — recusa subir se algum chip estiver meio-preenchido
+# (server sem credencial, ou credencial sem server), que quebra o chip em silêncio.
+./scripts/check-proxy-env.ps1
+
+# DEPOIS de recriar — confirma que o proxy entrou no container e mostra os logs
+# de conexão. Opcional: -Chips 1,2 pra olhar só alguns.
+./scripts/check-proxy-live.ps1
+```
+
+⚠️ **Não dá pra provar o IP de saída com `curl` de dentro do container.** O `WHATSAPP_PROXY_SERVER`
+roteia **só o socket do WhatsApp** (interno ao engine do WAHA), não o tráfego geral do container —
+um `curl` sairia pelo IP da máquina de qualquer jeito e daria um falso "está vazando". A **prova
+definitiva** do IP é o **painel da Decodo**: o tráfego aparece no IP alugado quando o chip conecta.
 
 ## Ressalvas honestas
 
@@ -93,12 +119,13 @@ o container sobe normal, em `SCAN_QR_CODE`, sem erro).
   simulado, aquecimento e opt-out. Já implementados; mantenha ligados.
 - **Engine NOWEB respeita o proxy** na conexão principal (mensagens). Há um detalhe conhecido de
   que o download de mídia pode não passar pelo proxy — não afeta disparo de texto.
-- ⚠️ **TESTE O OPT-OUT AO LIGAR UM PROXY.** O webhook é entregue de `waha` → `http://api:8080/...`
-  (endereço INTERNO do Docker). Se o WAHA rotear o webhook pelo proxy externo, ele não alcança o
-  host interno `api` → o "SAIR" para de chegar **silenciosamente** (risco de ban). Após ativar um
-  proxy, mande um "SAIR" de teste e confirme que o contato fica "Saiu". Se NÃO chegar, configure
-  um bypass de proxy pro host interno (ex.: variável `NO_PROXY=api` no serviço `waha`) ou ajuste a
-  entrega do webhook pra não passar pelo proxy.
+- ✅ **Bypass do webhook já vem configurado.** Cada serviço `waha` dos composes traz
+  `NO_PROXY=api,localhost,127.0.0.1` (e `no_proxy` minúsculo), pra o webhook `waha` →
+  `http://api:8080/...` (host INTERNO do Docker) **não** sair pelo proxy externo. Sem isso, o
+  "SAIR" pararia de chegar em silêncio (risco de ban). Não precisa configurar nada à mão.
+- ⚠️ **Ainda assim, TESTE O OPT-OUT ao ligar um proxy.** Mande um "SAIR" de teste e confirme que o
+  contato fica "Saiu". Se NÃO chegar, verifique se o `NO_PROXY` continua no serviço `waha` daquele
+  ambiente e se o host do webhook (`api`) está coberto por ele.
 
 ## Referências
 - WAHA — Proxy: https://waha.devlike.pro/docs/how-to/proxy/

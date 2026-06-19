@@ -19,6 +19,14 @@ public sealed class WahaOptions
 
     public string[] WebhookEvents { get; set; } = ["message", "message.any"];
 
+    // Proxy por chip (anti-correlação de IP). Aplicado no CONFIG DA SESSÃO via API do WAHA —
+    // NÃO na env var WHATSAPP_PROXY_SERVER, que o WAHA 2026.x (CORE/NOWEB) IGNORA silenciosamente
+    // (comprovado: a sessão conecta direto pelo IP da máquina). Vazio = sem proxy (sai pela máquina).
+    // Formato do server: host:porta (sem http://). Ver docs/proxy.md.
+    public string? ProxyServer { get; set; }
+    public string? ProxyUsername { get; set; }
+    public string? ProxyPassword { get; set; }
+
     // Religa a sessão automaticamente quando estiver parada (Stopped), reusando a auth salva
     // (sem QR). Pensado pro disparo desassistido: se a sessão cai (restart do WAHA/stack), o chip
     // pareado volta a Working sozinho em ~1 ciclo do auto-sync, em vez de esperar clique manual.

@@ -163,7 +163,13 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
     private async Task CreateSessionAsync(string sessionId, CancellationToken ct)
     {
         using var req = NewRequest(HttpMethod.Post, "api/sessions");
-        req.Content = JsonContent.Create(new { name = sessionId, start = true }, options: Json);
+        // Proxy JÁ na criação: o WAHA conecta no WhatsApp logo no start; sem o proxy aqui, a 1ª
+        // conexão sairia pelo IP da máquina (vazamento) antes de o ensurer aplicar o config depois.
+        var proxy = ProxyConfigOrNull();
+        object payload = proxy is null
+            ? new { name = sessionId, start = true }
+            : new { name = sessionId, start = true, config = new { proxy } };
+        req.Content = JsonContent.Create(payload, options: Json);
         using var resp = await http.SendAsync(req, ct);
         // 422/409 = corrida: a sessão já foi criada nesse meio-tempo. Considera concluído.
         if (resp.StatusCode is HttpStatusCode.UnprocessableEntity or HttpStatusCode.Conflict)
@@ -624,6 +630,51 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
         using var doc = await JsonDocument.ParseAsync(jsonStream, cancellationToken: ct);
         var root = doc.RootElement;
 
+        var webhookPresent = WebhookPresent(root, webhookUrl);
+        // O proxy só vale na (re)conexão e SÓ pega via config de sessão (a env var WHATSAPP_PROXY_SERVER
+        // é ignorada no WAHA 2026.x CORE/NOWEB — comprovado). Compara o que está gravado com o desejado.
+        var desiredProxy = NormalizedProxyServer();
+        var currentProxy = CurrentProxyServer(root);
+        var proxyMatches = string.Equals(desiredProxy, currentProxy, StringComparison.OrdinalIgnoreCase);
+
+        // Nada a fazer: webhook já no lugar e proxy já bate (inclusive ambos ausentes).
+        if (webhookPresent && proxyMatches)
+        {
+            return true;
+        }
+
+        // PUT substitui o config — então mandamos webhook E proxy juntos, pra um não apagar o outro.
+        var proxy = ProxyConfigOrNull();
+        object config = proxy is null
+            ? new { webhooks = BuildWebhooks(webhookUrl, events) }
+            : new { webhooks = BuildWebhooks(webhookUrl, events), proxy };
+
+        using var putReq = NewRequest(HttpMethod.Put, $"api/sessions/{Esc(sessionId)}");
+        putReq.Content = JsonContent.Create(new { name = sessionId, config }, options: Json);
+        using var putResp = await http.SendAsync(putReq, ct);
+        putResp.EnsureSuccessStatusCode();
+
+        // Proxy mudou: religa a sessão (reusa a auth salva — SEM QR) pra o chip reconectar pelo IP
+        // novo. Melhor-esforço: uma sessão sem auth/instável que recuse o restart não trava o startup.
+        if (!proxyMatches)
+        {
+            await TryRestartForProxyAsync(sessionId, ct);
+        }
+        return true;
+    }
+
+    private static object[] BuildWebhooks(string webhookUrl, IReadOnlyList<string> events) =>
+    [
+        new
+        {
+            url = webhookUrl,
+            events = events.ToArray(),
+            retries = new { delaySeconds = 2, attempts = 3 },
+        },
+    ];
+
+    private static bool WebhookPresent(JsonElement root, string webhookUrl)
+    {
         if (root.TryGetProperty("config", out var cfg) &&
             cfg.ValueKind == JsonValueKind.Object &&
             cfg.TryGetProperty("webhooks", out var hooks) &&
@@ -638,29 +689,72 @@ internal sealed class WahaClient(HttpClient http, IOptions<WahaOptions> opts) : 
                 }
             }
         }
+        return false;
+    }
 
-        var payload = new
+    // Lê config.proxy.server da sessão (null se não houver proxy configurado).
+    private static string? CurrentProxyServer(JsonElement root)
+    {
+        if (root.TryGetProperty("config", out var cfg) &&
+            cfg.ValueKind == JsonValueKind.Object &&
+            cfg.TryGetProperty("proxy", out var proxy) &&
+            proxy.ValueKind == JsonValueKind.Object &&
+            proxy.TryGetProperty("server", out var server) &&
+            server.ValueKind == JsonValueKind.String)
         {
-            name = sessionId,
-            config = new
-            {
-                webhooks = new[]
-                {
-                    new
-                    {
-                        url = webhookUrl,
-                        events = events.ToArray(),
-                        retries = new { delaySeconds = 2, attempts = 3 },
-                    },
-                },
-            },
-        };
+            return NormalizeServer(server.GetString());
+        }
+        return null;
+    }
 
-        using var putReq = NewRequest(HttpMethod.Put, $"api/sessions/{Esc(sessionId)}");
-        putReq.Content = JsonContent.Create(payload, options: Json);
-        using var putResp = await http.SendAsync(putReq, ct);
-        putResp.EnsureSuccessStatusCode();
-        return true;
+    // Objeto de proxy pro config de sessão do WAHA (null = sem proxy). Inclui credenciais só quando
+    // houver — proxy sem auth manda só o server.
+    private object? ProxyConfigOrNull()
+    {
+        var server = NormalizedProxyServer();
+        if (server is null)
+        {
+            return null;
+        }
+        var user = opts.Value.ProxyUsername;
+        var pass = opts.Value.ProxyPassword;
+        // Só manda credenciais se as DUAS existirem. Meia-credencial (só user ou só pass) cairia
+        // como "server sem auth" — que falha de forma VISÍVEL (chip não conecta) em vez de enviar
+        // um "password":null malformado. O scripts/check-proxy-env.ps1 já alerta o .env meio-preenchido.
+        if (!string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(pass))
+        {
+            return new { server, username = user, password = pass };
+        }
+        return new { server };
+    }
+
+    private string? NormalizedProxyServer() => NormalizeServer(opts.Value.ProxyServer);
+
+    // host:porta sem espaços e sem esquema (o WAHA quer "host:porta", não "http://host:porta").
+    private static string? NormalizeServer(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+        var s = raw.Trim();
+        var scheme = s.IndexOf("://", StringComparison.Ordinal);
+        if (scheme >= 0)
+        {
+            s = s[(scheme + 3)..];
+        }
+        return s.Length == 0 ? null : s;
+    }
+
+    // Religa a sessão pra o proxy novo valer. Tolerante: 404/422/409 (sessão inexistente/em estado
+    // que recusa restart) não derruba o startup — o proxy já está gravado no config e vale no próximo start.
+    private async Task TryRestartForProxyAsync(string sessionId, CancellationToken ct)
+    {
+        // Melhor-esforço: não chamamos EnsureSuccessStatusCode de propósito — qualquer status (incl.
+        // 404/422/409 de sessão inexistente/em estado que recusa restart) é tolerado; o proxy já está
+        // gravado no config e vale no próximo start. Só não engolimos o cancelamento.
+        using var req = NewRequest(HttpMethod.Post, $"api/sessions/{Esc(sessionId)}/restart");
+        using var resp = await http.SendAsync(req, ct);
     }
 
     private async Task PostPresenceAsync(string sessionId, string phoneOrChatId, string path, CancellationToken ct)

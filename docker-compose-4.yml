@@ -55,11 +55,9 @@ services:
       TZ: UTC
       # Engine NOWEB (sem Chromium) — ver docker-compose.yml. Reparear o chip após a troca.
       WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
-      # Proxy por chip (anti-correlacao de IP). Vazio = SEM proxy (comportamento atual).
-      # Ligar: defina WAHA_PROXY_4=ip:porta (e _USER/_PASS) num .env e recrie o waha.
-      WHATSAPP_PROXY_SERVER: ${WAHA_PROXY_4:-}
-      WHATSAPP_PROXY_SERVER_USERNAME: ${WAHA_PROXY_4_USER:-}
-      WHATSAPP_PROXY_SERVER_PASSWORD: ${WAHA_PROXY_4_PASS:-}
+      # NAO ha proxy aqui: o WAHA 2026.x (CORE/NOWEB) IGNORA a env var WHATSAPP_PROXY_SERVER
+      # (comprovado). O proxy por chip e aplicado no CONFIG DA SESSAO pela api (Waha__Proxy*).
+      # Ver docs/proxy.md.
       # Bypass do proxy pro host INTERNO (api): sem isto, ao ligar um proxy o webhook
       # (waha -> http://api:8080/...) pode ir pelo proxy externo e o "SAIR" para de chegar
       # em silencio (risco de ban). Ver docs/proxy.md.
@@ -95,6 +93,11 @@ services:
       Waha__BaseUrl: "http://waha:3000"
       Waha__ApiKey: ${WAHA4_API_KEY:-mtrxsys-dev-key-stack4}
       Waha__WebhookCallbackUrl: "http://api:8080/webhooks/waha"
+      # Proxy por chip (anti-correlacao de IP): aplicado no config da sessao via API do WAHA.
+      # Vazio = sem proxy (sai pelo IP da maquina). Formato host:porta (sem http://). docs/proxy.md.
+      Waha__ProxyServer: ${WAHA_PROXY_4:-}
+      Waha__ProxyUsername: ${WAHA_PROXY_4_USER:-}
+      Waha__ProxyPassword: ${WAHA_PROXY_4_PASS:-}
       Webhooks__WahaToken: ${WAHA4_HOOK_TOKEN:-}
       # Chave JWT distinta dos demais Stacks: tokens emitidos noutro stack não autenticam aqui
       Jwt__SigningKey: ${JWT4_SIGNING_KEY:-dev-only-signing-key-stack-4-change-me-32-chars-min}
