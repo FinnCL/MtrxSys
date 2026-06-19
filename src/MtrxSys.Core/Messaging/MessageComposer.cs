@@ -1,16 +1,20 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Messages;
+using MtrxSys.Core.Safety;
 
 namespace MtrxSys.Core.Messaging;
 
 public sealed partial class MessageComposer(
     SpintaxExpander spintax,
     IMessageTemplateRepository templates,
-    IOptions<DispatchOptions> dispatchOptions)
+    IOptions<DispatchOptions> dispatchOptions,
+    IOptions<OptOutOptions> optOutOptions,
+    OptOutLinkSigner optOutSigner)
 {
     [GeneratedRegex(@"\{\{\s*(?<key>[a-zA-Z][a-zA-Z0-9_]*)(\s*\|\s*(?<default>[^}]*))?\s*\}\}", RegexOptions.Compiled)]
     private static partial Regex PlaceholderRegex();
@@ -37,16 +41,44 @@ public sealed partial class MessageComposer(
     // se o texto ainda não menciona "sair" (não duplica quando o operador já escreveu no template).
     private string AppendOptOutIfFirstContact(string text, Contact contact)
     {
+        // Rodapé/link só na 1ª mensagem a cada contato (LastSentAt ainda null).
+        if (contact.LastSentAt is not null)
+        {
+            return text;
+        }
+        // Rodapé de texto ("responda SAIR"): só se configurado e o template ainda não menciona "sair".
         var footer = dispatchOptions.Value.OptOutFooter;
-        if (contact.LastSentAt is not null || string.IsNullOrWhiteSpace(footer))
+        var appendFooter = !string.IsNullOrWhiteSpace(footer) && !OptOutKeywordRegex().IsMatch(text);
+        // Link de 1 clique: só quando há URL pública (servidor). Em localhost (vazio) fica de fora.
+        var link = BuildOptOutLink(contact);
+
+        if (!appendFooter && link is null)
         {
             return text;
         }
-        if (OptOutKeywordRegex().IsMatch(text))
+        var sb = new StringBuilder(text);
+        if (appendFooter)
         {
-            return text;
+            sb.Append("\n\n").Append(footer);
         }
-        return text + "\n\n" + footer;
+        if (link is not null)
+        {
+            sb.Append("\n\n").Append(link);
+        }
+        return sb.ToString();
+    }
+
+    // "Para sair, toque aqui: {baseUrl}/sair?t={token}" com token assinado por contato (validade 90d).
+    // null quando OptOut:PublicBaseUrl está vazio (link desligado — estado localhost).
+    private string? BuildOptOutLink(Contact contact)
+    {
+        var baseUrl = optOutOptions.Value.PublicBaseUrl;
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return null;
+        }
+        var token = optOutSigner.Sign(contact.Id, DateTimeOffset.UtcNow.AddDays(90));
+        return $"Para sair, toque aqui: {baseUrl.TrimEnd('/')}/sair?t={token}";
     }
 
     private static string SubstitutePlaceholders(string text, Contact contact)

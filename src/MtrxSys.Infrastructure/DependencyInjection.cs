@@ -31,6 +31,7 @@ public static class DependencyInjection
         services.AddOptions<CollectorOptions>().Bind(config.GetSection(CollectorOptions.SectionName));
         services.AddOptions<CircuitBreakerOptions>().Bind(config.GetSection(CircuitBreakerOptions.SectionName));
         services.AddOptions<WarmupOptions>().Bind(config.GetSection(WarmupOptions.SectionName));
+        services.AddOptions<OptOutOptions>().Bind(config.GetSection(OptOutOptions.SectionName));
         services.AddOptions<WahaOptions>()
             .Bind(config.GetSection(WahaOptions.SectionName))
             .ValidateDataAnnotations()
@@ -91,9 +92,11 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();
+        services.AddSingleton<OptOutLinkSigner>();
 
         services.AddScoped<ImportGroupMembersUseCase>();
         services.AddScoped<AddManualContactsUseCase>();
+        services.AddScoped<MarkContactOptOutUseCase>();
         services.AddScoped<MtrxSys.Core.Application.UseCases.Groups.CollectGroupLinksUseCase>();
         services.AddScoped<MtrxSys.Core.Application.UseCases.Conversations.RelinkOrphanConversationsUseCase>();
         services.AddScoped<IWebhookIngestionService, WebhookIngestionService>();

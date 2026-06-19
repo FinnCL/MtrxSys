@@ -5,6 +5,7 @@ using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Messages;
 using MtrxSys.Core.Messaging;
+using MtrxSys.Core.Safety;
 using NSubstitute;
 
 namespace MtrxSys.Core.UnitTests.Messaging;
@@ -16,11 +17,14 @@ public sealed class MessageComposerTests
 
     // OptOutFooter vazio por padrão pros testes existentes (sem rodapé); os testes de opt-out
     // passam um rodapé explícito.
-    private MessageComposer Build(string optOutFooter = "")
+    private MessageComposer Build(string optOutFooter = "", string publicBaseUrl = "")
     {
         _rng.NextInt(Arg.Any<int>(), Arg.Any<int>()).Returns(0);
-        var opts = Options.Create(new DispatchOptions { OptOutFooter = optOutFooter });
-        return new MessageComposer(new SpintaxExpander(_rng), _templates, opts);
+        var dispatch = Options.Create(new DispatchOptions { OptOutFooter = optOutFooter });
+        var optOut = Options.Create(new OptOutOptions { PublicBaseUrl = publicBaseUrl });
+        var signer = new OptOutLinkSigner(
+            Options.Create(new JwtOptions { SigningKey = "test-signing-key-com-pelo-menos-32-caracteres" }));
+        return new MessageComposer(new SpintaxExpander(_rng), _templates, dispatch, optOut, signer);
     }
 
     private static Contact BuildContact(string? name = "Maria", string? group = "Grupo VIP", string? theme = "Promo")
@@ -113,5 +117,36 @@ public sealed class MessageComposerTests
         var c = BuildContact();
 
         Build("").Compose(t, c).Should().Be("Oi!");
+    }
+
+    [Fact]
+    public void Compose_appends_optout_link_when_public_base_url_set()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
+        var c = BuildContact(); // 1ª mensagem (LastSentAt == null)
+
+        var result = Build("Responda SAIR.", "https://m.test").Compose(t, c);
+
+        result.Should().StartWith("Oi!");
+        result.Should().Contain("https://m.test/sair?t=");
+    }
+
+    [Fact]
+    public void Compose_no_link_when_public_base_url_empty()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
+        var c = BuildContact();
+
+        Build("Responda SAIR.", "").Compose(t, c).Should().NotContain("/sair?t=");
+    }
+
+    [Fact]
+    public void Compose_no_link_on_resend_even_with_base_url()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
+        var c = BuildContact();
+        c.RegisterSend(DateTimeOffset.UtcNow); // não é 1ª mensagem
+
+        Build("Responda SAIR.", "https://m.test").Compose(t, c).Should().NotContain("/sair?t=");
     }
 }

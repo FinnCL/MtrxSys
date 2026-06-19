@@ -142,5 +142,6 @@ app.MapWahaEndpoints();
 app.MapGroupsEndpoints();
 app.MapCollectorEndpoints();
 app.MapCampaignsEndpoints();
+app.MapOptOutPublicEndpoints();
 
 await app.RunAsync();

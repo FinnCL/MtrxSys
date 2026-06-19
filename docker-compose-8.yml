@@ -60,6 +60,11 @@ services:
       WHATSAPP_PROXY_SERVER: ${WAHA_PROXY_8:-}
       WHATSAPP_PROXY_SERVER_USERNAME: ${WAHA_PROXY_8_USER:-}
       WHATSAPP_PROXY_SERVER_PASSWORD: ${WAHA_PROXY_8_PASS:-}
+      # Bypass do proxy pro host INTERNO (api): sem isto, ao ligar um proxy o webhook
+      # (waha -> http://api:8080/...) pode ir pelo proxy externo e o "SAIR" para de chegar
+      # em silencio (risco de ban). Ver docs/proxy.md.
+      NO_PROXY: "api,localhost,127.0.0.1"
+      no_proxy: "api,localhost,127.0.0.1"
       WAHA_DASHBOARD_ENABLED: "true"
       WAHA_DASHBOARD_USERNAME: ${WAHA8_DASH_USER:-admin}
       WAHA_DASHBOARD_PASSWORD: ${WAHA8_DASH_PASS:-admin}
@@ -116,6 +121,9 @@ services:
     environment:
       TZ: UTC
       DOTNET_ENVIRONMENT: Production
+      # URL pública por onde o destinatário alcança ESTA API (link de "sair" de 1 clique no rodapé).
+      # Vazio = link desligado (só "responda SAIR"). Defina OPTOUT_PUBLIC_URL_8 no .env no servidor.
+      OptOut__PublicBaseUrl: ${OPTOUT_PUBLIC_URL_8:-}
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG8_PASS:-mtrx}"
       Waha__BaseUrl: "http://waha:3000"
       Waha__ApiKey: ${WAHA8_API_KEY:-mtrxsys-dev-key-stack8}
