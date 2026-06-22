@@ -26,6 +26,8 @@ builder.Services.AddOptions<MtrxSys.Api.Options.WebhookOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Api.Options.WebhookOptions.SectionName));
 builder.Services.AddOptions<MtrxSys.Core.Application.Options.SyncOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Core.Application.Options.SyncOptions.SectionName));
+builder.Services.AddOptions<MtrxSys.Api.Options.PresenceOptions>()
+    .Bind(builder.Configuration.GetSection(MtrxSys.Api.Options.PresenceOptions.SectionName));
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WhatsAppAutoSyncService>();
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.CollectorWorker>();
 // Origens permitidas: por padrão libera as portas web usadas no setup localhost — a landing
@@ -40,6 +42,11 @@ var corsOrigins = builder.Configuration.GetSection("Web:Origins").Get<string[]>(
     };
 builder.Services.AddCors(opts => opts.AddDefaultPolicy(p =>
     p.AllowAnyHeader().AllowAnyMethod().WithOrigins(corsOrigins)));
+// Exceção não tratada → ProblemDetails (JSON) em vez de 500 cru. Importa pro CORS: numa resposta de
+// erro sem o middleware de exceção, o header Access-Control-Allow-Origin some e o browser reporta um
+// falso "erro de CORS" mascarando o crash real. Com o handler (rodando DEPOIS do UseCors) a resposta
+// volta pelo CORS e mantém o header.
+builder.Services.AddProblemDetails();
 
 var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
 var jwtOptions = jwtSection.Get<JwtOptions>() ?? new JwtOptions();
@@ -125,6 +132,7 @@ await using (var scope = app.Services.CreateAsyncScope())
 }
 
 app.UseCors();
+app.UseExceptionHandler();
 app.UseOpenApi();
 app.UseSwaggerUi();
 
@@ -143,5 +151,6 @@ app.MapGroupsEndpoints();
 app.MapCollectorEndpoints();
 app.MapCampaignsEndpoints();
 app.MapOptOutPublicEndpoints();
+app.MapPhoneEndpoints();
 
 await app.RunAsync();

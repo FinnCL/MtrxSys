@@ -1,0 +1,17 @@
+# Override de DEV/teste — Ambiente B com WhatsApp EMULADO (sem celular real).
+# Troca SÓ o serviço `waha` pelo emulador (mesma porta interna 3000), sem mexer no app.
+# Use com o base:
+#   docker compose -f docker-compose-2.yml -f docker-compose-2.emulator.yml up -d --build
+#
+# Painel do chip B: http://localhost:3001
+services:
+  waha:
+    image: mtrxsys-waha-emulator:latest
+    build:
+      context: .
+      dockerfile: src/MtrxSys.WahaEmulator/Dockerfile
+    environment:
+      Emulator__AutoConnect: ${EMULATOR_AUTOCONNECT:-true}
+      Emulator__MePhone: ${EMULATOR_ME_PHONE_2:-5511999990001}
+      Emulator__MePushName: ${EMULATOR_ME_NAME_2:-Chip Emulado B}
+      Webhooks__WahaToken: ${WAHA2_HOOK_TOKEN:-}

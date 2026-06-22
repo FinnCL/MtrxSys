@@ -129,6 +129,76 @@ input[type="checkbox"], input[type="radio"] {
 .password-toggle:hover { color: var(--fg); background: transparent; }
 
 .app-shell { display: flex; flex-direction: column; height: 100%; }
+/* Aba "Celular": um MODELO DE CELULAR centralizado, com a tela embutida (iframe) na própria página. */
+.live-phone { flex: 1; min-height: 0; background: var(--bg); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px; padding: 16px; overflow: auto; }
+.phone-device { position: relative; width: 390px; max-width: 95vw; height: min(80vh, 820px);
+  background: #0d0d0d; border-radius: 44px; padding: 12px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.55), inset 0 0 0 2px #2c2c2c; flex: 0 0 auto; }
+/* Desconectado: a conexão (QR) vai DENTRO da tela do aparelho (imersivo). A tela rola internamente,
+   e o painel de conexão fica sem borda própria — ele É a tela do "celular". */
+.phone-connect-screen { overflow-y: auto; justify-content: flex-start; padding: 18px 12px; }
+.phone-connect-screen .wa-connect { width: 100%; background: transparent; border: 0; padding: 0; }
+.phone-notch { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  width: 130px; height: 22px; background: #0d0d0d; border-radius: 0 0 16px 16px; z-index: 2; }
+.phone-stage { width: 100%; height: 100%; border: 0; border-radius: 32px; display: block; background: #fff; }
+.phone-off { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center; padding: 24px; background: #111b21; color: var(--fg); }
+.phone-off-title { font-size: 16px; font-weight: 600; margin: 0; }
+.phone-off-hint { font-size: 12px; color: var(--muted); margin: 0 8px; line-height: 1.5; }
+.phone-activate { margin-top: 8px; background: var(--accent, #00a884); color: #fff; border: 0;
+  border-radius: 10px; padding: 11px 20px; font-size: 14px; font-weight: 700; cursor: pointer; }
+.phone-activate:hover { filter: brightness(1.1); }
+.phone-reload { background: transparent; color: var(--muted); border: 1px solid var(--border, #2a3942);
+  border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+.phone-reload:hover:not(:disabled) { color: var(--fg); }
+.phone-reload:disabled { opacity: .5; cursor: default; }
+.phone-activate:disabled { opacity: .5; cursor: default; }
+.phone-footer { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.phone-steps { width: min(390px, 95vw); display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.phone-proxy-input { background: #0b141a; color: var(--fg); border: 1px solid var(--border, #2a3942);
+  border-radius: 8px; padding: 6px 10px; font-size: 12px; min-width: 150px; }
+.phone-ident-name { margin: 4px 0 0; font-size: 15px; font-weight: 600; color: var(--fg); }
+.phone-ident-phone { margin: 2px 0 6px; font-size: 13px; color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.phone-badge { font-size: 11px; padding: 2px 10px; border-radius: 999px; }
+.phone-badge.ok { background: rgba(37,211,102,.15); color: #25d366; }
+.phone-badge.off { background: rgba(150,150,150,.15); color: var(--muted); }
+.phone-explain { max-width: 390px; text-align: center; }
+.phone-server { width: min(390px, 95vw); display: flex; flex-direction: column; gap: 8px;
+  align-items: center; border-top: 1px solid var(--border, #2a3942); padding-top: 12px; margin-top: 4px; }
+/* Checklist do botão "Provisionar número" — os 5 passos ao vivo (boot→instalar→proxy→SMS→WAHA). */
+.prov-steps { width: min(390px, 95vw); display: flex; flex-direction: column; gap: 4px;
+  background: #0b141a; border: 1px solid var(--border, #2a3942); border-radius: 10px; padding: 10px; }
+.prov-step { display: flex; gap: 8px; align-items: flex-start; padding: 4px 2px; }
+.prov-dot { width: 18px; text-align: center; font-weight: 700; flex-shrink: 0; line-height: 1.5; }
+.prov-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.prov-label { font-size: 13px; color: var(--fg); }
+.prov-detail { font-size: 11px; color: var(--muted); word-break: break-word; }
+.prov-idle .prov-dot, .prov-idle .prov-label { color: var(--muted); }
+.prov-running .prov-dot { color: #f0b429; }
+.prov-done .prov-dot { color: #25d366; }
+.prov-error .prov-dot { color: var(--danger, #f15c6d); }
+.prov-error .prov-detail { color: var(--danger, #f15c6d); }
+.prov-wait .prov-dot { color: #34b7f1; }
+.prov-cta { align-self: flex-start; margin-top: 2px; }
+.prov-link-qr { width: 150px; height: 150px; border-radius: 8px; background: #fff; padding: 6px; margin-top: 2px; }
+
+.phone-logs { width: min(390px, 95vw); background: #0b141a; border: 1px solid var(--border, #2a3942);
+  border-radius: 10px; overflow: hidden; }
+.phone-logs-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border, #2a3942); }
+.phone-logs pre { margin: 0; padding: 10px; max-height: 220px; overflow: auto; font-size: 11px;
+  line-height: 1.4; color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+
+/* Painel de conexão do WhatsApp embutido na aba "Celular" (QR + código de pareamento). */
+.wa-connect {
+  width: min(390px, 95vw); display: flex; flex-direction: column; gap: 10px; align-items: center;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+  text-align: center;
+}
+.wa-connect .qr-frame { width: 100%; }
+.wa-connect .pairing-alt { width: 100%; }
 .topbar {
   display: flex;
   align-items: center;
@@ -659,8 +729,12 @@ input[type="checkbox"], input[type="radio"] {
 .muted.small.warn { color: var(--danger); }
 
 /* ============================================================
-   Responsividade — breakpoints do menor ao maior
-   Base (>1024px): layout completo de 3 colunas no chat.
+   Responsividade — sistema de breakpoints (do maior ao menor)
+   Base ≥1025  desktop : chat em 3 colunas (lista · conversa · CRM)
+   ≤1024  laptop       : colunas laterais mais estreitas
+   ≤768   tablet       : chat em 2 colunas (esconde o CRM), topbar quebra, tabelas rolam
+   ≤640   celular      : chat/grupos/disparo empilham, ações em largura total, toque maior
+   ≤400   celular peq. : paddings menores, esconde o e-mail
    ============================================================ */
 
 /* --- ≤1024px: encolhe as colunas laterais do chat --- */
@@ -668,11 +742,13 @@ input[type="checkbox"], input[type="radio"] {
   .three-col { grid-template-columns: 240px 1fr 280px; }
 }
 
-/* --- ≤768px (tablet/mobile): topbar quebra, chat vira 2 colunas, paddings menores --- */
+/* --- ≤768px (tablet): topbar quebra, chat vira 2 colunas, tabelas rolam --- */
 @media (max-width: 768px) {
   .topbar { flex-wrap: wrap; gap: 8px 12px; padding: 8px 12px; }
-  .tabs { order: 10; width: 100%; margin-left: 0; gap: 4px; }
-  .tabs .tab-btn { flex: 1; text-align: center; }
+  /* SÓ as abas de navegação da topbar quebram pra linha cheia — escopar evita atingir o
+     `.conv-tabs` (que também usa a classe .tabs) e jogá-lo pro rodapé do sidebar. */
+  .topbar .tabs { order: 10; width: 100%; margin-left: 0; gap: 4px; }
+  .topbar .tabs .tab-btn { flex: 1; text-align: center; }
 
   /* chat: esconde o painel do contato (CRM) e mantém lista + conversa */
   .three-col { grid-template-columns: 220px 1fr; }
@@ -686,11 +762,9 @@ input[type="checkbox"], input[type="radio"] {
   .msg { max-width: 85%; }
 }
 
-/* --- ≤480px (celular): tudo em coluna única --- */
-@media (max-width: 480px) {
-  .topbar { gap: 6px 8px; }
+/* --- ≤640px (celular): empilha o que era multi-coluna + alvos de toque maiores --- */
+@media (max-width: 640px) {
   .topbar .who .muted { display: none; }   /* esconde o e-mail, mantém o nome */
-  .topbar .sync-btn { padding: 4px 8px; }
 
   /* chat empilhado: conversas em cima (altura limitada), conversa aberta embaixo */
   .three-col { display: flex; flex-direction: column; }
@@ -701,12 +775,9 @@ input[type="checkbox"], input[type="radio"] {
   }
   .three-col .chat-thread, .three-col .empty-pane { flex: 1; min-height: 0; }
 
-  .groups-screen, .campaigns-screen, .contacts-screen { padding: 12px; }
-
   /* grupos: linha empilha o botão embaixo */
   .group-row { flex-direction: column; align-items: stretch; gap: 8px; }
   .import-btn { width: 100%; }
-  /* No mobile, as ações empilham e cada botão ocupa a largura total da linha. */
   .group-actions { width: 100%; }
   .group-actions .import-btn, .group-actions .leave-btn { flex: 1; }
 
@@ -715,6 +786,16 @@ input[type="checkbox"], input[type="radio"] {
   .audience-row label { min-width: 0; }
   .dispatch-btn { width: 100%; }
 
+  /* alvos de toque mais confortáveis no celular (abas e ações principais) */
+  .tab-btn { min-height: 40px; padding: 9px 12px; }
+  .dispatch-btn, .import-btn, .leave-btn, .phone-activate, .cap-all-btn { min-height: 44px; }
+}
+
+/* --- ≤400px (celular pequeno): aperta paddings, encolhe o sync --- */
+@media (max-width: 400px) {
+  .topbar { gap: 6px 8px; }
+  .topbar .sync-btn { padding: 4px 8px; }
+  .groups-screen, .campaigns-screen, .contacts-screen { padding: 12px; }
   .login-card, .onboarding-card { padding: 22px; }
 }
 

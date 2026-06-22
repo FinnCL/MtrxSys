@@ -32,13 +32,35 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Builda a imagem do emulador (maquete de celular) e sai (/bin/true). Existe só pra o
+  # `docker compose up --build` produzir a imagem que o `waha` usa por padrão — sem comando
+  # separado. Taggeia SEMPRE mtrxsys-waha-emulator:latest (nunca o WAHA real), então é seguro
+  # inclusive ao voltar pro real via WAHA_IMAGE.
+  waha-emulator-build:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.WahaEmulator/Dockerfile
+    image: mtrxsys-waha-emulator:latest
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
   waha:
-    image: devlikeapro/waha:latest
+    # Em fase de testes, A usa o WhatsApp EMULADO por padrão (maquete de celular na aba "Celular"
+    # do dashboard, sem comando extra). Pra voltar ao WhatsApp REAL:
+    #   WAHA_IMAGE=devlikeapro/waha:latest docker compose up -d
+    image: ${WAHA_IMAGE:-mtrxsys-waha-emulator:latest}
     container_name: mtrx-waha
     ports:
       - "3000:3000"
     environment:
       TZ: UTC
+      # Lidas SÓ quando WAHA_IMAGE = emulador (o WAHA real ignora env desconhecida). AutoConnect
+      # liga sem QR; MePhone/MeName = identidade do chip fake. Webhooks__WahaToken espelha o token
+      # do app (se houver) pra a resposta "SAIR" do painel passar na validação do webhook.
+      Emulator__AutoConnect: ${EMULATOR_AUTOCONNECT:-true}
+      Emulator__MePhone: ${EMULATOR_ME_PHONE:-5511999990000}
+      Emulator__MePushName: ${EMULATOR_ME_NAME:-Chip Emulado A}
+      Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}
       # Engine NOWEB (sem Chromium): conexão direta por WebSocket, ~5-10x menos RAM que o WEBJS.
       # Permite rodar muitos ambientes na mesma máquina sem o engine cair ("browser disconnected").
       # Trocar de engine exige reparear o chip (a sessão antiga WEBJS não serve pro NOWEB).
@@ -64,6 +86,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      waha-emulator-build:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   api:
@@ -92,6 +116,23 @@ services:
       # Serper (índice do Google, faixa grátis ~2.500 buscas). Preenchido = usa Serper no lugar do
       # SearXNG. Defina SERPER_API_KEY no .env/ambiente e rebuilde o api. Vazio = mantém SearXNG.
       Collector__SerperApiKey: ${SERPER_API_KEY:-}
+      # Aparelho virtual (aba "Celular"): a API provisiona/liga/instala o Android em container e
+      # embute o noVNC. ViewUrl = noVNC na aba quando no ar; WhatsAppApkUrl = APK pro botão "Instalar
+      # WhatsApp" (você fornece). Exige host com /dev/kvm. Ver docs/phone.md.
+      Phone__ContainerName: ${PHONE_CONTAINER_1:-mtrx-android}
+      Phone__ViewUrl: ${PHONE_VIEW_URL_1:-}
+      # Porta HOST do noVNC ao provisionar pela aba. PRECISA ser única por ambiente (1 host, 10 stacks)
+      # e bater com a porta do PHONE_VIEW_URL_N — senão o `docker run -p` do botão "Provisionar número"
+      # colide na mesma 6080 e só o 1º ambiente sobe. Stack A=6080, B=6081, … (ver docs/scaling.md).
+      Phone__NoVncPort: ${PHONE_NOVNC_PORT_1:-6080}
+      Phone__WhatsAppApkUrl: ${PHONE_WA_APK_URL_1:-}
+      # Endurecimento opcional: mascara o número no /api/presence/chip anônimo (deploy exposto além
+      # da rede do operador). Default off — a landing precisa do número cheio pra detectar duplicata.
+      Presence__MaskChipPhone: ${MASK_CHIP_PHONE_1:-false}
+    volumes:
+      # Socket do Docker: deixa a API ligar/parar/logar o container do emulador (deploy Linux).
+      # Sem o socket acessível, a aba "Celular" mostra "indisponível" (fail-safe).
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -138,12 +179,68 @@ services:
         VITE_API_URL: "http://localhost:5080"
         # Identifica a aba do navegador como "MtrxSys A" pra distinguir do Stack 2.
         VITE_APP_LABEL: "A"
+        # Aba "Celular": tela embutível opcional. VAZIO (padrão) = aba mostra só a identidade WAHA
+        # (o aparelho virtual real). Maquete fake: PHONE_VIEW_URL_1=http://localhost:3000. Android
+        # local (Windows, instável): PHONE_VIEW_URL_1=http://localhost:8000 + PHONE_VIEWER_KIND_1=scrcpy.
+        # Host com KVM (noVNC do docker-android): PHONE_VIEW_URL_1=http://localhost:6080.
+        VITE_EMULATOR_URL: ${PHONE_VIEW_URL_1:-}
+        # "scrcpy" = a tela embutida é o ws-scrcpy (monta o stream direto, pula a lista de devices).
+        VITE_EMULATOR_KIND: ${PHONE_VIEWER_KIND_1:-}
+        # "1" mostra a seção "Android em container (KVM)" na aba Celular — só no servidor Linux. No
+        # localhost fica oculta (não há como provisionar Android aqui).
+        VITE_PHONE_SERVER: ${PHONE_SERVER_OPTION_1:-}
+        # Device adb a espelhar (LDPlayer: emulator-5554 / 5556…). Vazio = emulator-5554.
+        VITE_EMULATOR_UDID: ${PHONE_UDID_1:-}
     container_name: mtrx-web
     ports:
       - "5173:80"
     depends_on:
       api:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Aparelho virtual — Android REAL em container (emulador + WhatsApp + noVNC), TUDO no container.
+  # A aba "Celular" provisiona/liga/instala isto sozinha (a API fala com o docker.sock) — este serviço
+  # é só a forma declarativa/pré-criada (opcional). Atrás do profile "phone" (NÃO sobe no `up` normal)
+  # e EXIGE /dev/kvm no host: só roda num Linux com KVM (bare-metal ou VPS com virtualização aninhada),
+  # NÃO no Docker Desktop do Windows. Fluxo na aba (ver docs/phone.md):
+  #   Provisionar → Ligar → Mostrar tela → Instalar WhatsApp → registrar por SMS (vira PRINCIPAL) →
+  #   vincular o WAHA por QR (companion, pro disparo).
+  #   1) PHONE_VIEW_URL_1=http://localhost:6080  (faz a aba apontar pro noVNC no build do web)
+  #   2) (opcional) PHONE_WA_APK_URL_1=<url do APK do WhatsApp> habilita o botão "Instalar WhatsApp"
+  android:
+    image: budtmo/docker-android:emulator_14.0
+    container_name: mtrx-android
+    profiles: ["phone"]
+    devices:
+      - /dev/kvm
+    environment:
+      EMULATOR_DEVICE: "Samsung Galaxy S10"   # nome suportado pela emulator_14.0 ("Pixel 6" NÃO é)
+      WEB_VNC: "true"
+    ports:
+      - "6080:6080"   # noVNC (tela do Android no navegador) → embutido na aba "Celular"
+    volumes:
+      - android-data:/home/androidusr
+    restart: unless-stopped
+
+  # Android LOCAL (Windows) na aba "Celular": espelha pro navegador o emulador que roda no HOST
+  # (AVD com Play Store, via WHPX — o caminho que roda no Windows, sem KVM). Profile "phone-local"
+  # (NÃO sobe no `up` normal). Pré-req: o emulador no host com o adb exposto — scripts\phone-local.ps1.
+  # Como usar (ver docs/phone.md):
+  #   1) scripts\phone-local.ps1                         (boota o AVD com Play Store + expõe o adb)
+  #   2) docker compose --profile phone-local up -d scrcpy
+  #   3) rebuild o web com VITE_EMULATOR_URL=http://localhost:8000 → aba "Celular" → "Mostrar tela do Android"
+  scrcpy:
+    build:
+      context: ./ws-scrcpy
+      dockerfile: Dockerfile
+    image: mtrxsys-ws-scrcpy:latest
+    container_name: mtrx-scrcpy
+    profiles: ["phone-local"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"   # ws-scrcpy (tela do Android local no navegador) → embutido na aba "Celular"
     restart: unless-stopped
 
   searxng:
@@ -180,3 +277,4 @@ services:
 volumes:
   pgdata:
   waha-sessions:
+  android-data:   # estado do Android virtual (profile "phone"): app instalado, sessão do WhatsApp

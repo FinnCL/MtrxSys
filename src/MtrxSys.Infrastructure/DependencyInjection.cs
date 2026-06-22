@@ -75,6 +75,12 @@ public static class DependencyInjection
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IRandomSource, CryptoRandomSource>();
         services.AddSingleton<IDispatchMetrics, NullDispatchMetrics>();
+        // Aparelho virtual da aba "Celular": a API provisiona/liga/instala/registra o Android em
+        // container (docker-android) via docker CLI sobre o socket — tudo DENTRO da aba, sem prompt.
+        // O Android vira o dispositivo PRINCIPAL do número e o WAHA fica como companion (disparo).
+        // Exige host com /dev/kvm. Fail-safe onde não há docker (aba mostra "indisponível").
+        services.AddOptions<PhoneOptions>().Bind(config.GetSection(PhoneOptions.SectionName));
+        services.AddSingleton<IPhoneOrchestrator, MtrxSys.Infrastructure.Phone.DockerCliPhoneOrchestrator>();
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IContactRepository, ContactRepository>();

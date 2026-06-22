@@ -64,6 +64,7 @@ public static class PresenceEndpoints
         app.MapGet("/api/presence/chip", async (
             IWahaClient waha,
             IOptions<DispatchOptions> dispatch,
+            IOptions<MtrxSys.Api.Options.PresenceOptions> presence,
             CircuitBreaker breaker,
             IMemoryCache cache,
             CancellationToken ct) =>
@@ -108,7 +109,12 @@ public static class PresenceEndpoints
             }
 #pragma warning restore CA1031
 
-            return Results.Ok(new { status = info.Status, breakerOpen, phone = info.Phone, name = info.Name });
+            // Endurecimento opcional (deploy exposto): mascara o número na resposta anônima. Default
+            // off — a landing precisa do número cheio pra detectar o mesmo chip em dois cards.
+            var phone = presence.Value.MaskChipPhone
+                ? MtrxSys.Api.Options.PresenceOptions.Mask(info.Phone)
+                : info.Phone;
+            return Results.Ok(new { status = info.Status, breakerOpen, phone, name = info.Name });
         }).AllowAnonymous();
 
         return app;

@@ -46,13 +46,30 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Builda a imagem do emulador e sai. Ver docker-compose.yml (idêntico). Taggeia sempre
+  # mtrxsys-waha-emulator:latest, compartilhada com o Stack A.
+  waha-emulator-build:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.WahaEmulator/Dockerfile
+    image: mtrxsys-waha-emulator:latest
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
   waha:
-    image: devlikeapro/waha:latest
+    # Em fase de testes, B usa o WhatsApp EMULADO por padrão. Voltar ao real:
+    #   WAHA_IMAGE=devlikeapro/waha:latest docker compose -f docker-compose-2.yml up -d
+    image: ${WAHA_IMAGE:-mtrxsys-waha-emulator:latest}
     container_name: mtrx2-waha
     ports:
       - "3001:3000"
     environment:
       TZ: UTC
+      # Lidas SÓ pelo emulador (o WAHA real ignora). Chip B com número/identidade próprios.
+      Emulator__AutoConnect: ${EMULATOR_AUTOCONNECT:-true}
+      Emulator__MePhone: ${EMULATOR_ME_PHONE_2:-5511999990001}
+      Emulator__MePushName: ${EMULATOR_ME_NAME_2:-Chip Emulado B}
+      Webhooks__WahaToken: ${WAHA2_HOOK_TOKEN:-}
       # Engine NOWEB (sem Chromium) — ver docker-compose.yml. Reparear o chip após a troca.
       WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
       # NAO ha proxy aqui: o WAHA 2026.x (CORE/NOWEB) IGNORA a env var WHATSAPP_PROXY_SERVER
@@ -77,6 +94,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      waha-emulator-build:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   api:
@@ -105,6 +124,16 @@ services:
       Seed__Admin__Email: ${SEED2_ADMIN_EMAIL:-admin-b@local}
       Seed__Admin__Password: ${SEED2_ADMIN_PASS:-chipB123!}
       Seed__Admin__DisplayName: ${SEED2_ADMIN_NAME:-Admin Chip B}
+      # Aparelho virtual do Stack B (aba "Celular"): a API provisiona/liga/instala o Android em
+      # container e embute o noVNC. Exige host com /dev/kvm. Ver docs/phone.md.
+      Phone__ContainerName: ${PHONE_CONTAINER_2:-mtrx2-android}
+      Phone__ViewUrl: ${PHONE_VIEW_URL_2:-}
+      # Porta HOST do noVNC ao provisionar pela aba — única por ambiente e batendo com PHONE_VIEW_URL_2.
+      # Stack B usa 6081 (Stack A=6080). Sem isto, o botão "Provisionar número" colidiria na 6080.
+      Phone__NoVncPort: ${PHONE_NOVNC_PORT_2:-6081}
+      Phone__WhatsAppApkUrl: ${PHONE_WA_APK_URL_2:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -147,12 +176,33 @@ services:
         VITE_API_URL: "http://localhost:5081"
         # Identifica a aba do navegador como "MtrxSys B" pra distinguir do Stack 1.
         VITE_APP_LABEL: "B"
+        # Aba "Celular": padrão = maquete fake (localhost:3001). Num host com KVM, aponte pro
+        # Android REAL (noVNC do docker-android): PHONE_VIEW_URL_2=http://localhost:6081
+        VITE_EMULATOR_URL: ${PHONE_VIEW_URL_2:-http://localhost:3001}
     container_name: mtrx2-web
     ports:
       - "5174:80"
     depends_on:
       api:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Aparelho virtual do Stack B — Android REAL em container (ver docker-compose.yml). A aba "Celular"
+  # provisiona/liga/instala isto sozinha; este serviço é a forma pré-criada (opcional). Profile
+  # "phone", exige /dev/kvm (só host Linux com KVM). PHONE_VIEW_URL_2=http://localhost:6081 liga a aba.
+  android:
+    image: budtmo/docker-android:emulator_14.0
+    container_name: mtrx2-android
+    profiles: ["phone"]
+    devices:
+      - /dev/kvm
+    environment:
+      EMULATOR_DEVICE: "Samsung Galaxy S10"   # nome suportado pela emulator_14.0 ("Pixel 6" NÃO é)
+      WEB_VNC: "true"
+    ports:
+      - "6081:6080"
+    volumes:
+      - android-data2:/home/androidusr
     restart: unless-stopped
 
   # Landing page de seleção de ambiente — serve os 2 cards (A e B) que autenticam direto
@@ -170,3 +220,4 @@ services:
 volumes:
   pgdata2:
   waha-sessions2:
+  android-data2:   # estado do Android virtual do Stack B (profile "phone")

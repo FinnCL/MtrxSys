@@ -5,21 +5,35 @@ import { LoginScreen } from "./components/LoginScreen";
 import { ConversationList } from "./components/ConversationList";
 import { ChatThread } from "./components/ChatThread";
 import { ContactPanel } from "./components/ContactPanel";
-import { WhatsAppOnboarding } from "./components/WhatsAppOnboarding";
 import { GroupsScreen } from "./components/GroupsScreen";
 import { CollectorScreen } from "./components/CollectorScreen";
 import { ContactsScreen } from "./components/ContactsScreen";
 import { CampaignsScreen } from "./components/CampaignsScreen";
+import { LivePhoneScreen } from "./components/LivePhoneScreen";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { api } from "./api/client";
 import type { Conversation } from "./api/types";
 import { emptyContactPaneMessage } from "./utils/chatLabels";
 import "./App.css";
 
-type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns";
+// URL de uma tela embutível opcional na aba "Celular" (maquete fake A=:3000/B=:3001, ou o noVNC do
+// Android real). Vazia = a aba "Celular" ainda aparece (o aparelho virtual é o WAHA); só não há tela
+// embutida. É passada pra LivePhoneScreen como fallback visual.
+const EMULATOR_URL = import.meta.env.VITE_EMULATOR_URL as string | undefined;
+// "scrcpy" = a tela embutida é o ws-scrcpy do Android local (monta o stream direto). Vazio = embute a
+// url como está (maquete fake / noVNC).
+const EMULATOR_KIND = import.meta.env.VITE_EMULATOR_KIND as string | undefined;
+// "1" = mostra a seção "Android em container (KVM)" na aba Celular. Só faz sentido no SERVIDOR (Linux
+// com KVM). No localhost fica oculta (não há como provisionar Android aqui).
+const PHONE_SERVER_OPTION = import.meta.env.VITE_PHONE_SERVER === "1";
+// Device adb a espelhar na aba Celular (LDPlayer/emulador). Ex.: emulator-5554 (1ª instância do
+// LDPlayer), emulator-5556 (2ª)… Configurável por ambiente. Vazio = emulator-5554.
+const EMULATOR_UDID = import.meta.env.VITE_EMULATOR_UDID as string | undefined;
+
+type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns" | "phone";
 
 // Persiste a aba ativa pra sobreviver ao F5/atualizar — sem isso, recarregar sempre cai no Chat.
-const VIEW_TABS: ViewTab[] = ["chat", "collector", "groups", "contacts", "campaigns"];
+const VIEW_TABS: ViewTab[] = ["chat", "collector", "groups", "contacts", "campaigns", "phone"];
 function loadView(): ViewTab {
   const v = localStorage.getItem("app.view");
   return VIEW_TABS.includes(v as ViewTab) ? (v as ViewTab) : "chat";
@@ -33,10 +47,9 @@ function Shell() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [view, setView] = useState<ViewTab>(loadView);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-  // Estável (useCallback) pra não recriar os efeitos do WhatsAppOnboarding (polling/auto-retry do
-  // QR) a cada render deste pai — uma arrow inline mudaria de referência todo render.
-  const handleWahaWorking = useCallback(() => setWahaWorking(true), []);
   const autoSyncTriggeredRef = useRef(false);
+  // Na 1ª vez que detectar o WhatsApp desconectado, cai na aba "Celular" (onde fica a conexão/QR).
+  const didInitViewRef = useRef(false);
 
   const runSync = useCallback(async (silent = false) => {
     setSyncing(true);
@@ -84,10 +97,23 @@ function Shell() {
   useEffect(() => {
     if (!user) return;
     // Sincroniza com sistema externo (status do WAHA): o setState é assíncrono (pós-await),
-    // não cascateia render — uso legítimo de efeito.
+    // não cascateia render — uso legítimo de efeito. Agora com POLLING (5s) — sem o antigo gate de
+    // tela cheia, é este poll que detecta quando você pareia o WhatsApp (na aba "Celular").
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void checkWaha();
+    const id = setInterval(() => void checkWaha(), 5000);
+    return () => clearInterval(id);
   }, [user, checkWaha]);
+
+  // Sem o gate bloqueante: na 1ª detecção de "desconectado", manda pra aba "Celular" (a conexão/QR
+  // vive lá). Depois disso o usuário navega livre.
+  useEffect(() => {
+    if (wahaWorking === false && !didInitViewRef.current) {
+      didInitViewRef.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setView("phone");
+    }
+  }, [wahaWorking]);
 
   // Se a sessão cair (inclusive por instabilidade no backend, não só pelo botão), rearma o
   // gatilho — assim reconcile/relink/sync re-rodam na próxima reconexão (a auto-cura).
@@ -119,8 +145,7 @@ function Shell() {
     <div className="app-shell">
       <header className="topbar">
         <span className="brand">MtrxSys</span>
-        {wahaWorking === true && (
-          <nav className="tabs">
+        <nav className="tabs">
             <button
               type="button"
               className={`tab-btn${view === "chat" ? " active" : ""}`}
@@ -151,13 +176,19 @@ function Shell() {
             </button>
             <button
               type="button"
+              className={`tab-btn${view === "phone" ? " active" : ""}`}
+              onClick={() => setView("phone")}
+            >
+              Celular
+            </button>
+            <button
+              type="button"
               className={`tab-btn${view === "campaigns" ? " active" : ""}`}
               onClick={() => setView("campaigns")}
             >
               Disparo
             </button>
-          </nav>
-        )}
+        </nav>
         {wahaWorking === true && (
           <button type="button" onClick={() => void runSync(false)} disabled={syncing} className="sync-btn">
             {syncing ? "Sincronizando..." : "Sincronizar"}
@@ -181,8 +212,6 @@ function Shell() {
             Sair
           </button>
         </div>
-      ) : !wahaWorking ? (
-        <WhatsAppOnboarding onWorking={handleWahaWorking} />
       ) : view === "collector" ? (
         <CollectorScreen />
       ) : view === "groups" ? (
@@ -191,6 +220,8 @@ function Shell() {
         <ContactsScreen />
       ) : view === "campaigns" ? (
         <CampaignsScreen />
+      ) : view === "phone" ? (
+        <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} />
       ) : (
         <main className="three-col">
           <ConversationList selectedId={selected?.id ?? null} onSelect={setSelected} />

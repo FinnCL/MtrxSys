@@ -1,0 +1,19 @@
+# Override de DEV/teste — Ambiente A com WhatsApp EMULADO (sem celular real).
+# Troca SÓ o serviço `waha` pelo emulador (mesma porta interna 3000), sem mexer no app.
+# Use com o base:
+#   docker compose -f docker-compose.yml -f docker-compose.emulator.yml up -d --build
+#
+# AutoConnect=true: o app conecta sem QR e já vê grupos. Para testar o onboarding por QR,
+# defina EMULATOR_AUTOCONNECT=false (ou use "Mostrar QR" no painel http://localhost:3000).
+services:
+  waha:
+    image: mtrxsys-waha-emulator:latest
+    build:
+      context: .
+      dockerfile: src/MtrxSys.WahaEmulator/Dockerfile
+    environment:
+      Emulator__AutoConnect: ${EMULATOR_AUTOCONNECT:-true}
+      Emulator__MePhone: ${EMULATOR_ME_PHONE:-5511999990000}
+      Emulator__MePushName: ${EMULATOR_ME_NAME:-Chip Emulado A}
+      # Espelha o token do webhook do app (se configurado) pra passar na validação.
+      Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}

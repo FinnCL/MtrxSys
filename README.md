@@ -85,6 +85,55 @@ O `dev-all-front.cmd` já sobe tudo em modo **Observe** (consulta/grava e só **
 
 Opcional, 1× por chip — carrega o histórico: `POST localhost:5080/api/dispatch/ledger-backfill`. Apps alcançam o banco via `host.docker.internal:5440`.
 
+## Emulador de WhatsApp (testes sem celular) — só A e B
+
+Em fase de testes, **A e B já sobem com o WhatsApp EMULADO por padrão** — um simulador de aparelho
+que fala a mesma API do WAHA, **dentro do dashboard, na aba "Celular"**. Não precisa de comando extra:
+
+```powershell
+dev-emulator-ab.cmd   # sobe A e B (emulado já é o padrão); ou start.cmd só pro A
+```
+
+Como funciona: o serviço `waha` de A/B usa a imagem do emulador por padrão, e o serviço
+`waha-emulator-build` gera essa imagem no próprio `up --build`. Pra **voltar ao WhatsApp real**:
+`set WAHA_IMAGE=devlikeapro/waha:latest` antes de subir (os stacks 3–10 já são reais). Só A e B.
+
+A **aba "Celular"** mostra uma **maquete de aparelho** com a tela do WhatsApp na perspectiva do
+**contato**: **Conectar agora** (sem QR) → o app sai do onboarding e mostra as abas; **Mostrar QR**
+testa o onboarding (o QR aparece na tela do aparelho); os disparos **chegam como mensagens recebidas**
+e você **responde** ali (ou toca **SAIR** → dispara o opt-out de verdade: webhook → marca opt-out →
+manda a confirmação). Grupos/contatos vêm semeados, então Importar contatos → Disparo → opt-out roda
+ponta-a-ponta. (O painel também responde direto em `localhost:3000`/`3001`.) É uma **simulação** (não
+é um Android real); para WhatsApp real num aparelho virtual seria preciso redroid num host Linux.
+
+`AutoConnect` (padrão ligado) faz o app conectar sem clique; pra ver o onboarding por QR, suba com
+`set EMULATOR_AUTOCONNECT=false`. **Só dev/localhost** — não conecta no WhatsApp real e o estado é
+volátil (some no restart do container). Código em `src/MtrxSys.WahaEmulator/`.
+
+### Aparelho virtual na aba "Celular"
+
+A aba **"Celular"** é o **aparelho virtual** do número, em **dois modelos** (detalhes:
+**[docs/phone.md](docs/phone.md)**):
+
+**1. WAHA (padrão, leve) — roda no localhost.** O **WAHA** (mesma categoria de Evolution API /
+WppConnect) é um motor de WhatsApp Web headless em container, controlado pelo app por HTTP — é o que o
+sistema já usa pro disparo. O chip é **pareado por QR** e o WAHA vira **dispositivo vinculado**
+(companion); você aposenta o **seu** celular pondo o número num **celular barato sempre-ligado** (o
+disparo segue pelo WAHA mesmo com ele offline, dentro das regras). A aba mostra a **identidade real** do
+chip (número/nome) e o estado. Setup durável passo a passo: **[docs/modem-keepalive.md](docs/modem-keepalive.md)**.
+
+**1b. LDPlayer (local, Windows) — Android real espelhado na aba.** O **LDPlayer** (emulador de
+desktop, multi-instância) roda o WhatsApp e é espelhado na aba "Celular" via ws-scrcpy; cada instância
+= um número/ambiente, e o WAHA segue fazendo o disparo. Runbook: **[docs/ldplayer.md](docs/ldplayer.md)**.
+(O SIM entra só no registro; ban em emulador é alto.)
+
+**2. docker-android (opção de servidor) — dispensa o físico de vez.** Um **Android real em container**
+(`budtmo/docker-android`) que a aba provisiona/liga/instala (via `docker.sock`, sem prompt): ele
+**registra o número por SMS** e vira o **principal**, com o WAHA como companion. **Exige host Linux com
+`/dev/kvm`** — no Windows/WSL2 as vCPUs do emulador travam na virtualização aninhada (testado), então é
+**só servidor**. Fica na seção recolhível "opção de servidor" da aba. Pra eliminar o aparelho físico de
+vez (SMS de re-verificação num **SIM gateway** por API): **[docs/phone-primary-server.md](docs/phone-primary-server.md)**.
+
 ## Notas
 
 - **Localhost only** — sem HTTPS, Docker Secrets ou rate limit.

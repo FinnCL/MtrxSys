@@ -32,6 +32,9 @@ CMD ["dotnet", "watch", "--project", "src/MtrxSys.Api/MtrxSys.Api.csproj", "run"
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
 WORKDIR /app
+# docker-cli: usado SÓ pela orquestração do celular Android virtual (aba "Celular"), que controla
+# o container do emulador via socket montado (deploy Linux). Inócuo onde o socket não é montado.
+RUN apk add --no-cache docker-cli
 COPY --from=build /app ./
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080

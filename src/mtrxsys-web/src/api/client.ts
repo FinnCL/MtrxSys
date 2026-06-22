@@ -104,6 +104,23 @@ function handleAuthExpired(): void {
   }
 }
 
+// Estado do Android em container (opção de servidor da aba "Celular"), espelha PhoneStatus do backend.
+// state: unavailable (sem docker/host) | not_created (container não existe) | created | exited | running.
+export interface PhoneStatus {
+  state: string;
+  running: boolean;
+  viewUrl: string | null;
+}
+
+// Identidade real do aparelho virtual (WAHA): número + nome do chip pareado e status da sessão.
+// status === "Working" = conectado. Vem do /api/presence/chip (mesmo que a landing usa).
+export interface ChipIdentity {
+  status: string;
+  phone: string | null;
+  name: string | null;
+  breakerOpen?: boolean;
+}
+
 export const api = {
   login: (email: string, password: string) =>
     request<LoginResponse>("/api/auth/login", {
@@ -128,6 +145,22 @@ export const api = {
       failures: string[];
     }>(`/api/waha/sync${messagesPerChat ? `?messagesPerChat=${messagesPerChat}` : ""}`, {
       method: "POST",
+    }),
+  // Identidade real do aparelho virtual (WAHA) — número/nome do chip pareado. Mesma fonte da landing.
+  phoneIdentity: () => request<ChipIdentity>("/api/presence/chip", { auth: false }),
+  // Android em container (opção de servidor) — orquestração pela aba "Celular".
+  phoneStatus: () => request<PhoneStatus>("/api/phone/status"),
+  phoneBooted: () => request<{ booted: boolean }>("/api/phone/booted"),
+  phoneProvision: () => request<PhoneStatus>("/api/phone/provision", { method: "POST" }),
+  phoneStart: () => request<PhoneStatus>("/api/phone/start", { method: "POST" }),
+  phoneStop: () => request<void>("/api/phone/stop", { method: "POST" }),
+  phoneLogs: (tail = 200) => request<{ logs: string }>(`/api/phone/logs?tail=${tail}`),
+  phoneInstallWhatsApp: () =>
+    request<{ output: string }>("/api/phone/whatsapp/install", { method: "POST" }),
+  phoneSetProxy: (server: string) =>
+    request<{ output: string }>("/api/phone/proxy", {
+      method: "POST",
+      body: JSON.stringify({ server }),
     }),
   wahaQrBlobUrl: async (): Promise<string> => {
     const token = getToken();

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Ferramenta de DEV/teste ISOLADA: emula o WAHA pra rodar A/B sem celular. A build de
+         produção NAO depende deste projeto, então relaxamos os analisadores estritos do repo
+         (TreatWarningsAsErrors) pra não brigar com padrões de scaffolding de uma API mínima. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

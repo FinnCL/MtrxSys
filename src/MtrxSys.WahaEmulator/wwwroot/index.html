@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WhatsApp Emulado — MtrxSys</title>
+  <style>
+    :root {
+      --wa-green:#008069; --wa-teal:#075e54; --wa-bg:#efeae2; --out:#d9fdd3; --in:#ffffff;
+      --ink:#111b21; --muted:#667781; --page:#0b141a; --card:#202c33; --txt:#e9edef;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, "Segoe UI", Roboto, sans-serif; background:var(--page); color:var(--txt); }
+    .layout { display:flex; gap:24px; padding:20px; max-width:1000px; margin:0 auto; align-items:flex-start; flex-wrap:wrap; }
+
+    /* ---- Painel de controle (lado) ---- */
+    .controls { width:300px; display:flex; flex-direction:column; gap:12px; }
+    .controls h1 { font-size:16px; margin:0 0 4px; }
+    .box { background:var(--card); border:1px solid #2a3942; border-radius:12px; padding:14px; }
+    .box h2 { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 10px; }
+    .badge { font-size:12px; padding:3px 10px; border-radius:999px; background:#2a3942; color:var(--muted); display:inline-block; }
+    .badge.on { background:var(--wa-green); color:#fff; }
+    .badge.qr { background:#f0b429; color:#3a2c00; }
+    button { cursor:pointer; border:0; border-radius:8px; padding:9px 12px; font-size:13px; font-weight:600; background:#2a3942; color:var(--txt); width:100%; margin-bottom:8px; }
+    button:hover { filter:brightness(1.18); }
+    button.primary { background:var(--wa-green); color:#fff; }
+    button.warn { background:#b23b3b; color:#fff; }
+    label { font-size:12px; color:var(--muted); display:block; margin:6px 0 4px; }
+    select { width:100%; padding:9px; border-radius:8px; border:1px solid #2a3942; background:#0b141a; color:var(--txt); font-size:13px; }
+    .hint { font-size:11px; color:var(--muted); line-height:1.5; margin-top:8px; }
+
+    /* ---- Maquete de celular ---- */
+    .phone { width:340px; height:710px; background:#0d0d0d; border-radius:46px; padding:13px; box-shadow:0 18px 50px rgba(0,0,0,.55), inset 0 0 0 2px #2c2c2c; flex:0 0 auto; }
+    .screen { position:relative; height:100%; border-radius:34px; overflow:hidden; background:var(--wa-bg); display:flex; flex-direction:column; }
+    .notch { position:absolute; top:0; left:50%; transform:translateX(-50%); width:130px; height:24px; background:#0d0d0d; border-radius:0 0 16px 16px; z-index:5; }
+    .statusbar { height:30px; background:var(--wa-teal); color:#fff; display:flex; align-items:center; justify-content:space-between; padding:0 16px; font-size:11px; }
+
+    .wa-header { background:var(--wa-teal); color:#fff; display:flex; align-items:center; gap:10px; padding:8px 12px; }
+    .wa-header .avatar { width:34px; height:34px; border-radius:50%; background:#cfd8dc33; display:flex; align-items:center; justify-content:center; font-size:15px; }
+    .wa-header .who { font-size:14px; font-weight:600; line-height:1.1; }
+    .wa-header .sub { font-size:11px; opacity:.8; }
+
+    .msgs { flex:1; overflow-y:auto; padding:12px 10px; display:flex; flex-direction:column; gap:6px;
+            background-image:linear-gradient(rgba(229,221,213,.6),rgba(229,221,213,.6)); }
+    .bubble { max-width:78%; padding:6px 9px; border-radius:8px; font-size:13px; line-height:1.35; color:var(--ink); box-shadow:0 1px .5px rgba(0,0,0,.12); position:relative; word-wrap:break-word; }
+    .bubble.in { align-self:flex-start; background:var(--in); border-top-left-radius:2px; }
+    .bubble.out { align-self:flex-end; background:var(--out); border-top-right-radius:2px; }
+    .bubble .t { font-size:10px; color:var(--muted); text-align:right; margin-top:2px; }
+    .day { align-self:center; background:#ffffffcc; color:var(--muted); font-size:11px; padding:3px 10px; border-radius:8px; margin:4px 0; }
+    .empty { margin:auto; color:var(--muted); font-size:13px; text-align:center; padding:0 24px; }
+
+    .composer { display:flex; gap:6px; padding:8px; background:#f0f2f5; }
+    .composer input { flex:1; border:0; border-radius:20px; padding:9px 14px; font-size:13px; background:#fff; color:var(--ink); }
+    .composer button { width:42px; height:42px; border-radius:50%; padding:0; margin:0; background:var(--wa-green); color:#fff; font-size:16px; }
+    .composer .sair { width:auto; border-radius:20px; padding:0 14px; background:#b23b3b; font-size:12px; }
+
+    /* tela de conexão (QR / conectar) dentro do celular */
+    .connect { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:24px; text-align:center; background:#fff; }
+    .connect h3 { margin:0; color:var(--ink); font-size:16px; }
+    .connect p { margin:0; color:var(--muted); font-size:12px; line-height:1.5; }
+    .connect img { width:190px; height:190px; image-rendering:pixelated; border:1px solid #eee; border-radius:8px; }
+    .connect button { background:var(--wa-green); color:#fff; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <!-- Controles -->
+    <div class="controls">
+      <h1>📱 WhatsApp Emulado</h1>
+      <span id="label" class="badge">sessão: default</span>
+
+      <div class="box">
+        <h2>Aparelho</h2>
+        <button class="primary" onclick="act('connect')">✅ Conectar agora (sem QR)</button>
+        <button onclick="act('qr')">🔳 Mostrar QR (onboarding)</button>
+        <button onclick="act('seed')">🌱 Re-semear grupos/contatos</button>
+        <button class="warn" onclick="act('logout')">⛔ Desconectar</button>
+        <div class="hint">Status: <span id="status" class="badge">—</span><br /><span id="me"></span></div>
+      </div>
+
+      <div class="box">
+        <h2>Ver conversa de</h2>
+        <select id="who" onchange="render(lastState)"></select>
+        <div class="hint">Esta é a tela do <b>contato</b>. As mensagens do disparo chegam aqui; responda
+          (ou toque <b>SAIR</b>) pra disparar o opt-out de verdade no sistema.</div>
+      </div>
+    </div>
+
+    <!-- Celular -->
+    <div class="phone">
+      <div class="screen">
+        <div class="notch"></div>
+        <div class="statusbar"><span id="clock">9:41</span><span>📶 🔋</span></div>
+        <div id="stage"><!-- header+msgs+composer OU connect --></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const SESSION = new URLSearchParams(location.search).get('session') || 'default';
+    document.getElementById('label').textContent = 'sessão: ' + SESSION;
+    let lastState = null;
+    let lastGroups = [];
+
+    async function api(path, method='GET') { const r = await fetch(path, { method }); return r.ok ? r.json() : null; }
+    async function act(verb) { const s = await api(`/_emulator/sessions/${SESSION}/${verb}`, 'POST'); if (s) render(s); }
+
+    function selectedPhone() { return document.getElementById('who').value; }
+    function whoName(phone) {
+      for (const g of lastGroups) for (const p of g.participants) if (p.phone === phone) return p.name;
+      return phone;
+    }
+
+    async function sendReply(force) {
+      const who = selectedPhone();
+      const inp = document.getElementById('wa-input');
+      const body = force || (inp ? inp.value.trim() : '');
+      if (!who || !body) return;
+      const r = await fetch(`/_emulator/sessions/${SESSION}/incoming`, {
+        method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ from: who, body, name: whoName(who) })
+      });
+      if (r.ok) { if (inp) inp.value=''; render(await r.json()); }
+    }
+
+    function render(s) {
+      if (!s) return;
+      lastState = s;
+      lastGroups = s.groups || [];
+
+      const st = document.getElementById('status');
+      st.textContent = s.status;
+      st.className = 'badge' + (s.status==='WORKING'?' on': s.status==='SCAN_QR_CODE'?' qr':'');
+      document.getElementById('me').textContent = s.me ? `${s.me.name} · +${s.me.phone}` : 'desconectado';
+
+      // seletor de contato (preserva escolha)
+      const who = document.getElementById('who');
+      const cur = who.value;
+      who.innerHTML = lastGroups.flatMap(g => g.participants.map(p =>
+        `<option value="${p.phone}">${esc(p.name)} · +${p.phone}</option>`)).join('')
+        || '<option value="">(conecte para semear contatos)</option>';
+      if ([...who.options].some(o=>o.value===cur)) who.value = cur;
+
+      const stage = document.getElementById('stage');
+
+      // Não conectado → tela de conexão (QR ou botão) dentro do celular
+      if (s.status !== 'WORKING') {
+        const qr = s.status==='SCAN_QR_CODE'
+          ? `<img src="/api/${SESSION}/auth/qr?format=image&t=${Date.now()}" alt="QR" />
+             <p>Abra o WhatsApp &gt; Aparelhos conectados e escaneie. (ou conecte direto ao lado)</p>`
+          : `<p>O aparelho está desconectado.</p>`;
+        stage.innerHTML = `<div class="connect"><h3>Conectar o WhatsApp</h3>${qr}
+          <button onclick="act('connect')">Conectar agora</button></div>`;
+        return;
+      }
+
+      // Conectado → conversa do contato selecionado (perspectiva do contato:
+      // o que o app ENVIOU = recebido [esquerda]; o que o contato responde = enviado [direita]).
+      const phone = selectedPhone();
+      const chatId = phone ? phone + '@c.us' : null;
+      const msgs = (s.messages||[]).filter(m => m.chatId === chatId).slice().sort((a,b)=>a.timestamp-b.timestamp);
+      const bubbles = msgs.length
+        ? msgs.map(m => `<div class="bubble ${m.fromMe?'in':'out'}">${esc(m.body)}<div class="t">${tm(m.timestamp)}</div></div>`).join('')
+        : `<div class="empty">Sem mensagens com ${esc(whoName(phone))}.<br/>Inicie um disparo no app — ele chega aqui.</div>`;
+
+      stage.innerHTML = `
+        <div class="wa-header">
+          <span class="avatar">👤</span>
+          <div><div class="who">${esc(whoName(phone) || 'Contato')}</div><div class="sub">online</div></div>
+        </div>
+        <div class="msgs" id="msgs">${bubbles}</div>
+        <div class="composer">
+          <input id="wa-input" placeholder="Mensagem" onkeydown="if(event.key==='Enter')sendReply()" />
+          <button class="sair" onclick="sendReply('SAIR')">SAIR</button>
+          <button onclick="sendReply()">➤</button>
+        </div>`;
+      const box = document.getElementById('msgs'); if (box) box.scrollTop = box.scrollHeight;
+    }
+
+    function esc(s){ return (s??'').toString().replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+    function tm(ts){ try { return new Date(ts*1000).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); } catch { return ''; } }
+
+    async function tick(){ const s = await api(`/_emulator/state?session=${SESSION}`); if (s) render(s); }
+    tick(); setInterval(tick, 2000);
+  </script>
+</body>
+</html>
