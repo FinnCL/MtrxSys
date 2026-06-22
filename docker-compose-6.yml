@@ -98,6 +98,14 @@ services:
       Waha__ProxyServer: ${WAHA_PROXY_6:-}
       Waha__ProxyUsername: ${WAHA_PROXY_6_USER:-}
       Waha__ProxyPassword: ${WAHA_PROXY_6_PASS:-}
+      # Aparelho virtual (aba "Celular") — pronto no papel, DESLIGADO por padrão (ViewUrl vazio): sem
+      # KVM/servidor nada sobe. Container/porta/volume ÚNICOS por ambiente (1 host, 10 stacks).
+      Phone__ContainerName: ${PHONE_CONTAINER_6:-mtrx6-android}
+      Phone__ViewUrl: ${PHONE_VIEW_URL_6:-}
+      Phone__NoVncPort: ${PHONE_NOVNC_PORT_6:-6085}
+      Phone__VolumeName: ${PHONE_VOLUME_6:-android-data-6}
+      Phone__WhatsAppApkUrl: ${PHONE_WA_APK_URL_6:-}
+      Presence__MaskChipPhone: ${MASK_CHIP_PHONE_6:-false}
       Webhooks__WahaToken: ${WAHA6_HOOK_TOKEN:-}
       # Chave JWT distinta dos demais Stacks: tokens emitidos noutro stack não autenticam aqui
       Jwt__SigningKey: ${JWT6_SIGNING_KEY:-dev-only-signing-key-stack-6-change-me-32-chars-min}
@@ -105,6 +113,10 @@ services:
       Seed__Admin__Email: ${SEED6_ADMIN_EMAIL:-admin-f@local}
       Seed__Admin__Password: ${SEED6_ADMIN_PASS:-chipF123!}
       Seed__Admin__DisplayName: ${SEED6_ADMIN_NAME:-Admin Chip F}
+    volumes:
+      # Socket do Docker: deixa a API ligar/parar/logar o container do emulador (deploy Linux).
+      # Sem o socket acessível, a aba "Celular" mostra "indisponível" (fail-safe).
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,6 +157,11 @@ services:
       args:
         # Cliente web do Stack 6 chama a API do Stack 6 (porta 5085). Build-time via Vite.
         VITE_API_URL: "http://localhost:5085"
+        # Aparelho virtual: build args do emulador embutido (vazio = desligado, igual A/B).
+        VITE_EMULATOR_URL: ${PHONE_VIEW_URL_6:-}
+        VITE_EMULATOR_KIND: ${PHONE_VIEWER_KIND_6:-}
+        VITE_PHONE_SERVER: ${PHONE_SERVER_OPTION_6:-}
+        VITE_EMULATOR_UDID: ${PHONE_UDID_6:-}
         # Identifica a aba do navegador como "MtrxSys F" pra distinguir dos outros.
         VITE_APP_LABEL: "F"
     container_name: mtrx6-web

@@ -125,6 +125,9 @@ services:
       # e bater com a porta do PHONE_VIEW_URL_N — senão o `docker run -p` do botão "Provisionar número"
       # colide na mesma 6080 e só o 1º ambiente sobe. Stack A=6080, B=6081, … (ver docs/scaling.md).
       Phone__NoVncPort: ${PHONE_NOVNC_PORT_1:-6080}
+      # Volume do estado do Android — ÚNICO por ambiente, senão dois stacks compartilham a mesma
+      # conta/digital (colisão). Stack A=android-data, B=android-data-2, … (ver docs/scaling.md).
+      Phone__VolumeName: ${PHONE_VOLUME_1:-android-data}
       Phone__WhatsAppApkUrl: ${PHONE_WA_APK_URL_1:-}
       # Endurecimento opcional: mascara o número no /api/presence/chip anônimo (deploy exposto além
       # da rede do operador). Default off — a landing precisa do número cheio pra detectar duplicata.

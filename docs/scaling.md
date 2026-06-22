@@ -40,18 +40,30 @@ Um dedicado **16 cores / 64 GB / NVMe** segura os 10 com folga (9 idle-headless,
 > ⚠️ **VPS comum não serve** (sem nested virt confiável). Hetzner **dedicado** tem KVM nativo. O **GCP
 > free trial** segura **1** emulador de teste, não os 10 — ver [gcp-emulator.md](./gcp-emulator.md).
 
-## Porta do noVNC por ambiente (senão os 10 colidem)
+## Mapa dos 10 ambientes (container/porta/volume ÚNICOS)
 
-O botão "Provisionar número" faz `docker run -p <Phone__NoVncPort>:6080`. Num host com 10 stacks, cada
-ambiente **precisa** de uma porta de host única — senão o 2º provisionamento bate na mesma 6080 e falha.
-A porta tem que **bater** com a do `PHONE_VIEW_URL_N` (o que o browser embute).
+O botão "Provisionar número" faz `docker run -p <NoVncPort>:6080 -v <VolumeName>:...`. Num host com 10
+stacks, cada ambiente **precisa** de porta E volume de host únicos — senão o 2º provisionamento bate na
+mesma 6080 (falha) ou monta o mesmo volume (compartilha conta/digital = colisão). A porta tem que
+**bater** com a do `PHONE_VIEW_URL_N`. **Já parametrizado nos 10 composes** (defaults abaixo); o emulador
+fica **desligado** até você setar `PHONE_VIEW_URL_N`.
 
-| Stack | `PHONE_CONTAINER_N` | `PHONE_NOVNC_PORT_N` | `PHONE_VIEW_URL_N` |
-|---|---|---|---|
-| A | `mtrx-android`  | 6080 | `http://HOST:6080` |
-| B | `mtrx2-android` | 6081 | `http://HOST:6081` |
-| C | `mtrx3-android` | 6082 | `http://HOST:6082` |
-| … | … | 6083… | `http://HOST:6083…` |
+| Stack | `PHONE_CONTAINER_N` | `PHONE_NOVNC_PORT_N` | `PHONE_VOLUME_N` | `PHONE_VIEW_URL_N` |
+|---|---|---|---|---|
+| A | `mtrx-android`   | 6080 | `android-data`    | `http://HOST:6080` |
+| B | `mtrx2-android`  | 6081 | `android-data-2`  | `http://HOST:6081` |
+| C | `mtrx3-android`  | 6082 | `android-data-3`  | `http://HOST:6082` |
+| D | `mtrx4-android`  | 6083 | `android-data-4`  | `http://HOST:6083` |
+| E | `mtrx5-android`  | 6084 | `android-data-5`  | `http://HOST:6084` |
+| F | `mtrx6-android`  | 6085 | `android-data-6`  | `http://HOST:6085` |
+| G | `mtrx7-android`  | 6086 | `android-data-7`  | `http://HOST:6086` |
+| H | `mtrx8-android`  | 6087 | `android-data-8`  | `http://HOST:6087` |
+| I | `mtrx9-android`  | 6088 | `android-data-9`  | `http://HOST:6088` |
+| J | `mtrx10-android` | 6089 | `android-data-10` | `http://HOST:6089` |
+
+> ⚠️ Container/porta/volume **não bastam** pra isolar contra ban — falta a **digital própria por
+> emulador** (IMEI/Android ID), que **não é automatizada** (limitação real do emulador). Ver a ressalva
+> em [architecture.md](./architecture.md) e a recomendação de validar 1 no GCP antes de escalar.
 
 > Já parametrizado no compose (`Phone__NoVncPort: ${PHONE_NOVNC_PORT_N}`). Defina a env de cada stack.
 

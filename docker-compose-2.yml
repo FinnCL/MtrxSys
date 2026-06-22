@@ -131,7 +131,9 @@ services:
       # Porta HOST do noVNC ao provisionar pela aba — única por ambiente e batendo com PHONE_VIEW_URL_2.
       # Stack B usa 6081 (Stack A=6080). Sem isto, o botão "Provisionar número" colidiria na 6080.
       Phone__NoVncPort: ${PHONE_NOVNC_PORT_2:-6081}
+      Phone__VolumeName: ${PHONE_VOLUME_2:-android-data-2}
       Phone__WhatsAppApkUrl: ${PHONE_WA_APK_URL_2:-}
+      Presence__MaskChipPhone: ${MASK_CHIP_PHONE_2:-false}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:

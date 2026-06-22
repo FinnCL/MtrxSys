@@ -98,6 +98,14 @@ services:
       Waha__ProxyServer: ${WAHA_PROXY_3:-}
       Waha__ProxyUsername: ${WAHA_PROXY_3_USER:-}
       Waha__ProxyPassword: ${WAHA_PROXY_3_PASS:-}
+      # Aparelho virtual (aba "Celular") — pronto no papel, DESLIGADO por padrão (ViewUrl vazio): sem
+      # KVM/servidor nada sobe. Container/porta/volume ÚNICOS por ambiente (1 host, 10 stacks).
+      Phone__ContainerName: ${PHONE_CONTAINER_3:-mtrx3-android}
+      Phone__ViewUrl: ${PHONE_VIEW_URL_3:-}
+      Phone__NoVncPort: ${PHONE_NOVNC_PORT_3:-6082}
+      Phone__VolumeName: ${PHONE_VOLUME_3:-android-data-3}
+      Phone__WhatsAppApkUrl: ${PHONE_WA_APK_URL_3:-}
+      Presence__MaskChipPhone: ${MASK_CHIP_PHONE_3:-false}
       Webhooks__WahaToken: ${WAHA3_HOOK_TOKEN:-}
       # Chave JWT distinta dos Stacks 1 e 2: tokens emitidos noutro stack não autenticam aqui
       Jwt__SigningKey: ${JWT3_SIGNING_KEY:-dev-only-signing-key-stack-3-change-me-32-chars-min}
@@ -105,6 +113,10 @@ services:
       Seed__Admin__Email: ${SEED3_ADMIN_EMAIL:-admin-c@local}
       Seed__Admin__Password: ${SEED3_ADMIN_PASS:-chipC123!}
       Seed__Admin__DisplayName: ${SEED3_ADMIN_NAME:-Admin Chip C}
+    volumes:
+      # Socket do Docker: deixa a API ligar/parar/logar o container do emulador (deploy Linux).
+      # Sem o socket acessível, a aba "Celular" mostra "indisponível" (fail-safe).
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,6 +157,11 @@ services:
       args:
         # Cliente web do Stack 3 chama a API do Stack 3 (porta 5082). Build-time via Vite.
         VITE_API_URL: "http://localhost:5082"
+        # Aparelho virtual: build args do emulador embutido (vazio = desligado, igual A/B).
+        VITE_EMULATOR_URL: ${PHONE_VIEW_URL_3:-}
+        VITE_EMULATOR_KIND: ${PHONE_VIEWER_KIND_3:-}
+        VITE_PHONE_SERVER: ${PHONE_SERVER_OPTION_3:-}
+        VITE_EMULATOR_UDID: ${PHONE_UDID_3:-}
         # Identifica a aba do navegador como "MtrxSys C" pra distinguir dos outros.
         VITE_APP_LABEL: "C"
     container_name: mtrx3-web
