@@ -165,6 +165,7 @@ input[type="checkbox"], input[type="radio"] {
 .phone-badge.ok { background: rgba(37,211,102,.15); color: #25d366; }
 .phone-badge.off { background: rgba(150,150,150,.15); color: var(--muted); }
 .phone-explain { max-width: 390px; text-align: center; }
+.phone-disconnect { margin-top: 12px; }
 .phone-server { width: min(390px, 95vw); display: flex; flex-direction: column; gap: 8px;
   align-items: center; border-top: 1px solid var(--border, #2a3942); padding-top: 12px; margin-top: 4px; }
 /* Checklist do botão "Provisionar número" — os 5 passos ao vivo (boot→instalar→proxy→SMS→WAHA). */
@@ -793,8 +794,12 @@ input[type="checkbox"], input[type="radio"] {
 
 /* --- ≤400px (celular pequeno): aperta paddings, encolhe o sync --- */
 @media (max-width: 400px) {
-  .topbar { gap: 6px 8px; }
+  .topbar { gap: 6px 8px; padding: 8px 8px; }
   .topbar .sync-btn { padding: 4px 8px; }
+  /* 6 abas numa linha só: aperta gap/padding/fonte pra caber em telas de 360px (Androids comuns)
+     sem estourar a página — antes a soma dos min-widths dava ~374px. */
+  .topbar .tabs { gap: 2px; }
+  .topbar .tabs .tab-btn { padding: 4px 5px; font-size: 11px; }
   .groups-screen, .campaigns-screen, .contacts-screen { padding: 12px; }
   .login-card, .onboarding-card { padding: 22px; }
 }

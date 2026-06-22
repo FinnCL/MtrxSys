@@ -33,7 +33,7 @@ const EMULATOR_UDID = import.meta.env.VITE_EMULATOR_UDID as string | undefined;
 type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns" | "phone";
 
 // Persiste a aba ativa pra sobreviver ao F5/atualizar — sem isso, recarregar sempre cai no Chat.
-const VIEW_TABS: ViewTab[] = ["chat", "collector", "groups", "contacts", "campaigns", "phone"];
+const VIEW_TABS: ViewTab[] = ["phone", "chat", "collector", "groups", "contacts", "campaigns"];
 function loadView(): ViewTab {
   const v = localStorage.getItem("app.view");
   return VIEW_TABS.includes(v as ViewTab) ? (v as ViewTab) : "chat";
@@ -148,6 +148,13 @@ function Shell() {
         <nav className="tabs">
             <button
               type="button"
+              className={`tab-btn${view === "phone" ? " active" : ""}`}
+              onClick={() => setView("phone")}
+            >
+              Celular
+            </button>
+            <button
+              type="button"
               className={`tab-btn${view === "chat" ? " active" : ""}`}
               onClick={() => setView("chat")}
             >
@@ -176,13 +183,6 @@ function Shell() {
             </button>
             <button
               type="button"
-              className={`tab-btn${view === "phone" ? " active" : ""}`}
-              onClick={() => setView("phone")}
-            >
-              Celular
-            </button>
-            <button
-              type="button"
               className={`tab-btn${view === "campaigns" ? " active" : ""}`}
               onClick={() => setView("campaigns")}
             >
@@ -198,11 +198,6 @@ function Shell() {
         <span className="who">
           {user.displayName} <span className="muted">({user.email})</span>
         </span>
-        {wahaWorking === true && (
-          <button type="button" className="disconnect-btn" onClick={() => setConfirmDisconnect(true)}>
-            Desconectar WhatsApp
-          </button>
-        )}
         <button type="button" onClick={logout}>Sair</button>
       </header>
       {wahaWorking === null ? (
@@ -221,7 +216,7 @@ function Shell() {
       ) : view === "campaigns" ? (
         <CampaignsScreen />
       ) : view === "phone" ? (
-        <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} />
+        <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} onDisconnect={wahaWorking === true ? () => setConfirmDisconnect(true) : undefined} />
       ) : (
         <main className="three-col">
           <ConversationList selectedId={selected?.id ?? null} onSelect={setSelected} />

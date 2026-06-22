@@ -13,6 +13,7 @@ interface LivePhoneScreenProps {
   viewerKind?: string; // "scrcpy" → monta o deep-link de stream (pula a lista); senão embute a url direto
   udid?: string; // device adb a espelhar (LDPlayer: emulator-5554 / 5556…; configurável por ambiente)
   showServerOption?: boolean; // mostra a seção "Android em container (KVM)" — só faz sentido no servidor
+  onDisconnect?: () => void; // abre a confirmação de desconectar o WhatsApp (só quando conectado)
 }
 
 // Monta o link de stream DIRETO do ws-scrcpy (pula a lista de devices). Formato extraído do source do
@@ -29,7 +30,7 @@ function scrcpyStreamUrl(base: string, udid: string): string {
   }
 }
 
-export function LivePhoneScreen({ url, viewerKind, udid, showServerOption }: LivePhoneScreenProps) {
+export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDisconnect }: LivePhoneScreenProps) {
   // ws-scrcpy do LDPlayer/emulador: abre direto na tela do device; maquete/noVNC: embute a url como está.
   const androidUrl =
     viewerKind === "scrcpy" && url ? scrcpyStreamUrl(url, udid || "emulator-5554") : url;
@@ -77,6 +78,11 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption }: Liv
             {url && (
               <button type="button" className="phone-activate" onClick={() => setEmbed(androidUrl)}>
                 Mostrar tela do Android
+              </button>
+            )}
+            {onDisconnect && (
+              <button type="button" className="disconnect-btn phone-disconnect" onClick={onDisconnect}>
+                Desconectar WhatsApp
               </button>
             )}
           </div>
