@@ -53,6 +53,10 @@ public static class WebhookEndpoints
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to ingest WAHA webhook (event={Event}, session={Session})", payload.Event, payload.Session);
+                // 5xx faz o WAHA reenfileirar (retries configurados em BuildWebhooks). Responder 200 aqui
+                // descartava silenciosamente a mensagem — inclusive pedidos de SAIR — numa falha transitória
+                // (DB/rede indisponível). O reprocesso é seguro: a ingestão é idempotente por waMessageId único.
+                return Results.StatusCode(500);
             }
 #pragma warning restore CA1031
 

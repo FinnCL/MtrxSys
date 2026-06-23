@@ -125,4 +125,54 @@ public sealed class WebhookOptOutE2ETests : IAsyncLifetime
         saved.OptOutAt.Should().BeNull("resposta comum NÃO é opt-out");
         saved.Stage.Should().Be(ContactStage.Qualified, "quem respondeu sai de 'Novo' pra 'Respondeu'");
     }
+
+    // E2E da frase com acento: o projeto roda InvariantGlobalization=true (string.Normalize é no-op),
+    // então o opt-out só funciona porque o detector remove acento sem ICU. Sem isso, "não quero
+    // receber" não casaria e o contato continuaria recebendo — este teste cobre o fluxo real.
+    [Fact]
+    public async Task Frase_com_acento_marca_opt_out()
+    {
+        var contact = Contact.Create(
+            Guid.NewGuid(), _phones.Validate("11966665555").Value!,
+            name: "Acentuado", groupTag: "Avulsos", theme: null,
+            optInAt: new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero));
+        var repo = new ContactRepository(_db);
+        var uow = new UnitOfWork(_db);
+        await repo.AddAsync(contact, CancellationToken.None);
+        await uow.SaveChangesAsync(CancellationToken.None);
+        _db.ChangeTracker.Clear();
+
+        await BuildService().IngestAsync(
+            InboundFrom("5511966665555@c.us", "não quero receber mais mensagens", "acento-e2e"),
+            CancellationToken.None);
+
+        _db.ChangeTracker.Clear();
+        var saved = await _db.Contacts.SingleAsync(c => c.Phone.E164 == "+5511966665555");
+        saved.OptOutAt.Should().NotBeNull("frase de saída com acento deve registrar opt-out");
+        saved.Stage.Should().Be(ContactStage.Lost, "opt-out move pra 'Descartado'");
+    }
+
+    // E2E do falso-positivo: "para" é preposição. Um lead interessado respondendo "é para hoje?"
+    // NÃO pode ser descadastrado — isso seria supressão global e irreversível de quem quer comprar.
+    [Fact]
+    public async Task Preposicao_para_em_resposta_curta_nao_marca_opt_out()
+    {
+        var contact = Contact.Create(
+            Guid.NewGuid(), _phones.Validate("11955554444").Value!,
+            name: "Interessado", groupTag: "Avulsos", theme: null,
+            optInAt: new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero));
+        var repo = new ContactRepository(_db);
+        var uow = new UnitOfWork(_db);
+        await repo.AddAsync(contact, CancellationToken.None);
+        await uow.SaveChangesAsync(CancellationToken.None);
+        _db.ChangeTracker.Clear();
+
+        await BuildService().IngestAsync(
+            InboundFrom("5511955554444@c.us", "é para hoje?", "para-e2e"), CancellationToken.None);
+
+        _db.ChangeTracker.Clear();
+        var saved = await _db.Contacts.SingleAsync(c => c.Phone.E164 == "+5511955554444");
+        saved.OptOutAt.Should().BeNull("'para' como preposição NÃO é opt-out");
+        saved.Stage.Should().Be(ContactStage.Qualified, "lead interessado vira 'Respondeu', não 'Descartado'");
+    }
 }

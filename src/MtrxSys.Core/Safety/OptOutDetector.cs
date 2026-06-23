@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace MtrxSys.Core.Safety;
@@ -15,9 +16,13 @@ public static class OptOutDetector
     // Limite de palavras pra tratar uma resposta como "comando" de saída.
     private const int ShortReplyMaxWords = 3;
 
+    // NÃO inclua "para": é preposição comuníssima em PT ("é para hoje?", "para qual cidade",
+    // "manda para mim") e, numa resposta curta, dispararia opt-out falso — suprimindo um lead
+    // interessado de forma global e irreversível (ledger nos 10 ambientes). O imperativo "pare"
+    // existir só como "parar"/"pare"; o uso real ("para de mandar") já cai nas Phrases abaixo.
     private static readonly HashSet<string> Commands = new(StringComparer.Ordinal)
     {
-        "sair", "saia", "parar", "pare", "para", "stop", "cancelar", "cancela",
+        "sair", "saia", "parar", "pare", "stop", "cancelar", "cancela",
         "descadastrar", "remover", "remova", "remove",
     };
 
@@ -70,12 +75,23 @@ public static class OptOutDetector
 
     // Minúsculas, sem acento, e qualquer coisa que não seja letra/número vira espaço
     // (pontuação, emoji etc.). Espaços colapsados — facilita comparar palavras e frases.
+    // O mapa de acentos é explícito de propósito: o projeto roda com InvariantGlobalization=true
+    // (Directory.Build.props), onde string.Normalize(FormD) é no-op (ICU não é carregado) e NÃO
+    // removeria diacrítico nenhum — "não" continuaria "não" e deixaria de casar com "nao". Por isso
+    // não dá pra decompor via NFD aqui; estende o mapa à mão se aparecer um diacrítico novo.
     private static string Normalize(string s)
     {
         var lowered = s.ToLowerInvariant();
         var sb = new StringBuilder(lowered.Length);
         foreach (var ch in lowered)
         {
+            // Marca combinante (acento já separado da letra, entrada em NFD): descarta, pra
+            // "a" + til virar "a" e não "a "/espaço. GetUnicodeCategory usa tabela embutida no
+            // runtime (não ICU), então classifica certo mesmo com InvariantGlobalization.
+            if (CharUnicodeInfo.GetUnicodeCategory(ch) == UnicodeCategory.NonSpacingMark)
+            {
+                continue;
+            }
             var c = ch switch
             {
                 'á' or 'à' or 'ã' or 'â' or 'ä' => 'a',
@@ -84,6 +100,7 @@ public static class OptOutDetector
                 'ó' or 'ò' or 'õ' or 'ô' or 'ö' => 'o',
                 'ú' or 'ù' or 'û' or 'ü' => 'u',
                 'ç' => 'c',
+                'ñ' => 'n',
                 _ => ch,
             };
             sb.Append(char.IsLetterOrDigit(c) ? c : ' ');

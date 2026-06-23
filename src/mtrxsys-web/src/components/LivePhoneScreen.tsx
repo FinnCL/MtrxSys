@@ -21,6 +21,11 @@ interface LivePhoneScreenProps {
 function scrcpyStreamUrl(base: string, udid: string): string {
   try {
     const u = new URL(base);
+    // Só http(s) vira tela embutida. Bloqueia `javascript:`/`data:` etc. que `new URL` parseia mas
+    // não devem virar src de iframe (vetor de XSS quando o valor vem de env/runtime).
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      return "";
+    }
     const wsProto = u.protocol === "https:" ? "wss:" : "ws:";
     const eu = encodeURIComponent(udid); // LDPlayer via adb connect = "127.0.0.1:5555" (tem ':')
     const ws = `${wsProto}//${u.host}/?action=proxy-adb&remote=tcp:8886&udid=${eu}`;
@@ -29,6 +34,23 @@ function scrcpyStreamUrl(base: string, udid: string): string {
     return base;
   }
 }
+
+// Só aceita http(s) como src de iframe. `url`/`viewUrl` vêm de env de build e da resposta da API —
+// não são 100% confiáveis de ponta a ponta; isto barra `javascript:`/`data:` antes de virar src.
+function safeEmbedUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw, window.location.href);
+    return u.protocol === "http:" || u.protocol === "https:" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+// Iframe de tela embutida (ws-scrcpy/noVNC) com superfície mínima: `sandbox` permite só o necessário
+// pro mirror funcionar (scripts + acesso à própria origem) e `allow` concede apenas clipboard.
+const PHONE_IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms";
+const PHONE_IFRAME_ALLOW = "clipboard-write";
 
 export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDisconnect }: LivePhoneScreenProps) {
   // ws-scrcpy do LDPlayer/emulador: abre direto na tela do device; maquete/noVNC: embute a url como está.
@@ -39,7 +61,7 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
   // Servidor (PHONE_VIEW_URL setado): embute o Android AUTOMATICAMENTE — abre sozinho, sem clique e sem
   // cair no QR quando desconectado (é desconectado que você precisa ver a tela pra instalar/registrar).
   // Local (url vazia): começa null → mostra o QR/identidade. "Desligar tela" zera; o usuário reabre.
-  const [embed, setEmbed] = useState<string | null>(androidUrl || null);
+  const [embed, setEmbed] = useState<string | null>(safeEmbedUrl(androidUrl));
   const [showServer, setShowServer] = useState(false);
 
   const refreshIdent = useCallback(async () => {
@@ -67,7 +89,8 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
             className="phone-stage"
             src={embed}
             title="Android real"
-            allow="clipboard-write; camera; microphone"
+            sandbox={PHONE_IFRAME_SANDBOX}
+            allow={PHONE_IFRAME_ALLOW}
           />
         ) : connected ? (
           <div className="phone-stage phone-off">
@@ -76,7 +99,7 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
             <p className="phone-ident-phone">{ident?.phone ?? "—"}</p>
             <span className="phone-badge ok">conectado</span>
             {url && (
-              <button type="button" className="phone-activate" onClick={() => setEmbed(androidUrl)}>
+              <button type="button" className="phone-activate" onClick={() => setEmbed(safeEmbedUrl(androidUrl))}>
                 Mostrar tela do Android
               </button>
             )}
@@ -90,7 +113,7 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           // Desconectado: o QR de conexão fica DENTRO da tela do aparelho (imersivo) — você escaneia
           // como se o "celular" estivesse mostrando o QR. A tela rola internamente se precisar.
           <div className="phone-stage phone-off phone-connect-screen">
-            <WhatsAppConnect onConnected={() => void refreshIdent()} />
+            <WhatsAppConnect onConnected={refreshIdent} />
           </div>
         )}
       </div>
@@ -249,7 +272,7 @@ function ServerAndroidPanel({ url }: { url: string }) {
       {embed ? (
         <div className="phone-device">
           <div className="phone-notch" />
-          <iframe className="phone-stage" src={embed} title="Android real (servidor)" allow="clipboard-write; camera; microphone" />
+          <iframe className="phone-stage" src={embed} title="Android real (servidor)" sandbox={PHONE_IFRAME_SANDBOX} allow={PHONE_IFRAME_ALLOW} />
         </div>
       ) : (
         <p className="phone-off-hint">
@@ -259,7 +282,7 @@ function ServerAndroidPanel({ url }: { url: string }) {
 
       <div className="phone-footer">
         {running ? (
-          <button type="button" className="phone-activate" onClick={() => setEmbed(viewUrl)} disabled={!viewUrl}>
+          <button type="button" className="phone-activate" onClick={() => setEmbed(safeEmbedUrl(viewUrl))} disabled={!viewUrl}>
             Mostrar tela
           </button>
         ) : state === "not_created" ? (

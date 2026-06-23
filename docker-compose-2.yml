@@ -178,9 +178,11 @@ services:
         VITE_API_URL: "http://localhost:5081"
         # Identifica a aba do navegador como "MtrxSys B" pra distinguir do Stack 1.
         VITE_APP_LABEL: "B"
-        # Aba "Celular": padrão = maquete fake (localhost:3001). Num host com KVM, aponte pro
-        # Android REAL (noVNC do docker-android): PHONE_VIEW_URL_2=http://localhost:6081
-        VITE_EMULATOR_URL: ${PHONE_VIEW_URL_2:-http://localhost:3001}
+        # Aba "Celular": tela embutível opcional. VAZIO (padrão) = aba mostra só a identidade WAHA
+        # (o aparelho virtual real). Maquete fake: PHONE_VIEW_URL_2=http://localhost:3001. Android
+        # local (Windows, instável): PHONE_VIEW_URL_2=http://localhost:8001 + PHONE_VIEWER_KIND_2=scrcpy.
+        # Host com KVM (noVNC do docker-android): PHONE_VIEW_URL_2=http://localhost:6081.
+        VITE_EMULATOR_URL: ${PHONE_VIEW_URL_2:-}
     container_name: mtrx2-web
     ports:
       - "5174:80"
