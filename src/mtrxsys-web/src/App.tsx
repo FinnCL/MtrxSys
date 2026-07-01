@@ -105,11 +105,18 @@ function Shell() {
     return () => clearInterval(id);
   }, [user, checkWaha]);
 
-  // Sem o gate bloqueante: na 1ª detecção de "desconectado", manda pra aba "Celular" (a conexão/QR
-  // vive lá). Depois disso o usuário navega livre.
+  // Decide a vista inicial UMA vez, na 1ª leitura CONCLUSIVA do status (null = ainda checando).
+  // Abriu desconectado → manda pro QR (aba Celular, onde a conexão vive). Abriu conectado → NÃO
+  // redireciona em quedas posteriores: um blip transitório (status "Starting" no meio, ou um poll
+  // que falhou) não pode te ARRANCAR da tela em que você está — era o bug de "iniciar disparo volta
+  // pra Celular e o QR aparece" (um blip do status trocava a aba no meio do disparo). Queda real
+  // mid-sessão continua visível pela UI (o botão "Sincronizar" some), sem trocar a aba à força.
   useEffect(() => {
-    if (wahaWorking === false && !didInitViewRef.current) {
-      didInitViewRef.current = true;
+    if (wahaWorking === null || didInitViewRef.current) {
+      return;
+    }
+    didInitViewRef.current = true;
+    if (wahaWorking === false) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setView("phone");
     }

@@ -85,14 +85,15 @@ public sealed class WahaProxyConfigE2ETests
     }
 
     [Fact]
-    public async Task EnsureWebhook_grava_proxy_e_religa_quando_o_proxy_muda()
+    public async Task EnsureWebhook_grava_proxy_e_religa_quando_SCAN_QR_CODE()
     {
-        // Sessão existente SEM proxy e SEM o webhook -> espera PUT com proxy+webhook e um restart.
+        // SÓ em SCAN_QR_CODE (pareando, SEM conta) é seguro aplicar proxy -> PUT com proxy+webhook e
+        // um restart. O pareamento (QR) acontece já pelo proxy, sem salto de IP numa conta existente.
         var (client, handler) = Build(ProxyOpts(), req =>
         {
             if (req.Method == HttpMethod.Get)
             {
-                return (HttpStatusCode.OK, """{ "name":"default","status":"WORKING","config":{ "webhooks":[] } }""");
+                return (HttpStatusCode.OK, """{ "name":"default","status":"SCAN_QR_CODE","config":{ "webhooks":[] } }""");
             }
             return (HttpStatusCode.OK, "{}");
         });
@@ -105,8 +106,53 @@ public sealed class WahaProxyConfigE2ETests
         put.Body.Should().Contain("\"proxy\"");
         put.Body.Should().Contain("br.decodo.com:10001");
         put.Body.Should().Contain("http://api:8080/webhooks/waha");
-        // Proxy passou de "nenhum" para "setado" -> religa a sessão pra valer na reconexão (sem QR).
+        // SCAN_QR_CODE -> religar é seguro (o chip pareia já pelo proxy).
         handler.Calls.Should().ContainSingle(c => c.Method == "POST" && c.Path == "/api/sessions/default/restart");
+    }
+
+    [Fact]
+    public async Task EnsureWebhook_NAO_toca_proxy_de_chip_pareado_em_STOPPED()
+    {
+        // Chip JÁ pareado que caiu pra STOPPED (blip / recreate da api): NÃO aplicar proxy nem religar.
+        // Religar uma conta pareada (mesmo parada) por outro IP -> reconecta por IP novo -> RESTRIÇÃO.
+        // Só o webhook é garantido (PUT sem proxy). Era o furo do guard "≠ Working": Stopped escapava.
+        var (client, handler) = Build(ProxyOpts(), req =>
+        {
+            if (req.Method == HttpMethod.Get)
+            {
+                return (HttpStatusCode.OK, """{ "name":"default","status":"STOPPED","config":{ "webhooks":[] } }""");
+            }
+            return (HttpStatusCode.OK, "{}");
+        });
+
+        await client.EnsureWebhookConfiguredAsync(
+            "default", "http://api:8080/webhooks/waha", ["message"], null, CancellationToken.None);
+
+        var put = handler.Calls.Single(c => c.Method == "PUT" && c.Path == "/api/sessions/default");
+        put.Body.Should().NotContain("\"proxy\""); // webhook garantido, mas SEM proxy
+        handler.Calls.Should().NotContain(c => c.Path.EndsWith("/restart", StringComparison.Ordinal)); // e sem religar
+    }
+
+    [Fact]
+    public async Task EnsureWebhook_NAO_toca_sessao_WORKING_ao_mudar_proxy()
+    {
+        // Sessão JÁ CONECTADA (WORKING) com o webhook já presente e proxy diferente do desejado:
+        // NADA é feito — nem PUT (não enviar proxy pra conta viva; até o PUT pode reconectar) nem
+        // restart. Mudar o proxy de uma conta viva a faz reconectar por outro IP/ASN -> o WhatsApp
+        // trata como fraude -> logout + RESTRIÇÃO. O proxy só é aplicado num (re)pareamento (não-Working).
+        var (client, handler) = Build(ProxyOpts(), req => (HttpStatusCode.OK, """
+            {
+              "name":"default","status":"WORKING",
+              "config":{ "webhooks":[ { "url":"http://api:8080/webhooks/waha" } ] }
+            }
+            """));
+
+        var ok = await client.EnsureWebhookConfiguredAsync(
+            "default", "http://api:8080/webhooks/waha", ["message"], null, CancellationToken.None);
+
+        ok.Should().BeTrue();
+        handler.Calls.Should().NotContain(c => c.Method == "PUT"); // nem grava o proxy
+        handler.Calls.Should().NotContain(c => c.Path.EndsWith("/restart", StringComparison.Ordinal)); // nem religa
     }
 
     [Fact]

@@ -69,8 +69,17 @@ O WhatsApp **NÃO bane IP. Ele bane o CHIP (o número).** O IP é só o "fio" qu
    # ...
    ```
 
-3. No startup, a `api` injeta o proxy no **config da sessão** do WAHA e **religa a sessão** (reusa
-   a auth salva — SEM QR), pra o chip reconectar pelo IP do proxy. Variável vazia = sem proxy.
+3. O proxy é aplicado **só quando a sessão está pareando (`SCAN_QR_CODE`)** ou na **criação** da
+   sessão — nunca num chip que já tem conta (ver aviso). Variável vazia = sem proxy.
+
+> ⚠️ **NUNCA aplique proxy num chip que JÁ tem conta pareada.** Reconectar uma conta por um IP/ASN
+> diferente do que ela foi pareada faz o WhatsApp tratar como fraude → **logout + RESTRIÇÃO da
+> conta** (comprovado). Por isso a `api` só toca no proxy quando a sessão está em `SCAN_QR_CODE`
+> (pareando, sem conta). Um chip pareado que só **caiu** (`STOPPED`/`STARTING`/`FAILED`) **também
+> não é tocado** — senão o auto-start o religaria pelo proxy e restringiria (só o webhook é
+> garantido). O jeito CERTO é **parear (QR) já com o proxy configurado desde o início** — a conta
+> "nasce" no IP do proxy e nunca salta. Para pôr proxy num chip já pareado sem proxy: **desconecte
+> e re-pareie** por QR (aí a nova conexão acontece pelo proxy).
 
 ### Como funciona por baixo
 > ⚠️ **NÃO use a env var `WHATSAPP_PROXY_SERVER` do WAHA.** Comprovado empiricamente: o WAHA

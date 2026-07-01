@@ -186,27 +186,41 @@ internal sealed class WahaSessionClient(WahaHttp http)
         var desiredProxy = http.NormalizedProxyServer();
         var currentProxy = WahaParsing.CurrentProxyServer(root);
         var proxyMatches = string.Equals(desiredProxy, currentProxy, StringComparison.OrdinalIgnoreCase);
+        // Status atual da sessão: NÃO religamos uma conta JÁ CONECTADA só pra aplicar proxy (ver abaixo).
+        var currentStatus = root.TryGetProperty("status", out var statusEl)
+            ? WahaParsing.ParseStatus(statusEl.GetString())
+            : WahaSessionStatus.Unknown;
 
-        // Nada a fazer: webhook já no lugar e proxy já bate (inclusive ambos ausentes).
-        if (webhookPresent && proxyMatches)
+        // Só é SEGURO aplicar proxy quando a sessão está SCAN_QR_CODE — o único estado em que NÃO há
+        // conta pareada a perturbar. Em QUALQUER outro estado (Working, mas TAMBÉM Stopped/Starting/
+        // Failed de um chip JÁ pareado que só caiu), aplicar o proxy faz a conta reconectar por outro
+        // IP/ASN → o WhatsApp trata como fraude → LOGOUT + RESTRIÇÃO (comprovado). Antes o guard era
+        // "≠ Working", mas um chip pareado em Stopped (auto-start / recreate da api) escapava e era
+        // religado pelo proxy. Sessão NOVA já nasce com o proxy no CreateSessionAsync; aqui é só o QR.
+        // Logo: se o webhook já está lá e não estamos em SCAN_QR_CODE, nada a fazer com segurança.
+        if (webhookPresent && (proxyMatches || currentStatus != WahaSessionStatus.ScanQrCode))
         {
             return true;
         }
 
-        // PUT substitui o config — então mandamos webhook E proxy juntos, pra um não apagar o outro.
+        // Aplica o proxy SÓ em SCAN_QR_CODE (pareando, sem conta). Em qualquer outro estado o PUT leva
+        // SÓ o webhook (o proxy fica de fora) — nunca enviamos proxy pra uma sessão que possa ter conta
+        // pareada, porque até o PUT pode fazer o WAHA reconectar. O PUT substitui o config, então
+        // mandamos webhook e (quando permitido) proxy juntos, pra um não apagar o outro.
         var proxy = http.ProxyConfigOrNull();
-        object config = proxy is null
-            ? new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken) }
-            : new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken), proxy };
+        var applyProxy = proxy is not null && currentStatus == WahaSessionStatus.ScanQrCode;
+        object config = applyProxy
+            ? new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken), proxy }
+            : new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken) };
 
         using var putReq = http.NewRequest(HttpMethod.Put, $"api/sessions/{WahaHttp.Esc(sessionId)}");
         putReq.Content = JsonContent.Create(new { name = sessionId, config }, options: WahaHttp.Json);
         using var putResp = await http.SendAsync(putReq, ct);
         putResp.EnsureSuccessStatusCode();
 
-        // Proxy mudou: religa a sessão (reusa a auth salva — SEM QR) pra o chip reconectar pelo IP
-        // novo. Melhor-esforço: uma sessão sem auth/instável que recuse o restart não trava o startup.
-        if (!proxyMatches)
+        // Religa só quando de fato aplicamos um proxy novo (implica sessão não-Working) — aí o chip
+        // reconecta/pareia já pelo proxy, sem salto de IP numa conta viva.
+        if (applyProxy && !proxyMatches)
         {
             await TryRestartForProxyAsync(sessionId, ct);
         }
