@@ -34,6 +34,10 @@ public static class DependencyInjection
         services.AddOptions<OptOutOptions>().Bind(config.GetSection(OptOutOptions.SectionName));
         services.AddOptions<WahaOptions>()
             .Bind(config.GetSection(WahaOptions.SectionName))
+            // Fonte única do token: reusa Webhooks:WahaToken (o mesmo que a API valida no endpoint),
+            // pra não duplicar o segredo numa Waha:WebhookToken separada. Só sobrepõe se não veio
+            // explicitamente na seção Waha. Assim o WahaClient grava o customHeader na sessão do WAHA.
+            .PostConfigure(o => o.WebhookToken ??= config["Webhooks:WahaToken"])
             .ValidateDataAnnotations()
             .ValidateOnStart();
         services.AddOptions<JwtOptions>()

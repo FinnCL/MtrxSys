@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: ${PG2_PASS:-mtrx}
       TZ: UTC
     ports:
-      - "5433:5432"
+      - "${MTRX_BIND:-127.0.0.1}:5433:5432"
     volumes:
       - pgdata2:/var/lib/postgresql/data
     healthcheck:
@@ -38,7 +38,7 @@ services:
     image: redis:7-alpine
     container_name: mtrx2-redis
     ports:
-      - "6380:6379"
+      - "${MTRX_BIND:-127.0.0.1}:6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -62,7 +62,7 @@ services:
     image: ${WAHA_IMAGE:-mtrxsys-waha-emulator:latest}
     container_name: mtrx2-waha
     ports:
-      - "3001:3000"
+      - "${MTRX_BIND:-127.0.0.1}:3001:3000"
     environment:
       TZ: UTC
       # Lidas SÓ pelo emulador (o WAHA real ignora). Chip B com número/identidade próprios.
@@ -104,7 +104,7 @@ services:
       dockerfile: src/MtrxSys.Api/Dockerfile
     container_name: mtrx2-api
     ports:
-      - "5081:8080"
+      - "${MTRX_BIND:-127.0.0.1}:5081:8080"
     environment:
       TZ: UTC
       ASPNETCORE_ENVIRONMENT: Production
@@ -185,7 +185,7 @@ services:
         VITE_EMULATOR_URL: ${PHONE_VIEW_URL_2:-}
     container_name: mtrx2-web
     ports:
-      - "5174:80"
+      - "${MTRX_BIND:-127.0.0.1}:5174:80"
     depends_on:
       api:
         condition: service_healthy
@@ -204,7 +204,7 @@ services:
       EMULATOR_DEVICE: "Samsung Galaxy S10"   # nome suportado pela emulator_14.0 ("Pixel 6" NÃO é)
       WEB_VNC: "true"
     ports:
-      - "6081:6080"
+      - "${MTRX_BIND:-127.0.0.1}:6081:6080"
     volumes:
       - android-data2:/home/androidusr
     restart: unless-stopped
@@ -216,7 +216,7 @@ services:
     image: nginx:alpine
     container_name: mtrx-landing
     ports:
-      - "5175:80"
+      - "${MTRX_BIND:-127.0.0.1}:5175:80"
     volumes:
       - ./landing:/usr/share/nginx/html:ro
     restart: unless-stopped

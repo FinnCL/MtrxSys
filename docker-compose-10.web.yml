@@ -10,7 +10,7 @@ services:
       target: dev
     # Vite na MESMA porta publicada (5183) pro websocket de HMR bater certo.
     ports: !override
-      - "5183:5183"
+      - "${MTRX_BIND:-127.0.0.1}:5183:5183"
     volumes:
       - ./src/mtrxsys-web:/app
       - /app/node_modules

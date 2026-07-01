@@ -19,6 +19,12 @@ public sealed class WahaOptions
 
     public string[] WebhookEvents { get; set; } = ["message", "message.any"];
 
+    // Token do webhook (header X-Webhook-Token). Preenchido a partir de Webhooks:WahaToken (fonte
+    // única — o mesmo token que a API valida no /webhooks/waha). Quando presente, é gravado no
+    // config da sessão como customHeader, pra o WAHA REAL enviá-lo em cada callback. Sem isso o
+    // WAHA nunca manda o header e a validação do endpoint rejeitaria todo inbound (inclusive SAIR).
+    public string? WebhookToken { get; set; }
+
     // Proxy por chip (anti-correlação de IP). Aplicado no CONFIG DA SESSÃO via API do WAHA —
     // NÃO na env var WHATSAPP_PROXY_SERVER, que o WAHA 2026.x (CORE/NOWEB) IGNORA silenciosamente
     // (comprovado: a sessão conecta direto pelo IP da máquina). Vazio = sem proxy (sai pela máquina).

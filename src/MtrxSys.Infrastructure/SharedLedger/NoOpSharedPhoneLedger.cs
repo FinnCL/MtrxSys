@@ -11,7 +11,8 @@ public sealed class NoOpSharedPhoneLedger : ISharedPhoneLedger
     public bool IsEnabled => false;
     public bool IsEnforcing => false;
 
-    public Task<bool> IsSuppressedAsync(string phoneE164, CancellationToken ct) => Task.FromResult(false);
+    public Task<SharedLedgerStatus> GetStatusAsync(string phoneE164, CancellationToken ct)
+        => Task.FromResult(SharedLedgerStatus.None);
 
     public Task<IReadOnlySet<string>> GetSuppressedAsync(IReadOnlyCollection<string> phonesE164, CancellationToken ct)
         => Task.FromResult(Empty);

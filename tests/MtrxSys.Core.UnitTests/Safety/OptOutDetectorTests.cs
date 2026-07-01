@@ -19,6 +19,10 @@ public sealed class OptOutDetectorTests
     [InlineData("sair por favor")]
     [InlineData("quero parar")]
     [InlineData("pode cancelar")]
+    // comando + objeto genérico/intenção numa resposta curta continua sendo opt-out
+    [InlineData("pode cancelar tudo")]
+    [InlineData("cancela minha inscricao")]
+    [InlineData("pare tudo")]
     // acento e frases
     [InlineData("não quero receber mais mensagens")]
     [InlineData("para de mandar isso")]
@@ -41,6 +45,12 @@ public sealed class OptOutDetectorTests
     [InlineData("Tenho interesse, me conta mais")]
     // palavra ambígua dentro de frase longa não dispara
     [InlineData("vou sair mais tarde de casa hoje")]
+    // comando + OBJETO concreto: o comando é sobre o objeto, não descadastro → não dispara
+    [InlineData("pare o audio")]
+    [InlineData("sair do grupo")]
+    [InlineData("cancela o video")]
+    // negação inverte o sentido (o opt-out negado real "nao quero mais" cai nas Phrases)
+    [InlineData("nao quero sair")]
     // "para" é preposição: respostas curtas de lead interessado NÃO podem virar opt-out
     [InlineData("é para hoje?")]
     [InlineData("para qual cidade")]

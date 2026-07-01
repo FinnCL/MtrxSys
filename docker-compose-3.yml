@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: ${PG3_PASS:-mtrx}
       TZ: UTC
     ports:
-      - "5434:5432"
+      - "${MTRX_BIND:-127.0.0.1}:5434:5432"
     volumes:
       - pgdata3:/var/lib/postgresql/data
     healthcheck:
@@ -38,7 +38,7 @@ services:
     image: redis:7-alpine
     container_name: mtrx3-redis
     ports:
-      - "6381:6379"
+      - "${MTRX_BIND:-127.0.0.1}:6381:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -50,7 +50,7 @@ services:
     image: devlikeapro/waha:latest
     container_name: mtrx3-waha
     ports:
-      - "3002:3000"
+      - "${MTRX_BIND:-127.0.0.1}:3002:3000"
     environment:
       TZ: UTC
       # Engine NOWEB (sem Chromium) — ver docker-compose.yml. Reparear o chip após a troca.
@@ -85,7 +85,7 @@ services:
       dockerfile: src/MtrxSys.Api/Dockerfile
     container_name: mtrx3-api
     ports:
-      - "5082:8080"
+      - "${MTRX_BIND:-127.0.0.1}:5082:8080"
     environment:
       TZ: UTC
       ASPNETCORE_ENVIRONMENT: Production
@@ -166,7 +166,7 @@ services:
         VITE_APP_LABEL: "C"
     container_name: mtrx3-web
     ports:
-      - "5176:80"
+      - "${MTRX_BIND:-127.0.0.1}:5176:80"
     depends_on:
       api:
         condition: service_healthy

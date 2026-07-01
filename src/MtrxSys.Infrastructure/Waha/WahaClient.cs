@@ -48,8 +48,9 @@ internal sealed class WahaClient : IWahaClient
         _session.GetQrRawAsync(sessionId, ct);
     public Task<string> RequestPairingCodeAsync(string sessionId, string phoneNumber, CancellationToken ct) =>
         _session.RequestPairingCodeAsync(sessionId, phoneNumber, ct);
-    public Task<bool> EnsureWebhookConfiguredAsync(string sessionId, string webhookUrl, IReadOnlyList<string> events, CancellationToken ct) =>
-        _session.EnsureWebhookConfiguredAsync(sessionId, webhookUrl, events, ct);
+    public Task<bool> EnsureWebhookConfiguredAsync(
+        string sessionId, string webhookUrl, IReadOnlyList<string> events, string? webhookToken, CancellationToken ct) =>
+        _session.EnsureWebhookConfiguredAsync(sessionId, webhookUrl, events, webhookToken, ct);
 
     // Mensagens
     public Task<IReadOnlyList<WahaChat>> ListChatsOverviewAsync(string sessionId, int limit, CancellationToken ct) =>

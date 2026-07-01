@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: ${PG4_PASS:-mtrx}
       TZ: UTC
     ports:
-      - "5435:5432"
+      - "${MTRX_BIND:-127.0.0.1}:5435:5432"
     volumes:
       - pgdata4:/var/lib/postgresql/data
     healthcheck:
@@ -38,7 +38,7 @@ services:
     image: redis:7-alpine
     container_name: mtrx4-redis
     ports:
-      - "6382:6379"
+      - "${MTRX_BIND:-127.0.0.1}:6382:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -50,7 +50,7 @@ services:
     image: devlikeapro/waha:latest
     container_name: mtrx4-waha
     ports:
-      - "3003:3000"
+      - "${MTRX_BIND:-127.0.0.1}:3003:3000"
     environment:
       TZ: UTC
       # Engine NOWEB (sem Chromium) — ver docker-compose.yml. Reparear o chip após a troca.
@@ -85,7 +85,7 @@ services:
       dockerfile: src/MtrxSys.Api/Dockerfile
     container_name: mtrx4-api
     ports:
-      - "5083:8080"
+      - "${MTRX_BIND:-127.0.0.1}:5083:8080"
     environment:
       TZ: UTC
       ASPNETCORE_ENVIRONMENT: Production
@@ -166,7 +166,7 @@ services:
         VITE_APP_LABEL: "D"
     container_name: mtrx4-web
     ports:
-      - "5177:80"
+      - "${MTRX_BIND:-127.0.0.1}:5177:80"
     depends_on:
       api:
         condition: service_healthy

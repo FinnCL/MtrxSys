@@ -35,6 +35,23 @@ public static class OptOutDetector
         "remover meu", "cancelar inscricao", "sem mensagens", "para de enviar",
     ];
 
+    // "Bloqueadores" numa resposta curta: se aparecem junto do comando, ele NÃO é opt-out.
+    //  • Objetos concretos ("pare o AUDIO", "sair do GRUPO", "cancela a FOTO"): o comando se refere
+    //    ao objeto, não ao descadastro.
+    //  • Negação ("NAO quero sair", "NUNCA vou parar"): inverte o sentido. Opt-out negado real
+    //    ("nao quero mais", "nao quero receber") já é pego pelas Phrases antes de chegar aqui.
+    // Fora esses casos, favorecemos DETECTAR o opt-out (é sagrado; perder um gera spam/ban/LGPD) —
+    // "pode cancelar tudo", "cancela minha inscricao", "pare tudo" continuam disparando.
+    private static readonly HashSet<string> ShortReplyBlockers = new(StringComparer.Ordinal)
+    {
+        // objetos concretos
+        "audio", "audios", "video", "videos", "foto", "fotos", "imagem", "imagens",
+        "figurinha", "figurinhas", "grupo", "grupos", "musica", "som", "ligacao",
+        "chamada", "arquivo", "link", "pdf",
+        // negação
+        "nao", "nunca", "jamais", "nem",
+    };
+
     public static bool IsOptOut(string? body)
     {
         if (string.IsNullOrWhiteSpace(body))
@@ -56,17 +73,31 @@ public static class OptOutDetector
             }
         }
 
-        // Comando isolado numa resposta curta (até 3 palavras): "SAIR", "sair por favor",
-        // "quero parar", "SAIR 🙏". Em mensagens longas não dispara pela palavra solta.
+        // Comando numa resposta curta (até 3 palavras): "SAIR", "sair por favor", "quero parar",
+        // "pode cancelar", "cancela minha inscricao", "SAIR 🙏". Dispara o opt-out A MENOS QUE apareça
+        // um bloqueador (objeto concreto ou negação), que muda o sentido do comando — "pare o audio",
+        // "sair do grupo", "nao quero sair". Em mensagens longas (>3 palavras) a palavra solta não
+        // dispara: só as Phrases explícitas acima. Favorece detectar (opt-out é sagrado), sem os
+        // falsos-positivos claros de objeto/negação.
         var words = norm.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length <= ShortReplyMaxWords)
         {
+            var hasCommand = false;
+            var hasBlocker = false;
             foreach (var w in words)
             {
                 if (Commands.Contains(w))
                 {
-                    return true;
+                    hasCommand = true;
                 }
+                else if (ShortReplyBlockers.Contains(w))
+                {
+                    hasBlocker = true;
+                }
+            }
+            if (hasCommand && !hasBlocker)
+            {
+                return true;
             }
         }
 

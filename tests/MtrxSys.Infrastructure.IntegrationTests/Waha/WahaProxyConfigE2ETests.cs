@@ -98,7 +98,7 @@ public sealed class WahaProxyConfigE2ETests
         });
 
         var ok = await client.EnsureWebhookConfiguredAsync(
-            "default", "http://api:8080/webhooks/waha", ["message", "message.any"], CancellationToken.None);
+            "default", "http://api:8080/webhooks/waha", ["message", "message.any"], null, CancellationToken.None);
 
         ok.Should().BeTrue();
         var put = handler.Calls.Single(c => c.Method == "PUT" && c.Path == "/api/sessions/default");
@@ -119,7 +119,7 @@ public sealed class WahaProxyConfigE2ETests
                 : (HttpStatusCode.OK, "{}"));
 
         await client.EnsureWebhookConfiguredAsync(
-            "default", "http://api:8080/webhooks/waha", ["message"], CancellationToken.None);
+            "default", "http://api:8080/webhooks/waha", ["message"], null, CancellationToken.None);
 
         var put = handler.Calls.Single(c => c.Method == "PUT" && c.Path == "/api/sessions/default");
         put.Body.Should().NotContain("\"proxy\"");
@@ -141,7 +141,7 @@ public sealed class WahaProxyConfigE2ETests
             """));
 
         var ok = await client.EnsureWebhookConfiguredAsync(
-            "default", "http://api:8080/webhooks/waha", ["message"], CancellationToken.None);
+            "default", "http://api:8080/webhooks/waha", ["message"], null, CancellationToken.None);
 
         ok.Should().BeTrue();
         handler.Calls.Should().NotContain(c => c.Method == "PUT");

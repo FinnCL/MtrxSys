@@ -1,0 +1,9 @@
+# Override SÓ do Stack A — o docker-compose.yml (A) é o único que NÃO expõe
+# Seed__Admin__* por env (os stacks B..J já expõem via SEED{N}_ADMIN_*). Sem isto,
+# o admin do ambiente A ficaria no default de dev (admin@local / admin123!).
+services:
+  api:
+    environment:
+      Seed__Admin__Email: "${SEED_ADMIN_EMAIL:-admin-a@local}"
+      Seed__Admin__Password: "${SEED_ADMIN_PASS:-admin123!}"
+      Seed__Admin__DisplayName: "${SEED_ADMIN_NAME:-Admin Chip A}"

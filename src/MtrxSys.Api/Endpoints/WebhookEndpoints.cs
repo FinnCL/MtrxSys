@@ -22,12 +22,28 @@ public static class WebhookEndpoints
             HttpContext http,
             IWebhookIngestionService ingestion,
             IOptions<WebhookOptions> opts,
+            IHostEnvironment env,
             ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
             var logger = loggerFactory.CreateLogger("WahaWebhook");
             var configured = opts.Value.WahaToken;
-            if (!string.IsNullOrWhiteSpace(configured))
+            if (string.IsNullOrWhiteSpace(configured))
+            {
+                // FAIL-CLOSED fora de Development: sem token, o endpoint ficaria aberto — qualquer um
+                // que adivinhe o formato forjaria um "SAIR" e daria opt-out global/irreversível de uma
+                // vítima. Recusa em QUALQUER ambiente que não seja Development (Production, Staging ou
+                // um nome custom) até configurar Webhooks:WahaToken (WAHA_HOOK_TOKEN). Só o dev/emulador
+                // local segue aberto pra facilitar o loop.
+                if (!env.IsDevelopment())
+                {
+                    logger.LogError(
+                        "Webhook SEM token fora de Development (Webhooks:WahaToken vazio) — inbound rejeitado. "
+                        + "Defina WAHA_HOOK_TOKEN pra o WAHA assinar os callbacks.");
+                    return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+                }
+            }
+            else
             {
                 var received = http.Request.Headers["X-Webhook-Token"].ToString();
                 if (!IsTokenValid(received, configured))

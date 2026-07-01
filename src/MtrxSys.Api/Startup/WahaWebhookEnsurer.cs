@@ -23,7 +23,8 @@ public static class WahaWebhookEnsurer
 
         try
         {
-            var ok = await client.EnsureWebhookConfiguredAsync(dispatch.SessionId, hookUrl, waha.WebhookEvents, ct);
+            var ok = await client.EnsureWebhookConfiguredAsync(
+                dispatch.SessionId, hookUrl, waha.WebhookEvents, waha.WebhookToken, ct);
             if (ok)
             {
                 logger.LogInformation("WAHA session {Session} webhook ensured at {Url}", dispatch.SessionId, hookUrl);

@@ -1,4 +1,5 @@
 using FluentAssertions;
+using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Infrastructure.SharedLedger;
 using Xunit;
 
@@ -19,8 +20,8 @@ public sealed class NoOpSharedPhoneLedgerTests
     }
 
     [Fact]
-    public async Task IsSuppressed_is_always_false()
-        => (await _ledger.IsSuppressedAsync(Phone, CancellationToken.None)).Should().BeFalse();
+    public async Task GetStatus_is_always_none()
+        => (await _ledger.GetStatusAsync(Phone, CancellationToken.None)).Should().Be(SharedLedgerStatus.None);
 
     [Fact]
     public async Task GetSuppressed_is_always_empty()

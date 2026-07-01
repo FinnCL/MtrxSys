@@ -148,7 +148,7 @@ public static class WahaEndpoints
         }
         try
         {
-            await waha.EnsureWebhookConfiguredAsync(sessionId, hookUrl, opts.WebhookEvents, ct);
+            await waha.EnsureWebhookConfiguredAsync(sessionId, hookUrl, opts.WebhookEvents, opts.WebhookToken, ct);
             log.LogInformation("Webhook ensured at {Url}", hookUrl);
         }
 #pragma warning disable CA1031

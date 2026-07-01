@@ -1,0 +1,19 @@
+# Reverse proxy HTTPS (TLS automático via Let's Encrypt). network_mode: host pra
+# alcançar as portas publicadas em 127.0.0.1 pelos 10 stacks e ligar 80/443 no host.
+# Sobe por último (depois dos 10 + landing gerada):
+#   bash deploy/gen-config.sh && docker compose -f deploy/docker-compose.caddy.yml up -d
+name: mtrx-caddy
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: mtrx-caddy
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro      # gerado por deploy/gen-config.sh
+      - ./landing:/srv/landing:ro                # landing reescrita p/ as URLs de prod
+      - caddy-data:/data                         # certificados (persistente!)
+      - caddy-config:/config
+volumes:
+  caddy-data:
+  caddy-config:

@@ -163,7 +163,8 @@ internal sealed class WahaSessionClient(WahaHttp http)
         return dto?.Code ?? string.Empty;
     }
 
-    public async Task<bool> EnsureWebhookConfiguredAsync(string sessionId, string webhookUrl, IReadOnlyList<string> events, CancellationToken ct)
+    public async Task<bool> EnsureWebhookConfiguredAsync(
+        string sessionId, string webhookUrl, IReadOnlyList<string> events, string? webhookToken, CancellationToken ct)
     {
         using var getReq = http.NewRequest(HttpMethod.Get, $"api/sessions/{WahaHttp.Esc(sessionId)}?all=true");
         using var getResp = await http.SendAsync(getReq, ct);
@@ -176,7 +177,10 @@ internal sealed class WahaSessionClient(WahaHttp http)
         using var doc = await JsonDocument.ParseAsync(jsonStream, cancellationToken: ct);
         var root = doc.RootElement;
 
-        var webhookPresent = WahaParsing.WebhookPresent(root, webhookUrl);
+        // "Presente" exige a URL E — se há token — o customHeader X-Webhook-Token já gravado. Sem
+        // isso, uma sessão antiga com a URL mas sem o header nunca receberia o token (o WAHA não
+        // mandaria o header e o endpoint rejeitaria o inbound); forçamos o PUT pra aplicá-lo.
+        var webhookPresent = WahaParsing.WebhookConfigured(root, webhookUrl, webhookToken);
         // O proxy só vale na (re)conexão e SÓ pega via config de sessão (a env var WHATSAPP_PROXY_SERVER
         // é ignorada no WAHA 2026.x CORE/NOWEB — comprovado). Compara o que está gravado com o desejado.
         var desiredProxy = http.NormalizedProxyServer();
@@ -192,8 +196,8 @@ internal sealed class WahaSessionClient(WahaHttp http)
         // PUT substitui o config — então mandamos webhook E proxy juntos, pra um não apagar o outro.
         var proxy = http.ProxyConfigOrNull();
         object config = proxy is null
-            ? new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events) }
-            : new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events), proxy };
+            ? new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken) }
+            : new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken), proxy };
 
         using var putReq = http.NewRequest(HttpMethod.Put, $"api/sessions/{WahaHttp.Esc(sessionId)}");
         putReq.Content = JsonContent.Create(new { name = sessionId, config }, options: WahaHttp.Json);

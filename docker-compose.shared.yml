@@ -3,6 +3,14 @@
 #   docker compose -f docker-compose.shared.yml up -d
 # Os ambientes o alcançam via host.docker.internal:5440 (ver docker-compose-N.ledger.yml).
 # A tabela é criada pela própria aplicação (CREATE TABLE IF NOT EXISTS) no 1º uso.
+#
+# ⚠️ Bind: ao contrário dos demais serviços (loopback), este é ALCANÇADO POR CONTAINERS de OUTROS
+#    projetos compose via host.docker.internal (= IP do gateway da bridge, ex.: 172.17.0.1). Uma
+#    porta publicada só em 127.0.0.1 NÃO é alcançável por esse IP → o ledger cairia e o dedup/opt-out
+#    cross-ambiente quebraria em silêncio. Por isso o default é 0.0.0.0 (MTRX_LEDGER_BIND). Em
+#    produção, PROTEJA a 5440 pelo FIREWALL do host (só 80/443 abertos) — não a exponha à internet.
+#    Endurecimento ideal (follow-up): pôr shared + stacks numa rede docker comum e conectar por nome
+#    de serviço (dispensa host.docker.internal e permite loopback).
 name: mtrx-shared
 services:
   shared-postgres:
@@ -14,7 +22,8 @@ services:
       POSTGRES_PASSWORD: ${PG_PASS:-mtrx}
       TZ: UTC
     ports:
-      - "5440:5432"
+      # NÃO usa MTRX_BIND (loopback): precisa ser alcançável pelo gateway da bridge (ver cabeçalho).
+      - "${MTRX_LEDGER_BIND:-0.0.0.0}:5440:5432"
     volumes:
       - shared-pgdata:/var/lib/postgresql/data
     healthcheck:

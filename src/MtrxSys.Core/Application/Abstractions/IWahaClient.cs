@@ -41,7 +41,10 @@ public interface IWahaClient
     Task StartTypingAsync(string sessionId, string phoneOrChatId, CancellationToken ct);
     Task StopTypingAsync(string sessionId, string phoneOrChatId, CancellationToken ct);
 
-    Task<bool> EnsureWebhookConfiguredAsync(string sessionId, string webhookUrl, IReadOnlyList<string> events, CancellationToken ct);
+    // webhookToken (opcional): quando presente, é gravado como customHeader X-Webhook-Token na
+    // sessão, pra o WAHA enviá-lo em cada callback e passar na validação do endpoint.
+    Task<bool> EnsureWebhookConfiguredAsync(
+        string sessionId, string webhookUrl, IReadOnlyList<string> events, string? webhookToken, CancellationToken ct);
 }
 
 public enum WahaSessionStatus

@@ -8,7 +8,7 @@ services:
     # somar (o merge de listas é aditivo). Sem isso, a 5173 do host seria publicada
     # duas vezes (herdando "5173:80") → "port is already allocated".
     ports: !override
-      - "5173:5173"
+      - "${MTRX_BIND:-127.0.0.1}:5173:5173"
     volumes:
       - ./src/mtrxsys-web:/app
       - /app/node_modules

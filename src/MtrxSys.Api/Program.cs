@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using MtrxSys.Api.Endpoints;
@@ -47,6 +48,24 @@ builder.Services.AddCors(opts => opts.AddDefaultPolicy(p =>
 // falso "erro de CORS" mascarando o crash real. Com o handler (rodando DEPOIS do UseCors) a resposta
 // volta pelo CORS e mantém o header.
 builder.Services.AddProblemDetails();
+
+// Forwarded headers (X-Forwarded-For/Proto) do Caddy à frente. Restrito de propósito: só confia
+// em UM hop (o Caddy) e em fontes de rede PRIVADA/loopback — nunca num IP público. Atrás do Caddy
+// (network_mode: host → 127.0.0.1 → DNAT do Docker) a conexão chega pelo gateway da bridge (IP
+// variável), por isso liberamos por FAIXA privada em vez de IP fixo. Sem isto (ou com o
+// ASPNETCORE_FORWARDEDHEADERS_ENABLED cru), o app confiaria em X-Forwarded-For forjado de qualquer
+// origem, envenenando o IP logado (ex.: no webhook). Aplicado via UseForwardedHeaders no pipeline.
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    o.ForwardLimit = 1;
+    o.KnownProxies.Clear();
+    o.KnownIPNetworks.Clear();
+    o.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse("127.0.0.0"), 8));
+    o.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse("10.0.0.0"), 8));
+    o.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse("172.16.0.0"), 12));
+    o.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse("192.168.0.0"), 16));
+});
 
 var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
 var jwtOptions = jwtSection.Get<JwtOptions>() ?? new JwtOptions();
@@ -120,7 +139,8 @@ await using (var scope = app.Services.CreateAsyncScope())
             migrationLogger.LogWarning(ex,
                 "Banco indisponível (tentativa {Attempt}/{Max}); aguardando {Delay}s e tentando de novo.",
                 attempt, maxMigrationAttempts, migrationRetryDelay.TotalSeconds);
-            await Task.Delay(migrationRetryDelay);
+            // Observa o shutdown: um SIGTERM no meio do backoff encerra na hora, sem esperar os 4s.
+            await Task.Delay(migrationRetryDelay, app.Lifetime.ApplicationStopping);
         }
     }
 
@@ -128,13 +148,25 @@ await using (var scope = app.Services.CreateAsyncScope())
     await AdminSeeder.SeedAdminIfEmptyAsync(scope.ServiceProvider, seedLogger, default);
 
     var wahaLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("WahaSetup");
-    await WahaWebhookEnsurer.EnsureAsync(scope.ServiceProvider, wahaLogger, default);
+    // Teto no boot: se o WAHA aceita a conexão mas trava, o ensure (best-effort, ele mesmo engole
+    // erro) não pode pendurar a subida do Kestrel — corta em 20s e segue (o /status reaplica depois).
+    using var ensureCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+    await WahaWebhookEnsurer.EnsureAsync(scope.ServiceProvider, wahaLogger, ensureCts.Token);
 }
 
+// Cedo no pipeline, ANTES de CORS/auth: reescreve RemoteIpAddress/scheme a partir dos headers do
+// Caddy (restrito a redes privadas na config acima), pra logs e geração de links https corretos.
+app.UseForwardedHeaders();
 app.UseCors();
 app.UseExceptionHandler();
-app.UseOpenApi();
-app.UseSwaggerUi();
+
+// Swagger/OpenAPI só em Development: em produção o schema completo da API não fica servido a
+// anônimos (o Caddy também não roteia mais /swagger* — ver deploy/gen-config.sh).
+if (app.Environment.IsDevelopment())
+{
+    app.UseOpenApi();
+    app.UseSwaggerUi();
+}
 
 app.UseAuthentication();
 app.UseAuthorization();

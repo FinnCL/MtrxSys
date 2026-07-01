@@ -1,0 +1,13 @@
+# Override do Android (KVM) — limites de CPU/RAM por emulador (regra do scaling.md:
+# "um emulador não rouba o host dos outros 9"). Aplicado só na fase de ligar o
+# Android, em boot escalonado:
+#   docker compose -f docker-compose-N.yml -f deploy/docker-compose.android.yml \
+#                  --profile phone up -d android
+services:
+  android:
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "${ANDROID_CPUS:-2}"
+          memory: "${ANDROID_MEM:-4g}"

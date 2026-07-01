@@ -149,20 +149,42 @@ internal static class WahaParsing
         _ => ".bin",
     };
 
-    public static bool WebhookPresent(JsonElement root, string webhookUrl)
+    // Confere se a sessão já tem o webhook da URL configurado. Quando um token é esperado exige
+    // o customHeader X-Webhook-Token com o valor certo. Assim uma sessão antiga que tem a URL mas não
+    // o header (ou com token defasado) não é considerada "pronta" — força regravar o config.
+    public static bool WebhookConfigured(JsonElement root, string webhookUrl, string? token)
     {
-        if (root.TryGetProperty("config", out var cfg) &&
-            cfg.ValueKind == JsonValueKind.Object &&
-            cfg.TryGetProperty("webhooks", out var hooks) &&
-            hooks.ValueKind == JsonValueKind.Array)
+        if (!root.TryGetProperty("config", out var cfg) || cfg.ValueKind != JsonValueKind.Object ||
+            !cfg.TryGetProperty("webhooks", out var hooks) || hooks.ValueKind != JsonValueKind.Array)
         {
-            foreach (var entry in hooks.EnumerateArray())
+            return false;
+        }
+        foreach (var entry in hooks.EnumerateArray())
+        {
+            if (!entry.TryGetProperty("url", out var urlProp) ||
+                !string.Equals(urlProp.GetString(), webhookUrl, StringComparison.OrdinalIgnoreCase))
             {
-                if (entry.TryGetProperty("url", out var urlProp) &&
-                    string.Equals(urlProp.GetString(), webhookUrl, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                continue;
+            }
+            return string.IsNullOrWhiteSpace(token) || HasWebhookHeader(entry, "X-Webhook-Token", token);
+        }
+        return false;
+    }
+
+    private static bool HasWebhookHeader(JsonElement webhookEntry, string name, string value)
+    {
+        if (!webhookEntry.TryGetProperty("customHeaders", out var headers) || headers.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+        foreach (var h in headers.EnumerateArray())
+        {
+            if (h.TryGetProperty("name", out var n) &&
+                string.Equals(n.GetString(), name, StringComparison.OrdinalIgnoreCase) &&
+                h.TryGetProperty("value", out var v) &&
+                string.Equals(v.GetString(), value, StringComparison.Ordinal))
+            {
+                return true;
             }
         }
         return false;
@@ -183,15 +205,27 @@ internal static class WahaParsing
         return null;
     }
 
-    public static object[] BuildWebhooks(string webhookUrl, IReadOnlyList<string> events) =>
-    [
-        new
+    // Monta o config de webhook da sessão. Com token, adiciona o customHeader X-Webhook-Token pra o
+    // WAHA REAL enviá-lo em cada callback — sem isso o endpoint (que valida o token) rejeitaria todo
+    // inbound. Sem token, omite customHeaders (o endpoint então não exige — modo dev/aberto).
+    public static object[] BuildWebhooks(string webhookUrl, IReadOnlyList<string> events, string? token = null)
+    {
+        var retries = new { delaySeconds = 2, attempts = 3 };
+        if (string.IsNullOrWhiteSpace(token))
         {
-            url = webhookUrl,
-            events = events.ToArray(),
-            retries = new { delaySeconds = 2, attempts = 3 },
-        },
-    ];
+            return [new { url = webhookUrl, events = events.ToArray(), retries }];
+        }
+        return
+        [
+            new
+            {
+                url = webhookUrl,
+                events = events.ToArray(),
+                customHeaders = new[] { new { name = "X-Webhook-Token", value = token } },
+                retries,
+            },
+        ];
+    }
 
     // O sucesso do ENVIO já foi decidido pelo status HTTP (EnsureSuccessStatusCode no chamador); extrair
     // o id da mensagem é best-effort e NÃO pode lançar. A forma da resposta varia entre engines

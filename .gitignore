@@ -34,6 +34,11 @@ tmp/
 appsettings.Production.json
 appsettings.*.local.json
 
+# Deploy de produção (segredos + artefatos gerados — não commitar)
+deploy/.env.prod
+deploy/Caddyfile
+deploy/landing/
+
 # Claude Code state
 .claude/
 

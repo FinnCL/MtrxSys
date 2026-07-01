@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: ${PG8_PASS:-mtrx}
       TZ: UTC
     ports:
-      - "5439:5432"
+      - "${MTRX_BIND:-127.0.0.1}:5439:5432"
     volumes:
       - pgdata8:/var/lib/postgresql/data
     healthcheck:
@@ -38,7 +38,7 @@ services:
     image: redis:7-alpine
     container_name: mtrx8-redis
     ports:
-      - "6386:6379"
+      - "${MTRX_BIND:-127.0.0.1}:6386:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -50,7 +50,7 @@ services:
     image: devlikeapro/waha:latest
     container_name: mtrx8-waha
     ports:
-      - "3007:3000"
+      - "${MTRX_BIND:-127.0.0.1}:3007:3000"
     environment:
       TZ: UTC
       # Engine NOWEB (sem Chromium) — ver docker-compose.yml. Reparear o chip após a troca.
@@ -85,7 +85,7 @@ services:
       dockerfile: src/MtrxSys.Api/Dockerfile
     container_name: mtrx8-api
     ports:
-      - "5087:8080"
+      - "${MTRX_BIND:-127.0.0.1}:5087:8080"
     environment:
       TZ: UTC
       ASPNETCORE_ENVIRONMENT: Production
@@ -166,7 +166,7 @@ services:
         VITE_APP_LABEL: "H"
     container_name: mtrx8-web
     ports:
-      - "5181:80"
+      - "${MTRX_BIND:-127.0.0.1}:5181:80"
     depends_on:
       api:
         condition: service_healthy

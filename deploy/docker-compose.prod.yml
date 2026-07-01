@@ -1,0 +1,37 @@
+# Override de PRODUÇÃO — composto POR CIMA de cada docker-compose-N.yml (1..10).
+# NÃO altera nada dos composes de dev. As URLs públicas (WEB_PUBLIC_API_URL,
+# WEB_EMULATOR_URL, LANDING_ORIGIN) são exportadas pelo up-all-prod.sh a partir
+# de MTRX_DOMAIN. Aplicado assim (o script já faz isso):
+#   docker compose -f docker-compose-N.yml -f docker-compose-N.ledger.yml \
+#                  -f deploy/docker-compose.prod.yml up -d --build
+services:
+  web:
+    build:
+      args:
+        # Mesma origem do SPA (https://<letra>.<domínio>) → o Caddy roteia /api*
+        # pro container da api. Sem CORS entre web e api.
+        VITE_API_URL: "${WEB_PUBLIC_API_URL}"
+        # Iframe da tela do Android (noVNC protegido por basic-auth no Caddy).
+        VITE_EMULATOR_URL: "${WEB_EMULATOR_URL}"
+        # Mostra a seção "Android em container (KVM)" na aba Celular nos 10
+        # (uniformiza: alguns composes base não passavam este arg).
+        VITE_PHONE_SERVER: "1"
+        VITE_EMULATOR_KIND: ""
+  api:
+    # Linux: alcança o Postgres COMPARTILHADO (ledger, publicado em 0.0.0.0:5440 p/ o gateway).
+    # Sem isto, host.docker.internal não resolve e o dedup cai em fail-open.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # CORS: libera só a landing (app.<domínio>), que consulta as 10 APIs.
+      # O SPA de cada ambiente é mesma-origem, então não precisa de CORS.
+      Web__Origins__0: "${LANDING_ORIGIN}"
+      # Forwarded headers (X-Forwarded-Proto/For do Caddy) são tratados EM CÓDIGO (Program.cs),
+      # restritos a 1 hop + redes privadas — NÃO usar ASPNETCORE_FORWARDEDHEADERS_ENABLED (confiaria
+      # em X-Forwarded-For forjado de qualquer origem).
+      # Token de login: 24h em prod (o default de dev é 7 dias). Sem refresh token ainda — encurtar
+      # limita a janela de um token vazado. Ajuste JWT_ACCESS_TOKEN_MINUTES se precisar.
+      Jwt__AccessTokenMinutes: "${JWT_ACCESS_TOKEN_MINUTES:-1440}"
+  dispatcher:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

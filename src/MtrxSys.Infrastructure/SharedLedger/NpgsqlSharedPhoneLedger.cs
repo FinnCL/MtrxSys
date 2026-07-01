@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
@@ -22,17 +23,31 @@ public sealed class NpgsqlSharedPhoneLedger(
     public bool IsEnabled => _opts.Mode != SharedLedgerMode.Off;
     public bool IsEnforcing => _opts.Mode == SharedLedgerMode.Enforce;
 
-    public Task<bool> IsSuppressedAsync(string phoneE164, CancellationToken ct)
+    // Estado (dedup + opt-out) numa ÚNICA query. FAIL-CLOSED em falha de infra: o GuardedAsync
+    // engole a exceção e devolve o fallback Unavailable, pra o disparo pausar (em Enforce) em vez de
+    // arriscar mandar pra quem deu SAIR. Registro desligado (Off) → None. Antes eram DUAS consultas
+    // (opt-out + dedup) por contato; um único SELECT do status cobre os dois casos.
+    public Task<SharedLedgerStatus> GetStatusAsync(string phoneE164, CancellationToken ct)
     {
         if (!IsEnabled || string.IsNullOrWhiteSpace(phoneE164))
         {
-            return Task.FromResult(false);
+            return Task.FromResult(SharedLedgerStatus.None);
         }
-        return GuardedAsync(nameof(IsSuppressedAsync), fallback: false, async conn =>
+        return GuardedAsync(nameof(GetStatusAsync), fallback: SharedLedgerStatus.Unavailable, async conn =>
         {
-            await using var cmd = new NpgsqlCommand("SELECT 1 FROM phone_ledger WHERE phone_e164 = @p LIMIT 1", conn);
+            await using var cmd = new NpgsqlCommand("SELECT status FROM phone_ledger WHERE phone_e164 = @p LIMIT 1", conn);
             cmd.Parameters.AddWithValue("p", phoneE164);
-            return await cmd.ExecuteScalarAsync(ct) is not null;
+            var raw = await cmd.ExecuteScalarAsync(ct);
+            if (raw is null or DBNull)
+            {
+                return SharedLedgerStatus.None;
+            }
+            return Convert.ToInt32(raw, CultureInfo.InvariantCulture) switch
+            {
+                2 => SharedLedgerStatus.OptedOut,
+                1 => SharedLedgerStatus.Sent,
+                _ => SharedLedgerStatus.None,
+            };
         }, ct);
     }
 

@@ -130,23 +130,42 @@ public sealed class DispatchEngine(
                 skipped++;
                 continue;
             }
-            // Dedup entre ambientes: outro chip já enviou/registrou opt-out pra este telefone?
-            // IsSuppressedAsync é fail-open (erro → false), então uma falha do registro nunca
-            // bloqueia o envio. Em Observe só loga; em Enforce pula de fato. Off não chega aqui.
-            if (ledger.IsEnabled && await ledger.IsSuppressedAsync(contact.Phone.E164, ct))
+            if (ledger.IsEnabled)
             {
+                // Uma única consulta cobre dedup (Sent) e opt-out (OptedOut). Em Enforce o opt-out é
+                // FAIL-CLOSED: registro inacessível (Unavailable) PAUSA o ciclo (o job fica Pending e
+                // é retomado quando o registro voltar) em vez de arriscar mandar pra quem deu SAIR —
+                // o dedup só é postergado, não furado. Em Observe só loga o que faria.
+                var ledgerStatus = await ledger.GetStatusAsync(contact.Phone.E164, ct);
                 if (ledger.IsEnforcing)
                 {
-                    job.MarkSkipped("já enviado/opt-out em outro ambiente");
-                    await uow.SaveChangesAsync(ct);
-                    skipped++;
-                    log.LogInformation(
-                        "Job {JobId} pulado: {Phone} já consta no registro compartilhado.", job.Id, contact.Phone.E164);
-                    continue;
+                    if (ledgerStatus == SharedLedgerStatus.Unavailable)
+                    {
+                        log.LogWarning(
+                            "Registro compartilhado indisponível; ciclo pausado (fail-closed p/ opt-out). "
+                            + "Job {JobId} volta para Pending.", job.Id);
+                        break;
+                    }
+                    if (ledgerStatus is SharedLedgerStatus.OptedOut or SharedLedgerStatus.Sent)
+                    {
+                        var reason = ledgerStatus == SharedLedgerStatus.OptedOut
+                            ? "opt-out em outro ambiente"
+                            : "já enviado em outro ambiente";
+                        job.MarkSkipped(reason);
+                        await uow.SaveChangesAsync(ct);
+                        skipped++;
+                        log.LogInformation(
+                            "Job {JobId} pulado ({Reason}): {Phone} consta no registro compartilhado.",
+                            job.Id, reason, contact.Phone.E164);
+                        continue;
+                    }
                 }
-                log.LogInformation(
-                    "[ledger observe] Job {JobId} ({Phone}) SERIA pulado (consta no registro compartilhado).",
-                    job.Id, contact.Phone.E164);
+                else if (ledgerStatus is SharedLedgerStatus.OptedOut or SharedLedgerStatus.Sent)
+                {
+                    log.LogInformation(
+                        "[ledger observe] Job {JobId} ({Phone}) SERIA pulado (consta no registro compartilhado).",
+                        job.Id, contact.Phone.E164);
+                }
             }
 
             try
@@ -199,8 +218,6 @@ public sealed class DispatchEngine(
                 job.MarkSent(waMessageId, now);
                 contact.RegisterSend(now);
                 await contacts.UpdateAsync(contact, ct);
-                await warmup.IncrementAsync(ct);
-                await breaker.RecordSuccessAsync(ct);
                 await audit.AddAsync(
                     SendAuditEntry.Create(
                         id: Guid.NewGuid(),
@@ -211,15 +228,26 @@ public sealed class DispatchEngine(
                         delayMs: (int)delayBefore.TotalMilliseconds,
                         occurredAt: now),
                     ct);
-                // Commita o registro do envio PRIMEIRO: a mensagem já saiu no WhatsApp
-                // (irreversível), então marcar enviado/auditoria/breaker não pode depender
-                // de nada opcional que venha depois.
+                // Commita SÓ o registro do envio (job=Sent + contato + auditoria). A mensagem já
+                // saiu no WhatsApp (irreversível), então este commit NÃO pode tocar system_state:
+                // o reset do breaker escrevia a linha singleton (token xmin) aqui, e um conflito de
+                // concorrência (pausa/bônus pela API, ou o webhook) revertia TAMBÉM o MarkSent —
+                // o job voltava a Pending e a MESMA mensagem era reenviada (duplicata/risco de ban).
                 await uow.SaveChangesAsync(ct);
 
-                // Registra no livro-razão compartilhado (dedup cross-ambiente). MELHOR-ESFORÇO e
-                // fail-open: o envio já está commitado, então uma falha aqui só é logada — nunca
-                // marca o job como falho nem abre o breaker. Só após o commit pra não registrar
-                // "enviado" globalmente algo que não persistiu localmente.
+                // Daqui pra baixo é PÓS-ENVIO e best-effort: o job já está Sent e commitado; nada
+                // abaixo pode revertê-lo nem reenviar — falhas são só logadas.
+
+                // Teto diário: conta só envio já COMMITADO (antes incrementava antes do commit, e um
+                // rollback do commit deixava o contador divergente do que de fato persistiu).
+                await IncrementWarmupSafeAsync(ct);
+
+                // Reset do breaker FORA da transação do envio (ver acima). Um conflito aqui é inócuo:
+                // logado e o breaker zera no próximo sucesso.
+                await ResetBreakerSafeAsync(ct);
+
+                // Livro-razão compartilhado (dedup cross-ambiente): fail-open, só após o commit pra
+                // não registrar "enviado" globalmente algo que não persistiu localmente.
                 await ledger.MarkSentAsync(contact.Phone.E164, ct);
 
                 metrics.RecordSendSuccess((int)delayBefore.TotalMilliseconds, typingMs);
@@ -294,6 +322,50 @@ public sealed class DispatchEngine(
             return n is >= 400 and < 500;
         }
         return false;
+    }
+
+    // Incrementa o teto de aquecimento após o commit do envio. Best-effort: o envio já ocorreu, então
+    // uma falha aqui (rede/DB do contador) só é logada — nunca reverte nem reenvia. O IncrementAsync é
+    // um UPSERT atômico próprio (fora do uow), então não há mudança pendente a descartar.
+    private async Task IncrementWarmupSafeAsync(CancellationToken ct)
+    {
+        try
+        {
+            await warmup.IncrementAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // best-effort pós-envio: não pode derrubar o ciclo
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Envio OK mas não incrementei o teto de aquecimento; o contador pode subir 1 a menos.");
+        }
+#pragma warning restore CA1031
+    }
+
+    // Zera o breaker (consecutive failures) após um envio bem-sucedido, FORA da transação do envio.
+    // Best-effort: um conflito de concorrência na linha singleton do system_state é descartado e
+    // logado — o breaker zera no próximo sucesso, e o envio já commitado permanece intacto.
+    private async Task ResetBreakerSafeAsync(CancellationToken ct)
+    {
+        try
+        {
+            await breaker.RecordSuccessAsync(ct);
+            await uow.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // best-effort pós-envio: não pode derrubar o ciclo
+        catch (Exception ex)
+        {
+            uow.DiscardChanges();
+            log.LogWarning(ex, "Envio OK mas não resetei o circuit breaker; zera no próximo sucesso.");
+        }
+#pragma warning restore CA1031
     }
 
     // Envolve a gravação no chat: nunca propaga exceção. Se falhar (concorrência na conversa,

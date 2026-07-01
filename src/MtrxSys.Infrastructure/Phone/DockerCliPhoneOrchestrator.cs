@@ -19,6 +19,10 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
     // antes de o valor chegar no `adb shell`, fechando injeção de comando no device.
     private static readonly Regex ProxyHostPort = new(@"^[A-Za-z0-9.\-]{1,255}:\d{1,5}$", RegexOptions.Compiled);
 
+    // Teto do download do APK (WhatsApp real ~100 MB). Protege a RAM da API contra uma URL apontando
+    // pra arquivo gigante/malicioso.
+    private const long MaxApkBytes = 400L * 1024 * 1024;
+
     public async Task<PhoneStatus> GetStatusAsync(CancellationToken ct)
     {
         var (code, outp, _) = await RunAsync(ct, "inspect", "-f", "{{.State.Status}}", Opts.ContainerName);
@@ -103,8 +107,20 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
             using (var client = http.CreateClient())
             {
                 client.Timeout = TimeSpan.FromMinutes(5);
-                var bytes = await client.GetByteArrayAsync(Opts.WhatsAppApkUrl, ct);
-                await File.WriteAllBytesAsync(tmp, bytes, ct);
+                // Streaming com TETO: GetByteArrayAsync carregava o corpo INTEIRO em memória — uma URL
+                // apontando pra arquivo enorme/malicioso estouraria a RAM da API. Aqui lemos os headers
+                // primeiro, recusamos por Content-Length, e copiamos pro disco cortando no limite.
+                using var resp = await client.GetAsync(
+                    Opts.WhatsAppApkUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+                resp.EnsureSuccessStatusCode();
+                if (resp.Content.Headers.ContentLength is > MaxApkBytes)
+                {
+                    return $"APK grande demais ({resp.Content.Headers.ContentLength} bytes; teto "
+                        + $"{MaxApkBytes / (1024 * 1024)} MB). Verifique a URL em Phone:WhatsAppApkUrl.";
+                }
+                await using var src = await resp.Content.ReadAsStreamAsync(ct);
+                await using var dst = File.Create(tmp);
+                await CopyWithLimitAsync(src, dst, MaxApkBytes, ct);
             }
 
             var (cpCode, _, cpErr) = await RunAsync(ct, "cp", tmp, $"{Opts.ContainerName}:/tmp/wa.apk");
@@ -157,9 +173,17 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
 
     private static string? NullIfEmpty(string s) => string.IsNullOrWhiteSpace(s) ? null : s;
 
+    // Teto próprio de cada chamada ao docker, ALÉM do ct do request: um `docker exec`/`adb` travado
+    // (emulador enroscado, socket lento) não pode pendurar a requisição — nem sem cliente impaciente.
+    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(60);
+
     private static async Task<(int Code, string Out, string Err)> RunAsync(
         CancellationToken ct, params string[] args)
     {
+        using var timeoutCts = new CancellationTokenSource(CommandTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        var lct = linked.Token;
+        Process? p = null;
         try
         {
             var psi = new ProcessStartInfo("docker")
@@ -174,25 +198,77 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
                 psi.ArgumentList.Add(a);
             }
 
-            using var p = Process.Start(psi);
+            p = Process.Start(psi);
             if (p is null)
             {
                 return (-1, string.Empty, "docker CLI indisponível");
             }
-            var so = await p.StandardOutput.ReadToEndAsync(ct);
-            var se = await p.StandardError.ReadToEndAsync(ct);
-            await p.WaitForExitAsync(ct);
-            return (p.ExitCode, so, se);
+            // Lê stdout E stderr CONCORRENTE: ler um até o fim e só depois o outro trava se o buffer
+            // de pipe do SO (~64 KB) do fluxo não-lido encher (deadlock clássico) — ex.: `docker logs`
+            // com muito stderr penduraria a leitura do stdout que nunca chega ao EOF.
+            var outTask = p.StandardOutput.ReadToEndAsync(lct);
+            var errTask = p.StandardError.ReadToEndAsync(lct);
+            await p.WaitForExitAsync(lct);
+            return (p.ExitCode, await outTask, await errTask);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            TryKill(p);
+            throw; // cancelamento REAL do request propaga
         }
         catch (OperationCanceledException)
         {
-            throw;
+            // Nosso timeout (não o do request): mata o processo travado e devolve como indisponível —
+            // os chamadores já tratam code<0 como "unavailable"/erro, sem pendurar a chamada.
+            TryKill(p);
+            return (-1, string.Empty, $"docker excedeu {CommandTimeout.TotalSeconds:0}s (comando travado?).");
         }
 #pragma warning disable CA1031
         catch (Exception ex)
         {
             // Sem docker/sem socket: trata como indisponível (a aba mostra "indisponível").
             return (-1, string.Empty, ex.Message);
+        }
+#pragma warning restore CA1031
+        finally
+        {
+            p?.Dispose();
+        }
+    }
+
+    // Copia stream→arquivo cortando no teto: sem Content-Length confiável (ou mentiroso), aborta assim
+    // que passa do limite em vez de encher o disco/memória. O arquivo parcial é apagado no finally do chamador.
+    private static async Task CopyWithLimitAsync(Stream src, Stream dst, long maxBytes, CancellationToken ct)
+    {
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await src.ReadAsync(buffer, ct)) > 0)
+        {
+            total += read;
+            if (total > maxBytes)
+            {
+                throw new InvalidOperationException(
+                    $"APK excede o teto de {maxBytes / (1024 * 1024)} MB — download abortado.");
+            }
+            await dst.WriteAsync(buffer.AsMemory(0, read), ct);
+        }
+    }
+
+    // Mata o processo docker (e a árvore) que ficou travado no timeout/cancelamento. Best-effort.
+    private static void TryKill(Process? p)
+    {
+        try
+        {
+            if (p is { HasExited: false })
+            {
+                p.Kill(entireProcessTree: true);
+            }
+        }
+#pragma warning disable CA1031 // best-effort: matar um processo já morto/inacessível não pode lançar
+        catch
+        {
+            // ignora: o processo pode já ter saído entre o HasExited e o Kill.
         }
 #pragma warning restore CA1031
     }
