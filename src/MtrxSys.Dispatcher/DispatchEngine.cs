@@ -277,6 +277,22 @@ public sealed class DispatchEngine(
             {
                 var now = clock.UtcNow;
                 metrics.RecordSendFailure(ex.Message);
+
+                // WAHA INALCANÇÁVEL — conexão recusada/DNS/reset, SEM resposta HTTP: a mensagem
+                // garantidamente NÃO saiu. É a sessão/rede que caiu, não o número → não consome
+                // tentativa, não marca Failed, não abre o breaker; o job fica PENDING e o ciclo PARA
+                // (como o PauseWhenSessionDown), retomando quando o WAHA voltar. Sem isto, um blip que
+                // derrubasse status+envio juntos marcava Failed (terminal) = mensagem PERDIDA.
+                // TIMEOUT fica FORA daqui de propósito: um timeout pós-request PODE ter enviado, então
+                // vai pro retry COM TETO abaixo — senão um WAHA lento-mas-vivo geraria reenvio ilimitado
+                // (duplicata/risco de ban).
+                if (IsSessionDownFailure(ex))
+                {
+                    log.LogWarning(ex,
+                        "WAHA inalcançável ao enviar o job {JobId}; ciclo parado (job segue Pending).", job.Id);
+                    break;
+                }
+
                 // Erro permanente (4xx do WAHA: número inválido etc.) não melhora com reenvio.
                 // Falha transitória (timeout/5xx/conexão) reenvia ATÉ o teto de tentativas.
                 if (!IsPermanentFailure(ex) && job.CanRetry(dispatchOpts.Value.MaxSendAttempts))
@@ -363,6 +379,14 @@ public sealed class DispatchEngine(
         }
         return false;
     }
+
+    // WAHA inalcançável ANTES de qualquer resposta: conexão recusada / DNS / reset — nenhuma request
+    // HTTP completou, então a mensagem NÃO saiu (seguro manter Pending sem consumir tentativa nem
+    // marcar Failed). NÃO inclui timeout de propósito: um timeout pós-request pode ter enviado, então
+    // ele segue o caminho de retry COM TETO (evita reenvio ilimitado/duplicata). Um 4xx/5xx tem
+    // StatusCode preenchido (o WAHA respondeu) e também não cai aqui.
+    private static bool IsSessionDownFailure(Exception ex)
+        => ex is HttpRequestException { StatusCode: null };
 
     // Incrementa o teto de aquecimento após o commit do envio. Best-effort: o envio já ocorreu, então
     // uma falha aqui (rede/DB do contador) só é logada — nunca reverte nem reenvia. O IncrementAsync é

@@ -50,6 +50,34 @@ public sealed class ManualContactsE2ETests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ListOptedOutPhones_returns_opted_out_including_discarded()
+    {
+        // Cobre a query nova do backfill do registro (projeção do owned Phone.E164 — EF pode falhar
+        // em TRADUZIR isso só em runtime) + a semântica: opt-out de contato DESCARTADO ainda conta.
+        var repo = new ContactRepository(_db);
+        var uow = new UnitOfWork(_db);
+        var now = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var active = Contact.Create(Guid.NewGuid(), _phones.Validate("11955550001").Value!,
+            name: "Ativo", groupTag: "G", theme: null, optInAt: now);
+        var optedOut = Contact.Create(Guid.NewGuid(), _phones.Validate("11955550002").Value!,
+            name: "Saiu", groupTag: "G", theme: null, optInAt: now);
+        optedOut.OptOut(now);
+        var optedOutDiscarded = Contact.Create(Guid.NewGuid(), _phones.Validate("11955550003").Value!,
+            name: "Saiu e descartado", groupTag: "Reciclados", theme: null, optInAt: now);
+        optedOutDiscarded.OptOut(now);
+        await repo.AddAsync(active, CancellationToken.None);
+        await repo.AddAsync(optedOut, CancellationToken.None);
+        await repo.AddAsync(optedOutDiscarded, CancellationToken.None);
+        await uow.SaveChangesAsync(CancellationToken.None);
+        await repo.DiscardByGroupTagAsync("Reciclados", now, CancellationToken.None); // soft delete real
+
+        var phones = await repo.ListOptedOutPhonesAsync(CancellationToken.None);
+
+        phones.Should().BeEquivalentTo(new[] { optedOut.Phone.E164, optedOutDiscarded.Phone.E164 });
+    }
+
+    [Fact]
     public async Task Full_flow_persists_dedupes_and_lands_in_dispatch_audience()
     {
         var repo = new ContactRepository(_db);

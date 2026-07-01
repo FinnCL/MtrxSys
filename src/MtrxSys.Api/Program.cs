@@ -31,6 +31,7 @@ builder.Services.AddOptions<MtrxSys.Api.Options.PresenceOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Api.Options.PresenceOptions.SectionName));
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WhatsAppAutoSyncService>();
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.CollectorWorker>();
+builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.LedgerOptOutBackfillService>();
 // Origens permitidas: por padrão libera as portas web usadas no setup localhost — a landing
 // de múltiplos ambientes (5175) e os webs dos Stacks 1..10 (5173, 5174, 5176..5183; a 5175 é
 // da landing). Pode ser sobrescrito por env var Web__Origins__0, Web__Origins__1, etc.

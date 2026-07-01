@@ -13,6 +13,11 @@ public sealed class SharedLedgerOptions
 
     // Rótulo deste ambiente/chip no registro (A, B, ...). Apenas informativo.
     public string Chip { get; set; } = "?";
+
+    // Intervalo do backfill periódico de opt-outs pro registro (rede de segurança da propagação,
+    // que é fail-open). Reempurra os opt-outs LOCAIS (idempotente) — cobre o caso de um MarkOptOut
+    // ter falhado no instante do "SAIR" por soluço do banco. Mínimo efetivo de 60s.
+    public int BackfillIntervalSeconds { get; set; } = 900;
 }
 
 public enum SharedLedgerMode

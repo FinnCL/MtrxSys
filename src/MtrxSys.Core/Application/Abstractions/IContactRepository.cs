@@ -13,6 +13,10 @@ public interface IContactRepository
     Task UpdateAsync(Contact contact, CancellationToken ct);
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);
     Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct);
+    /// <summary>Telefones (E.164) de TODOS os contatos em opt-out (incluindo descartados — opt-out
+    /// continua valendo). Projeção leve para o backfill periódico do registro compartilhado, sem
+    /// carregar entidades inteiras.</summary>
+    Task<IReadOnlyList<string>> ListOptedOutPhonesAsync(CancellationToken ct);
     Task<IReadOnlyList<ContactGroupTag>> ListGroupTagsAsync(CancellationToken ct);
     /// <summary>Descarta (soft delete) os contatos de um grupo: marca deleted_at, somem das
     /// listas/disparo, mas a linha e o opt-out ficam no banco. Retorna quantos foram descartados.</summary>

@@ -186,6 +186,10 @@ public static class ContactsEndpoints
                     ct);
             }
             await uow.SaveChangesAsync(ct);
+            // OBS: a reativação limpa só o opt-out LOCAL. NÃO mexe no registro compartilhado de
+            // propósito — o opt-out do ledger é global e "sempre vence": um "SAIR" pode ter vindo de
+            // OUTRO chip, e uma reativação LOCAL não pode dessuprimir globalmente (risco de LGPD).
+            // Re-engajar cross-ambiente, se um dia for preciso, deve ser uma ação global explícita.
             return Results.Ok(ToDto(contact));
         });
 

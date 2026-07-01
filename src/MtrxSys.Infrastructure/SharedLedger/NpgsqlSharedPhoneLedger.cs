@@ -88,6 +88,36 @@ public sealed class NpgsqlSharedPhoneLedger(
         + "ON CONFLICT (phone_e164) DO UPDATE SET status = 2, chip = @c, updated_at = now()",
         phoneE164, nameof(MarkOptOutAsync), ct);
 
+    // Opt-out em LOTE numa única query (backfill). Pontos-chave de performance/corretude:
+    //  • unnest(@p) → 1 round-trip pra N telefones (antes: N conexões/upserts por ciclo).
+    //  • WHERE status IS DISTINCT FROM 2 → NÃO reescreve linhas já em opt-out (o caso comum a cada
+    //    ciclo), evitando dead tuples/WAL/autovacuum no banco compartilhado.
+    //  • no conflito, NÃO sobrescreve `chip` → preserva a proveniência (quem realmente marcou opt-out).
+    public Task MarkOptOutBatchAsync(IReadOnlyCollection<string> phonesE164, CancellationToken ct)
+    {
+        if (!IsEnabled || phonesE164 is null || phonesE164.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+        var arr = phonesE164.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.Ordinal).ToArray();
+        if (arr.Length == 0)
+        {
+            return Task.CompletedTask;
+        }
+        return GuardedAsync(nameof(MarkOptOutBatchAsync), fallback: true, async conn =>
+        {
+            await using var cmd = new NpgsqlCommand(
+                "INSERT INTO phone_ledger (phone_e164, status, chip, updated_at) "
+                + "SELECT unnest(@p), 2, @c, now() "
+                + "ON CONFLICT (phone_e164) DO UPDATE SET status = 2, updated_at = now() "
+                + "WHERE phone_ledger.status IS DISTINCT FROM 2", conn);
+            cmd.Parameters.AddWithValue("p", arr);
+            cmd.Parameters.AddWithValue("c", _opts.Chip);
+            await cmd.ExecuteNonQueryAsync(ct);
+            return true;
+        }, ct);
+    }
+
     private Task ExecAsync(string sql, string phoneE164, string op, CancellationToken ct)
     {
         if (!IsEnabled || string.IsNullOrWhiteSpace(phoneE164))

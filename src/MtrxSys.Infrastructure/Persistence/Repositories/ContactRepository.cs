@@ -42,6 +42,14 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
     public async Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct) =>
         await ApplyFilter(db.Contacts.AsQueryable(), filter).OrderBy(c => c.Phone.E164).ToListAsync(ct);
 
+    // Só os telefones em opt-out (projeção — não materializa a entidade). Inclui descartados de
+    // propósito: opt-out continua valendo (o número não pode ser disparado por nenhum chip).
+    public async Task<IReadOnlyList<string>> ListOptedOutPhonesAsync(CancellationToken ct) =>
+        await db.Contacts.AsNoTracking()
+            .Where(c => c.OptOutAt != null)
+            .Select(c => c.Phone.E164)
+            .ToListAsync(ct);
+
     // Descarta (soft delete) os contatos de um grupo: marca deleted_at. Eles somem das listas e
     // do disparo (ApplyFilter/ListGroupTags filtram deleted_at IS NULL) e suas conversas somem do
     // Chat (ConversationRepository filtra pelo contato descartado) — mas a linha e o OPT-OUT ficam

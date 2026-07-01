@@ -20,4 +20,6 @@ public sealed class NoOpSharedPhoneLedger : ISharedPhoneLedger
     public Task MarkSentAsync(string phoneE164, CancellationToken ct) => Task.CompletedTask;
 
     public Task MarkOptOutAsync(string phoneE164, CancellationToken ct) => Task.CompletedTask;
+
+    public Task MarkOptOutBatchAsync(IReadOnlyCollection<string> phonesE164, CancellationToken ct) => Task.CompletedTask;
 }

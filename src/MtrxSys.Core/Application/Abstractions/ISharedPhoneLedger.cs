@@ -32,4 +32,8 @@ public interface ISharedPhoneLedger
 
     // Marca "opt-out" (sempre vence: vale pra todos os ambientes).
     Task MarkOptOutAsync(string phoneE164, CancellationToken ct);
+
+    // Marca opt-out em LOTE (rede de segurança/backfill), numa única query e SEM churn: só escreve as
+    // linhas que ainda não são opt-out (não reescreve as já em opt-out) e PRESERVA o chip de origem.
+    Task MarkOptOutBatchAsync(IReadOnlyCollection<string> phonesE164, CancellationToken ct);
 }
