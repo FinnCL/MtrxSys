@@ -36,8 +36,11 @@ guard_secrets() {
   # 2) Segredos por-stack VAZIOS (A..J têm vars próprias: PG_PASS, PG2_PASS..PG10_PASS, idem
   #    JWT*_SIGNING_KEY, WAHA*_API_KEY, WAHA*_HOOK_TOKEN). Vazio faz o compose cair no default
   #    fraco de dev — checa o arquivo inteiro, não só o Stack A.
-  if grep -Eq '^(PG[0-9]*_PASS|JWT[0-9]*_SIGNING_KEY|WAHA[0-9]*_API_KEY|WAHA[0-9]*_HOOK_TOKEN)=[[:space:]]*$' "$ENV_FILE"; then
-    echo "ERRO: há segredo por-stack VAZIO (PG/JWT/WAHA/HOOK) no $ENV_FILE — preencha todos os A..J."
+  # SEED*_ADMIN_PASS entra aqui: vazio faz o compose cair no default (admin123! etc.) — e esse
+  # login do dashboard é PÚBLICO via Caddy (mesma-origem). __GEN__ cobre o fluxo normal; isto pega
+  # a edição manual que esvazia.
+  if grep -Eq '^(PG[0-9]*_PASS|JWT[0-9]*_SIGNING_KEY|WAHA[0-9]*_API_KEY|WAHA[0-9]*_HOOK_TOKEN|SEED[0-9]*_ADMIN_PASS)=[[:space:]]*$' "$ENV_FILE"; then
+    echo "ERRO: há segredo por-stack VAZIO (PG/JWT/WAHA/HOOK/SEED) no $ENV_FILE — preencha todos os A..J."
     bad=1
   fi
   # 3) Segredos por-stack no VALOR DE DEV conhecido (PG=mtrx, JWT dev-only-*, WAHA api-key
@@ -48,6 +51,13 @@ guard_secrets() {
   fi
   [ "$bad" = "0" ] || { echo "Abortei: preencha o $ENV_FILE (deploy/gen-secrets.sh) e rode de novo."; exit 1; }
   echo "✓ segredos de produção conferidos (sem defaults de dev)."
+
+  # Avisos (não bloqueiam): o dedup/opt-out cross-chip só vale com o ledger em Enforce, e a 5440
+  # do banco compartilhado fica em 0.0.0.0 (precisa do gateway) — o operador tem que fechá-la no firewall.
+  local mode; mode=$(getenv SHARED_LEDGER_MODE); mode=${mode:-Off}
+  [ "$mode" = "Enforce" ] || echo "AVISO: SHARED_LEDGER_MODE=$mode (não Enforce) — dedup/opt-out CROSS-chip não suprime de fato."
+  echo "AVISO: proteja a porta 5440 (Postgres compartilhado) no FIREWALL — ela escuta em 0.0.0.0."
+  echo "       ex.: ufw deny 5440/tcp   (ou libere só a partir das subredes docker)."
 }
 guard_secrets
 

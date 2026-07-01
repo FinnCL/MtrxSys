@@ -42,6 +42,12 @@ public sealed class DispatchEngine(
         var templateCache = new Dictionary<Guid, MtrxSys.Core.Domain.Messages.MessageTemplate>();
         var sessionId = dispatchOpts.Value.SessionId;
 
+        // Reconcilia o número conectado ANTES de disparar: se o chip foi re-pareado com um número
+        // diferente (troca de SIM, re-pareamento fora do fluxo connect/start), reinicia o aquecimento
+        // pra o número NOVO nascer FRIO. Sem isto, o motor drenaria a fila herdando o platô do chip
+        // antigo → ban. Best-effort e uma vez por ciclo (não por job).
+        await TryReconcileWarmupPhoneAsync(sessionId, ct);
+
         while (!ct.IsCancellationRequested)
         {
             // Freio de mão: operador pausou os envios pelo botão "Parar envios". Leitura fresca
@@ -302,6 +308,40 @@ public sealed class DispatchEngine(
         }
 
         return new DispatchCycleResult(processed, sent, failed, skipped, retried);
+    }
+
+    // Reconcilia o número conectado com o WarmupPhone: número diferente → RestartWarmup (chip novo
+    // nasce frio). Best-effort: leitura vazia/instável do WAHA é ignorada (não reseta à toa) e uma
+    // falha não trava o ciclo — o gate de aquecimento segue com o estado atual.
+    private async Task TryReconcileWarmupPhoneAsync(string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            var phone = await waha.GetOwnPhoneE164Async(sessionId, ct);
+            if (string.IsNullOrWhiteSpace(phone))
+            {
+                return;
+            }
+            var state = await systemState.GetAsync(ct);
+            var changed = state.ReconcileWarmupPhone(phone, IClock.ToBrasiliaDate(clock.UtcNow));
+            await systemState.UpdateAsync(state, ct); // persiste também o 1º registro do número
+            await uow.SaveChangesAsync(ct);
+            if (changed)
+            {
+                log.LogInformation(
+                    "Chip trocado (número conectado {Phone}); aquecimento reiniciado — nasce frio.", phone);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // best-effort: reconciliar não pode derrubar o ciclo de disparo
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Não reconciliei o número do aquecimento; sigo com o estado atual.");
+        }
+#pragma warning restore CA1031
     }
 
     // Respiro após uma falha, pra não martelar o WAHA em loop quando a fila só tem o job que falha.

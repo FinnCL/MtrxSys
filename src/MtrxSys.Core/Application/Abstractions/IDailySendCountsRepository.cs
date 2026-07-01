@@ -7,9 +7,10 @@ public interface IDailySendCountsRepository
     Task<DailySendCount?> GetAsync(DateOnly dateUtc, CancellationToken ct);
     Task<int> IncrementAsync(DateOnly dateUtc, int warmupDayIndex, CancellationToken ct);
     /// <summary>
-    /// Quantos dias ANTERIORES a hoje tiveram pelo menos 1 envio. Base do calculo do
-    /// DayIndex do aquecimento — assim a curva so avanca por DIA REALMENTE USADO, nao
-    /// por dias do calendario sem uso. Chip novo que nao foi disparado fica no Dia 1.
+    /// Quantos dias no intervalo [since, today) tiveram pelo menos 1 envio. Base do DayIndex
+    /// do aquecimento — a curva só avança por DIA REALMENTE USADO (chip parado fica no nível),
+    /// e o `since` (marco de RestartWarmup) garante que um chip novo re-pareado volte ao Dia 0
+    /// em vez de herdar o histórico do ambiente. `since = MinValue` conta todo o histórico.
     /// </summary>
-    Task<int> CountActiveDaysBeforeAsync(DateOnly today, CancellationToken ct);
+    Task<int> CountActiveDaysBeforeAsync(DateOnly since, DateOnly today, CancellationToken ct);
 }

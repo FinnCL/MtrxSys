@@ -40,7 +40,7 @@ public sealed class WarmupManagerTests
         // a curva avança por dia USADO, não por dia do calendário desde StartedOnUtc.
         var today = new DateOnly(2026, 1, 3);
         SetToday(today);
-        _counts.CountActiveDaysBeforeAsync(today, Arg.Any<CancellationToken>()).Returns(2);
+        _counts.CountActiveDaysBeforeAsync(Arg.Any<DateOnly>(), today, Arg.Any<CancellationToken>()).Returns(2);
         var svc = Build(new WarmupOptions { Curve = [20, 40, 80, 150, 250] });
 
         (await TodayLimit(svc)).Should().Be(80);
@@ -51,7 +51,7 @@ public sealed class WarmupManagerTests
     {
         var today = new DateOnly(2026, 1, 30);
         SetToday(today);
-        _counts.CountActiveDaysBeforeAsync(today, Arg.Any<CancellationToken>()).Returns(29);
+        _counts.CountActiveDaysBeforeAsync(Arg.Any<DateOnly>(), today, Arg.Any<CancellationToken>()).Returns(29);
         var svc = Build(new WarmupOptions { Curve = [20, 40, 80, 150, 250] });
 
         (await TodayLimit(svc)).Should().Be(250);

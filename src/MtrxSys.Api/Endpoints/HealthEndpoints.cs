@@ -14,7 +14,7 @@ public static class HealthEndpoints
 
         // READINESS: pinga o banco (timeout curto). Pra monitoramento/LB detectarem degradação em
         // RUNTIME — o /health sempre-ok escondia o caso "processo vivo, mas todo request dá 500".
-        app.MapGet("/health/ready", async (MtrxDbContext db, CancellationToken ct) =>
+        app.MapGet("/health/ready", async (MtrxDbContext db, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(5));
@@ -28,7 +28,10 @@ public static class HealthEndpoints
 #pragma warning disable CA1031 // readiness nunca lança: qualquer falha é "degraded", não 500 cru
             catch (Exception ex)
             {
-                return Results.Json(new { status = "degraded", db = false, error = ex.Message }, statusCode: 503);
+                // Endpoint ANÔNIMO e exposto (o Caddy roteia /health*): loga o detalhe, mas NÃO o
+                // devolve — ex.Message do Npgsql pode revelar host/credencial do banco a qualquer um.
+                loggerFactory.CreateLogger("HealthReady").LogWarning(ex, "Readiness: banco inacessível.");
+                return Results.Json(new { status = "degraded", db = false }, statusCode: 503);
             }
 #pragma warning restore CA1031
         }).AllowAnonymous();

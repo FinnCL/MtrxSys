@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { WahaStatus } from "../api/types";
 
 // Painel de conexão do WhatsApp (QR + código de pareamento + status), EMBUTÍVEL na aba "Celular".
@@ -59,6 +59,7 @@ export function WhatsAppConnect({ onConnected }: Props) {
       return;
     }
     let cancelled = false;
+    let handle: ReturnType<typeof setInterval> | undefined;
     async function loadQr() {
       try {
         const url = await api.wahaQrBlobUrl();
@@ -71,17 +72,23 @@ export function WhatsAppConnect({ onConnected }: Props) {
         }
         previousBlobRef.current = url;
         setQrUrl(url);
-      } catch {
-        // QR é best-effort: falha transitória se auto-corrige no próximo fetch.
+      } catch (ex) {
+        // 409 = a sessão NÃO está mais em ScanQrCode (nosso `status` está defasado). Insistir a
+        // cada 10s só floodaria o console com 409. Para o poll e reavalia o status — o efeito
+        // reinicia sozinho se a sessão voltar a ScanQrCode. Outras falhas: best-effort, tenta de novo.
+        if (ex instanceof ApiError && ex.status === 409) {
+          if (handle) clearInterval(handle);
+          void pollStatus();
+        }
       }
     }
     void loadQr();
-    const handle = setInterval(loadQr, 10_000);
+    handle = setInterval(loadQr, 10_000);
     return () => {
       cancelled = true;
-      clearInterval(handle);
+      if (handle) clearInterval(handle);
     };
-  }, [status]);
+  }, [status, pollStatus]);
 
   useEffect(
     () => () => {

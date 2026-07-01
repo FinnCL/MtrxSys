@@ -24,7 +24,8 @@ public sealed class WarmupManager(
     public async Task IncrementAsync(CancellationToken ct)
     {
         var today = Today();
-        var index = await DayIndexAsync(today, ct);
+        var state = await systemState.GetAsync(ct);
+        var index = await DayIndexAsync(AnchorDate(state), today, ct);
         await counts.IncrementAsync(today, index, ct);
     }
 
@@ -34,7 +35,7 @@ public sealed class WarmupManager(
     {
         var today = Today();
         var state = await systemState.GetAsync(ct);
-        var index = await DayIndexAsync(today, ct);
+        var index = await DayIndexAsync(AnchorDate(state), today, ct);
         var curve = opts.Value.Curve is { Length: > 0 } configured ? configured : DefaultCurve;
         var limit = index >= curve.Length ? curve[^1] : curve[index];
         var existing = await counts.GetAsync(today, ct);
@@ -42,16 +43,20 @@ public sealed class WarmupManager(
         return new WarmupSnapshot(StartedOn(state, today), index, limit, sent, curve, state.BonusFor(today));
     }
 
-    // Data de início (apenas para exibir na UI "iniciado em ..."). NÃO determina mais o
-    // índice da curva — esse agora é calculado por dias REALMENTE usados (DayIndexAsync).
+    // Data de início (exibida na UI "iniciado em ...") E âncora do índice: dias ativos ANTES dela
+    // não contam, então RestartWarmup (troca de chip) volta a curva ao Dia 0. Null = ambiente que
+    // nunca reiniciou → MinValue conta todo o histórico (comportamento anterior preservado).
     private DateOnly StartedOn(SystemStateAggregate state, DateOnly today)
         => state.WarmupStartedOn ?? opts.Value.StartedOnUtc ?? today;
 
-    // Avança a curva APENAS quando o chip foi de fato usado: conta dias ANTERIORES a hoje
-    // com pelo menos 1 envio. Hoje não conta — assim a primeira mensagem do dia entra com
-    // o teto do dia atual, e amanhã a curva sobe. Chip parado fica no mesmo nível.
-    private async Task<int> DayIndexAsync(DateOnly today, CancellationToken ct)
-        => await counts.CountActiveDaysBeforeAsync(today, ct);
+    private DateOnly AnchorDate(SystemStateAggregate state)
+        => state.WarmupStartedOn ?? opts.Value.StartedOnUtc ?? DateOnly.MinValue;
+
+    // Avança a curva APENAS quando o chip foi de fato usado: conta dias ativos em [since, today).
+    // Hoje não conta — a 1ª mensagem do dia entra com o teto do dia atual, e amanhã a curva sobe.
+    // Chip parado fica no mesmo nível; `since` (marco do restart) impede herdar histórico antigo.
+    private async Task<int> DayIndexAsync(DateOnly since, DateOnly today, CancellationToken ct)
+        => await counts.CountActiveDaysBeforeAsync(since, today, ct);
 
     private DateOnly Today() => IClock.ToBrasiliaDate(clock.UtcNow);
 }

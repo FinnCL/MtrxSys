@@ -32,7 +32,10 @@ public static class OptOutDetector
         "para de mandar", "parar de receber", "parar de mandar", "pare de enviar", "pare de mandar",
         "nao quero receber", "nao quero mais", "nao envie", "nao manda", "nao me manda",
         "me descadastr", "me remov", "me tira", "tirar da lista", "sair da lista",
-        "remover meu", "cancelar inscricao", "sem mensagens", "para de enviar",
+        "remover meu", "cancelar inscricao", "cancelar recebimento", "sem mensagens", "para de enviar",
+        // variantes com clítico "me" ("para de me mandar/enviar") e plural imperativo ("parem de …"),
+        // que quebravam as frases acima e passavam batido.
+        "de me mandar", "de me enviar", "de me chamar", "parem de", "me exclui",
     ];
 
     // "Bloqueadores" numa resposta curta: se aparecem junto do comando, ele NÃO é opt-out.
@@ -44,12 +47,16 @@ public static class OptOutDetector
     // "pode cancelar tudo", "cancela minha inscricao", "pare tudo" continuam disparando.
     private static readonly HashSet<string> ShortReplyBlockers = new(StringComparer.Ordinal)
     {
-        // objetos concretos
+        // objetos concretos ("pare o AUDIO", "sair do GRUPO", "cancela a FOTO")
         "audio", "audios", "video", "videos", "foto", "fotos", "imagem", "imagens",
         "figurinha", "figurinhas", "grupo", "grupos", "musica", "som", "ligacao",
         "chamada", "arquivo", "link", "pdf",
-        // negação
+        // negação ("NAO quero sair")
         "nao", "nunca", "jamais", "nem",
+        // intenção futura / movimento — "sair" vira SAIR FISICAMENTE, não descadastro: "VOU sair
+        // agora", "JÁ vou sair", "TÔ saindo". Como o opt-out é global e IRREVERSÍVEL no ledger, é
+        // mais seguro NÃO disparar nesses casos (o "SAIR" limpo e o link continuam funcionando).
+        "vou", "vo", "vamos", "vao", "irei", "ja", "to", "tou", "estou", "saindo", "indo",
     };
 
     public static bool IsOptOut(string? body)

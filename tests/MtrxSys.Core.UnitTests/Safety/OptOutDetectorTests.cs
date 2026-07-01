@@ -27,6 +27,10 @@ public sealed class OptOutDetectorTests
     [InlineData("não quero receber mais mensagens")]
     [InlineData("para de mandar isso")]
     [InlineData("me tira da lista por favor")]
+    // variantes com clítico "me" e plural imperativo (antes passavam batido)
+    [InlineData("para de me mandar mensagem")]
+    [InlineData("parem de me enviar")]
+    [InlineData("cancelar recebimento")]
     // ñ (U+00F1) normaliza pra n
     [InlineData("mañana cancelar")]
     // Acento DECOMPOSTO (NFD): "n" + "a" + U+0303 (til combinante) + "o quero receber". O projeto
@@ -51,6 +55,10 @@ public sealed class OptOutDetectorTests
     [InlineData("cancela o video")]
     // negação inverte o sentido (o opt-out negado real "nao quero mais" cai nas Phrases)
     [InlineData("nao quero sair")]
+    // intenção futura/movimento: "sair" físico, não descadastro (opt-out é irreversível → lado seguro)
+    [InlineData("vou sair agora")]
+    [InlineData("já vou sair")]
+    [InlineData("to saindo")]
     // "para" é preposição: respostas curtas de lead interessado NÃO podem virar opt-out
     [InlineData("é para hoje?")]
     [InlineData("para qual cidade")]
