@@ -18,7 +18,7 @@
       --danger: #f87171;
     }
     * { box-sizing: border-box; }
-    html, body { height: 100%; }
+    html, body { min-height: 100vh; }
     body {
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -29,29 +29,29 @@
       align-items: center;
       justify-content: center;
       padding: 16px;
-      gap: 18px;
+      gap: 12px;
     }
 
     /* Os 2 cards usam exatamente o mesmo style do .login-card da LoginScreen — clone direto */
     .cards {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 12px;
+      gap: 10px;
       width: 100%;
       max-width: 1280px;
       margin: 0 auto;
     }
     .login-card {
       background: var(--bg-2);
-      padding: 16px;
+      padding: 12px 13px;
       border-radius: 8px;
       width: 100%;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 6px;
       border: 1px solid var(--border);
     }
-    .login-card h1 { margin: 0 0 2px; font-size: 18px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .login-card h1 { margin: 0; font-size: 14px; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
     /* Host (localhost:porta) que o card abre — preenchido via JS a partir do mapa ENVS. */
     .env-host { font-size: 12px; font-weight: 400; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
@@ -62,8 +62,8 @@
     .chip-status {
       align-self: flex-start;
       display: inline-flex; align-items: center; gap: 6px;
-      font-size: 11px; font-weight: 600;
-      padding: 2px 8px; border-radius: 999px;
+      font-size: 10px; font-weight: 600;
+      padding: 1px 7px; border-radius: 999px;
       border: 1px solid var(--border);
       color: var(--muted); /* default = desconectado */
     }
@@ -76,18 +76,18 @@
     /* Identidade do chip conectado (nome + número), abaixo da pílula de status. Fica vermelho
        e em negrito quando o MESMO número está conectado em outro card (aviso de conflito). */
     .chip-identity {
-      font-size: 11px; color: var(--muted); min-height: 1em; word-break: break-word;
+      font-size: 11px; color: var(--muted); word-break: break-word;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     .chip-identity.dup { color: var(--danger); font-weight: 600; font-family: inherit; }
-    .login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+    .login-card label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
     .login-card input {
       background: var(--bg);
       border: 1px solid var(--border);
       color: var(--fg);
-      padding: 8px 10px;
+      padding: 7px 9px;
       border-radius: 6px;
-      font-size: 14px;
+      font-size: 16px;
       font-family: inherit;
     }
     .login-card input:focus { outline: none; border-color: var(--accent); }
@@ -95,8 +95,8 @@
       background: var(--accent);
       color: #052824;
       border: none;
-      padding: 10px;
-      font-size: 14px;
+      padding: 8px;
+      font-size: 13px;
       font-weight: 600;
       border-radius: 6px;
       cursor: pointer;
@@ -104,7 +104,8 @@
     }
     .login-card button[type="submit"]:hover:not(:disabled) { filter: brightness(1.15); }
     .login-card button[type="submit"]:disabled { opacity: 0.6; cursor: not-allowed; }
-    .login-error { color: var(--danger); margin: 0; font-size: 12px; min-height: 1em; }
+    .login-error { color: var(--danger); margin: 0; font-size: 11px; }
+    .login-error:empty { display: none; }
 
     /* Mostrar/esconder senha — mesmo padrao do App.css */
     .password-field { position: relative; display: flex; }
@@ -126,6 +127,11 @@
     .password-toggle:hover { color: var(--fg); }
 
     .page-title { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
+    .topbar { width: 100%; max-width: 1280px; margin: 0 auto; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+    .topbar .page-title { grid-column: 2; }
+    .logout { grid-column: 3; justify-self: end; margin: 0; }
+    .logout button { background: var(--bg-2); border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 6px 13px; font-size: 12px; cursor: pointer; font-family: inherit; white-space: nowrap; }
+    .logout button:hover { color: var(--fg); border-color: var(--accent); }
 
     /* Estado "em uso": card travado enquanto o dashboard correspondente está aberto.
        Borda verde + botão disabled. O texto "Em uso" agora vai na pílula única de status
@@ -143,25 +149,29 @@
 
     /* 5 colunas (5 em cima / 5 embaixo) no desktop largo; reduz as colunas conforme
        a tela estreita, pra não estourar a largura em telas menores. */
-    @media (max-width: 1100px) { .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 780px; } }
-    @media (max-width: 720px)  { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 520px; } }
-    @media (max-width: 460px)  { .cards { grid-template-columns: 1fr; max-width: 320px; } body { padding: 12px; } }
+    @media (max-width: 1200px) { .cards, .topbar { max-width: 1000px; } .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    @media (max-width: 940px)  { .cards, .topbar { max-width: 760px; }  .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 720px)  { .cards, .topbar { max-width: 520px; }  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 460px)  { .cards, .topbar { max-width: 360px; }  .cards { grid-template-columns: 1fr; } body { padding: 12px; } }
   </style>
 </head>
 <body>
-  <p class="page-title">Selecione um ambiente</p>
+  <header class="topbar">
+    <p class="page-title">Selecione um ambiente</p>
+    <form method="post" action="%%LOGOUT_URL%%" class="logout"><button type="submit">Sair</button></form>
+  </header>
 
   <div class="cards">
     <form class="login-card" data-env="a">
       <h1>MtrxSys A</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="admin123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -178,12 +188,12 @@
       <h1>MtrxSys B</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-b@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipB123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -200,12 +210,12 @@
       <h1>MtrxSys C</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-c@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipC123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -222,12 +232,12 @@
       <h1>MtrxSys D</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-d@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipD123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -244,12 +254,12 @@
       <h1>MtrxSys E</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-e@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipE123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -266,12 +276,12 @@
       <h1>MtrxSys F</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-f@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipF123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -288,12 +298,12 @@
       <h1>MtrxSys G</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-g@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipG123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -310,12 +320,12 @@
       <h1>MtrxSys H</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-h@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipH123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -332,12 +342,12 @@
       <h1>MtrxSys I</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-i@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipI123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -354,12 +364,12 @@
       <h1>MtrxSys J</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" value="admin-j@local" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required>
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" value="chipJ123!" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required>
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -373,7 +383,20 @@
     </form>
   </div>
 
+  <!--MTRX_CREDS-->
   <script>
+    // Pré-preenche cada card com a credencial do ambiente (injetado pelo gen-config; o portão já protege).
+    if (window.__MTRX_CREDS) {
+      for (const env in window.__MTRX_CREDS) {
+        const card = document.querySelector(`form[data-env="${env}"]`);
+        if (!card) continue;
+        const em = card.querySelector('input[name="email"]');
+        const pw = card.querySelector('input[name="password"]');
+        if (em && !em.value) em.value = window.__MTRX_CREDS[env].email;
+        if (pw && !pw.value) pw.value = window.__MTRX_CREDS[env].pass;
+      }
+    }
+
     // Olho mostrar/esconder senha — adiciona/remove o traco cruzado no SVG igual a LoginScreen.tsx
     document.querySelectorAll(".password-toggle").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -454,7 +477,7 @@
     async function pollPresence(env) {
       const cfg = ENVS[env];
       try {
-        const resp = await fetch(`${cfg.backend}/api/presence/status`, { cache: "no-store" });
+        const resp = await fetch(`${cfg.backend}/api/presence/status`, { cache: "no-store", credentials: "include" });
         if (!resp.ok) {
           inactiveStreak[env] = 0;
           setCardLocked(env, false);
@@ -542,7 +565,7 @@
     }
     async function pollChip(env) {
       try {
-        const resp = await fetch(`${ENVS[env].backend}/api/presence/chip`, { cache: "no-store" });
+        const resp = await fetch(`${ENVS[env].backend}/api/presence/chip`, { cache: "no-store", credentials: "include" });
         const data = resp.ok ? await resp.json() : null;
         if (!data) {
           setCardChip(env, "disconnected");
@@ -608,6 +631,7 @@
         try {
           const resp = await fetch(`${cfg.backend}/api/auth/login`, {
             method: "POST",
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               email: form.email.value,

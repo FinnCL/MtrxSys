@@ -64,7 +64,9 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
                 "--device", "/dev/kvm",
                 "-e", $"EMULATOR_DEVICE={Opts.Device}",
                 "-e", "WEB_VNC=true",
-                "-p", $"{Opts.NoVncPort}:6080",
+                // Bind em 127.0.0.1: o Caddy (rede host) alcança via loopback, mas o noVNC NÃO fica
+                // exposto direto na internet (furando o portão). Antes era "{porta}:6080" (= 0.0.0.0).
+                "-p", $"127.0.0.1:{Opts.NoVncPort}:6080",
                 "-v", $"{Opts.VolumeName}:/home/androidusr",
                 Opts.Image);
             return await GetStatusAsync(ct);

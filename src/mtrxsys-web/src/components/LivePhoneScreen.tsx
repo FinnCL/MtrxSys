@@ -41,7 +41,15 @@ function safeEmbedUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
   try {
     const u = new URL(raw, window.location.href);
-    return u.protocol === "http:" || u.protocol === "https:" ? raw : null;
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    // noVNC (tela do servidor — sem o fragment #!action=… do ws-scrcpy): conecta sozinho e ESCALA
+    // a tela remota (nativa 1440x3040) pra caber no quadro do "celular", sem scroll.
+    if (!u.hash) {
+      u.searchParams.set("autoconnect", "true");
+      u.searchParams.set("resize", "scale");
+      return u.toString();
+    }
+    return raw;
   } catch {
     return null;
   }

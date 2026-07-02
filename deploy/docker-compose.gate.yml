@@ -1,0 +1,27 @@
+# Portão de autenticação (1 credencial: usuário + senha + 2FA) na frente de TODOS os subdomínios.
+# O Caddy faz forward_auth pra ele (127.0.0.1:8099). Estado (credencial, segredo TOTP, chaves de
+# sessão) fica no volume gate-data = o "cache" que sobrevive a reinício.
+#   Subir:  docker compose --env-file deploy/.env.prod -f deploy/docker-compose.gate.yml up -d --build
+services:
+  gate:
+    build:
+      context: ..
+      dockerfile: src/MtrxSys.Gate/Dockerfile
+    image: mtrxsys-gate:latest
+    container_name: mtrx-gate
+    restart: unless-stopped
+    environment:
+      GATE_USER: ${GATE_USER:-admin}
+      GATE_PASSWORD_HASH: ${GATE_PASSWORD_HASH:-}
+      GATE_TOTP_SECRET: ${GATE_TOTP_SECRET:-}
+      GATE_COOKIE_DOMAIN: ".${MTRX_DOMAIN}"
+      GATE_BASE_DOMAIN: "${MTRX_DOMAIN}"
+      GATE_PUBLIC_URL: "https://auth.${MTRX_DOMAIN}"
+      GATE_HOME_URL: "https://app.${MTRX_DOMAIN}"
+    volumes:
+      - gate-data:/data
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:8099:8080"
+
+volumes:
+  gate-data:

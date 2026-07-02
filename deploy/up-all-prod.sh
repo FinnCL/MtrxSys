@@ -2,7 +2,7 @@
 # Sobe os 10 ambientes em PRODUÇÃO (modelo B: Android KVM + WAHA), com:
 #   1) banco compartilhado (ledger)
 #   2) base dos 10 stacks (sem o Android ainda) — derivando as URLs de MTRX_DOMAIN
-#   3) Android (KVM) em boot ESCALONADO + limites de CPU/RAM
+#   3) Android (KVM): provisionado SOB DEMANDA pela aba "Celular" (não sobe aqui)
 #   4) Caddy (HTTPS)
 # Rode da RAIZ do repo:  bash deploy/up-all-prod.sh
 set -euo pipefail
@@ -18,7 +18,6 @@ ENV_FILE=deploy/.env.prod
 # `x=$(getenv …)` ANTES das checagens — o guard precisa ver o valor vazio, não abortar cru.
 getenv() { grep -E "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- || true; }
 MTRX_DOMAIN=$(getenv MTRX_DOMAIN)
-ANDROID_BOOT_STAGGER=$(getenv ANDROID_BOOT_STAGGER); ANDROID_BOOT_STAGGER=${ANDROID_BOOT_STAGGER:-45}
 [ -n "$MTRX_DOMAIN" ] || { echo "ERRO: defina MTRX_DOMAIN no $ENV_FILE"; exit 1; }
 
 # ── Guard de segredos (fail-closed) ──────────────────────────────────────────
@@ -89,14 +88,13 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   docker compose "${EF[@]}" "${F[@]}" up -d --build
 done
 
-echo "== [3/4] Android (KVM) — boot escalonado (${ANDROID_BOOT_STAGGER:-45}s entre cada) =="
-for n in 1 2 3 4 5 6 7 8 9 10; do
-  i=$((n-1)); L=${LETTERS[$i]}
-  echo "   -- ligando Android do ambiente ${L} --"
-  docker compose "${EF[@]}" -f "${COMPOSES[$i]}" -f deploy/docker-compose.android.yml \
-    --profile phone up -d android
-  [ "$n" = "10" ] || sleep "${ANDROID_BOOT_STAGGER:-45}"
-done
+echo "== [3/4] Android (KVM) — provisionamento SOB DEMANDA (pela aba \"Celular\") =="
+# Os aparelhos virtuais NÃO sobem aqui. Cada ambiente provisiona o SEU Android
+# (container/porta/volume próprios) quando você registra o chip, pela aba "Celular":
+# a API cria o container via docker.sock (DockerCliPhoneOrchestrator). O caminho
+# dinâmico funciona nos 10 (só A/B têm o serviço `android` estático, hoje inerte) e
+# casa com "validar 1 chip antes de escalar" — não sobe 10 emuladores ociosos de uma vez.
+echo "   provisione cada Android na aba \"Celular\" ao registrar o chip (ver deploy/README.md)."
 
 echo "== [4/4] Caddy (HTTPS) =="
 bash deploy/gen-config.sh
@@ -104,10 +102,14 @@ docker compose -f deploy/docker-compose.caddy.yml up -d
 
 cat <<EOF
 
-✓ No ar.
-  Landing:    https://app.${MTRX_DOMAIN}
-  Ambientes:  https://a.${MTRX_DOMAIN} .. https://j.${MTRX_DOMAIN}
-  Tela Android: https://phone-a.${MTRX_DOMAIN} .. (basic-auth: ver gen-secrets.sh)
+✓ No ar (tudo atrás do portão de autenticação — ver deploy/docker-compose.gate.yml):
+  Portão:       https://auth.${MTRX_DOMAIN}   (usuário + senha + 2FA)
+  Landing:      https://app.${MTRX_DOMAIN}
+  Ambientes:    https://a.${MTRX_DOMAIN} .. https://j.${MTRX_DOMAIN}
+  Tela Android: https://phone-a.${MTRX_DOMAIN} ..
+
+⚠️  SEGURANÇA — rode UMA vez com sudo (fecha 5440 e o noVNC da internet):
+      sudo bash deploy/setup-firewall.sh
 
 Próximo: em cada ambiente, aba "Celular" → Provisionar/Ligar Android → registrar
 o número por SMS (SIM gateway) → vincular o WAHA por QR. Ver deploy/README.md.
