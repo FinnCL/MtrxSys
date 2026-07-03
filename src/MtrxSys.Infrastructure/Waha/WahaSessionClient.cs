@@ -46,7 +46,10 @@ internal sealed class WahaSessionClient(WahaHttp http)
         var identity = phone is null
             ? null
             : new WahaIdentity(phone, string.IsNullOrWhiteSpace(body?.Me?.PushName) ? null : body!.Me!.PushName);
-        return new WahaSessionSnapshot(status, identity);
+        // Proxy REALMENTE aplicado na sessão (config.proxy.server) — pro indicador honesto na aba.
+        var appliedProxy = body?.Config?.Proxy?.Server;
+        return new WahaSessionSnapshot(
+            status, identity, string.IsNullOrWhiteSpace(appliedProxy) ? null : appliedProxy);
     }
 
     public async Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct)

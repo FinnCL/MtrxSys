@@ -59,7 +59,10 @@ public enum WahaSessionStatus
 
 public sealed record WahaIdentity(string PhoneE164, string? Name);
 
-public sealed record WahaSessionSnapshot(WahaSessionStatus Status, WahaIdentity? Identity);
+// AppliedProxyServer = o config.proxy.server da sessão (o proxy que o chip REALMENTE usa; null = sem
+// proxy). Opcional pra não quebrar os construtores existentes. Ver indicador de proxy na aba Celular.
+public sealed record WahaSessionSnapshot(
+    WahaSessionStatus Status, WahaIdentity? Identity, string? AppliedProxyServer = null);
 
 public sealed record WahaGroup(string Id, string Name, int? ParticipantsCount);
 

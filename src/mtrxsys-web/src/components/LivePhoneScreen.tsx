@@ -91,6 +91,17 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
 
   return (
     <section className="live-phone">
+      {/* Indicador do proxy REALMENTE aplicado na sessão do chip (não o só-configurado). Verde =
+          o chip sai pelo IP do proxy; cinza = sai pelo IP da máquina (sem proxy). Reusa os badges
+          .phone-badge do design system (ok=verde / off=cinza) em vez de cor solta. */}
+      <p className="phone-off-hint" style={{ textAlign: "center", margin: "0 0 8px" }}>
+        Proxy:{" "}
+        {ident?.proxy ? (
+          <span className="phone-badge ok">ativo — {ident.proxy}</span>
+        ) : (
+          <span className="phone-badge off">desligado (sai pelo IP da máquina)</span>
+        )}
+      </p>
       <div className="phone-device">
         <div className="phone-notch" />
         {embed ? (
@@ -129,7 +140,7 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
 
 
       <div className="phone-footer">
-        {embed ? (
+        {embed && (
           <>
             <button type="button" className="phone-reload" onClick={() => setEmbed(null)}>
               Desligar tela
@@ -138,18 +149,6 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
               Abrir em nova aba
             </a>
           </>
-        ) : (
-          // Desconectado + tela desligada: botão OPCIONAL pra abrir o emulador (instalar WhatsApp/
-          // registrar). Quando conectado, o botão "Mostrar tela do Android" já vive no card acima.
-          url && !connected && (
-            <button
-              type="button"
-              className="phone-reload"
-              onClick={() => setEmbed(safeEmbedUrl(androidUrl))}
-            >
-              Mostrar tela do Android
-            </button>
-          )
         )}
       </div>
 
@@ -246,7 +245,7 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
       {connected && !running && (
         <div className="phone-footer">
           <span className="phone-off-hint">
-            💤 primário <b>dormindo</b> — o disparo roda pelo <b>WAHA</b> mesmo com o emulador desligado.
+            Primário <b>dormindo</b>. O disparo roda pelo <b>WAHA</b> mesmo com o emulador desligado.
           </span>
           <button
             type="button"

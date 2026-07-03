@@ -1,0 +1,17 @@
+# Override do PILOTO redroid no stack A (produção). Aplicado POR CIMA dos composes do A.
+# NÃO toca no docker-compose.yml base — só injeta o engine redroid + o reach do adb no serviço api.
+# Some quando o piloto acabar (é só não incluir este -f). Ver docs/redroid.md.
+services:
+  api:
+    environment:
+      # Seleciona o orquestrador redroid no DI (Phone:Engine). Default do sistema segue docker-android.
+      Phone__Engine: redroid
+      # Container/volume/porta do redroid do stack A (isolado dos outros ambientes).
+      Phone__ContainerName: mtrx-redroid
+      Phone__AdbPort: "5555"
+      Phone__VolumeName: redroid-data-a
+      # URL do APK do WhatsApp pro botão "Instalar WhatsApp" (preencha PHONE_WA_APK_URL_1 no deploy).
+      Phone__WhatsAppApkUrl: "${PHONE_WA_APK_URL_1:-}"
+    # A API (container bridged) alcança o adb do redroid pelo host-gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

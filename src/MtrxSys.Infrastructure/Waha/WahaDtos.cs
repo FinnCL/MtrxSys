@@ -1,8 +1,11 @@
 namespace MtrxSys.Infrastructure.Waha;
 
 // DTOs de desserialização da API WAHA, compartilhados pelos clientes por responsabilidade.
-internal sealed record SessionDto(string? Name, string? Status, MeDto? Me);
+internal sealed record SessionDto(string? Name, string? Status, MeDto? Me, SessionConfigDto? Config);
 internal sealed record MeDto(string? Id, string? PushName);
+// config.proxy.server da sessão — o proxy REALMENTE aplicado (null = sem proxy). Pro indicador na aba.
+internal sealed record SessionConfigDto(SessionProxyDto? Proxy);
+internal sealed record SessionProxyDto(string? Server);
 internal sealed record LidDto(string? Lid, string? Pn);
 internal sealed record QrRawDto(string? Value);
 internal sealed record PairingCodeDto(string? Code);

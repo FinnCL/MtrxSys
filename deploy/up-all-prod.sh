@@ -83,7 +83,9 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   export "PHONE_VIEW_URL_${n}=https://phone-${L}.${MTRX_DOMAIN}"
   export "OPTOUT_PUBLIC_URL_${n}=https://${L}.${MTRX_DOMAIN}"
   F=(-f "${COMPOSES[$i]}" -f "${LEDGERS[$i]}" -f deploy/docker-compose.prod.yml)
-  [ "$n" = "1" ] && F+=(-f deploy/docker-compose.seed-a.yml)
+  # Stack A: seed + PILOTO redroid (Phone__Engine=redroid). Sem este override, o deploy padrão
+  # reverteria o A pra docker-android em silêncio. Some quando o redroid virar o default dos 10.
+  [ "$n" = "1" ] && F+=(-f deploy/docker-compose.seed-a.yml -f deploy/docker-compose.redroid-a.yml)
   echo "   -- ambiente ${L} --"
   docker compose "${EF[@]}" "${F[@]}" up -d --build
 done

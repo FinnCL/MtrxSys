@@ -77,9 +77,9 @@ public static class PresenceEndpoints
                 entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(5);
                 try
                 {
-                    // Uma leitura só da sessão devolve status + número/nome (antes eram 2 GETs).
+                    // Uma leitura só da sessão devolve status + número/nome + proxy aplicado.
                     var snap = await waha.GetSessionSnapshotAsync(dispatch.Value.SessionId, ct);
-                    return new ChipInfo(snap.Status.ToString(), snap.Identity?.PhoneE164, snap.Identity?.Name);
+                    return new ChipInfo(snap.Status.ToString(), snap.Identity?.PhoneE164, snap.Identity?.Name, snap.AppliedProxyServer);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -88,10 +88,10 @@ public static class PresenceEndpoints
 #pragma warning disable CA1031
                 catch
                 {
-                    return new ChipInfo(WahaSessionStatus.Unknown.ToString(), null, null);
+                    return new ChipInfo(WahaSessionStatus.Unknown.ToString(), null, null, null);
                 }
 #pragma warning restore CA1031
-            }) ?? new ChipInfo(WahaSessionStatus.Unknown.ToString(), null, null);
+            }) ?? new ChipInfo(WahaSessionStatus.Unknown.ToString(), null, null, null);
 
             bool breakerOpen;
             try
@@ -114,12 +114,18 @@ public static class PresenceEndpoints
             var phone = presence.Value.MaskChipPhone
                 ? MtrxSys.Api.Options.PresenceOptions.Mask(info.Phone)
                 : info.Phone;
-            return Results.Ok(new { status = info.Status, breakerOpen, phone, name = info.Name });
+            // Consistência com o número: no deploy endurecido (MaskChipPhone), esconde TAMBÉM o IP do
+            // proxy — mas mantém o on/off ("***" continua não-nulo → o indicador ainda mostra "ativo",
+            // só não revela qual proxy). Sem o mask (default), mostra o IP cheio pro operador ver.
+            var proxy = presence.Value.MaskChipPhone && !string.IsNullOrEmpty(info.Proxy)
+                ? "***"
+                : info.Proxy;
+            return Results.Ok(new { status = info.Status, breakerOpen, phone, name = info.Name, proxy });
         }).AllowAnonymous();
 
         return app;
     }
 
-    // Status + identidade do chip, cacheados juntos no /chip.
-    private sealed record ChipInfo(string Status, string? Phone, string? Name);
+    // Status + identidade + proxy aplicado do chip, cacheados juntos no /chip.
+    private sealed record ChipInfo(string Status, string? Phone, string? Name, string? Proxy);
 }

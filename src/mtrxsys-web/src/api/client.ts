@@ -119,6 +119,8 @@ export interface ChipIdentity {
   phone: string | null;
   name: string | null;
   breakerOpen?: boolean;
+  // Proxy REALMENTE aplicado na sessão WAHA (host:porta) ou null se o chip sai pelo IP da máquina.
+  proxy?: string | null;
 }
 
 export const api = {

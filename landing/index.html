@@ -91,6 +91,10 @@
       font-family: inherit;
     }
     .login-card input:focus { outline: none; border-color: var(--accent); }
+    /* Credencial do ambiente já vem pré-preenchida (injetada pelo gen-config) e o portão já
+       protege — então os campos são read-only e não-clicáveis (sem edição acidental). O olho
+       de mostrar/ocultar senha continua funcionando (é um botão à parte). */
+    .login-card input[readonly] { pointer-events: none; cursor: default; }
     .login-card button[type="submit"] {
       background: var(--accent);
       color: #052824;
@@ -166,12 +170,12 @@
       <h1>MtrxSys A</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -188,12 +192,12 @@
       <h1>MtrxSys B</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -210,12 +214,12 @@
       <h1>MtrxSys C</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -232,12 +236,12 @@
       <h1>MtrxSys D</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -254,12 +258,12 @@
       <h1>MtrxSys E</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -276,12 +280,12 @@
       <h1>MtrxSys F</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -298,12 +302,12 @@
       <h1>MtrxSys G</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -320,12 +324,12 @@
       <h1>MtrxSys H</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -342,12 +346,12 @@
       <h1>MtrxSys I</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -364,12 +368,12 @@
       <h1>MtrxSys J</h1>
       <label>
         <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required>
+        <input type="email" name="email" autocomplete="username" required readonly tabindex="-1">
       </label>
       <label>
         <span>Senha</span>
         <div class="password-field">
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password" required readonly tabindex="-1">
           <button type="button" class="password-toggle" aria-label="Mostrar senha" tabindex="-1">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
@@ -386,8 +390,11 @@
   <!--MTRX_CREDS-->
   <script>
     // Fallback de localhost: em produção o gen-config.sh injeta window.__MTRX_CREDS no lugar do
-    // comentário <!--MTRX_CREDS--> acima (roda ANTES deste script), então o `||` preserva o valor
-    // de produção. No localhost ninguém roda o gen-config → o comentário fica literal → cai aqui
+    // marcador-comentário acima (roda ANTES deste script), então o `||` preserva o valor de
+    // produção. IMPORTANTE: não repetir aqui a string literal do marcador NEM tags de script —
+    // o sed do gen-config roda em todas as linhas e substituiria este comentário também, e uma
+    // tag de fechamento aqui encerraria o bloco cedo (o parser HTML ignora comentários JS),
+    // quebrando a página. No localhost ninguém roda o gen-config → cai aqui
     // nos defaults dos docker-compose*.yml (Seed__Admin__*), que é o que o AdminSeeder semeia.
     window.__MTRX_CREDS = window.__MTRX_CREDS || {
       a: { email: "admin@local",   pass: "admin123!" },
