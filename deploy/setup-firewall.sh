@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Firewall do MtrxSys — bloqueia acesso EXTERNO às portas sensíveis publicadas pelo Docker:
 #   • 5440      → Postgres COMPARTILHADO (ledger de dedup/opt-out cross-chip)
-#   • 6080-6089 → noVNC dos emuladores Android (tela do chip)
+#   • 6080-6089 → noVNC dos emuladores Android (tela do chip) — engine docker-android
+#   • 5555-5564 → adb dos redroid (controle total do Android: shell/install) — engine redroid
 # Mantém abertos: 22 (SSH), 80/443 (Caddy). Mantém o tráfego INTERNO do Docker (172.16.0.0/12)
 # — os ambientes alcançam o ledger via host.docker.internal, então NÃO pode bloquear a rede docker.
 #
@@ -15,8 +16,9 @@ set -euo pipefail
 # 1) Script das regras (idempotente: -C antes de -I pra não duplicar).
 cat > /usr/local/bin/mtrx-firewall.sh <<'RULES'
 #!/bin/bash
-# Dropa 5440 + 6080-6089 de fontes que NÃO são da rede docker (= internet), preservando o docker.
-for spec in "5440" "6080:6089"; do
+# Dropa 5440 + 6080-6089 + 5555-5564 de fontes que NÃO são da rede docker (= internet), preservando
+# o docker (a API alcança o adb do redroid via host-gateway, que é source da rede docker → não cai).
+for spec in "5440" "6080:6089" "5555:5564"; do
   iptables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport "$spec" ! -s 172.16.0.0/12 -j DROP 2>/dev/null \
     || iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport "$spec" ! -s 172.16.0.0/12 -j DROP
 done

@@ -44,8 +44,13 @@ var corsOrigins = builder.Configuration.GetSection("Web:Origins").Get<string[]>(
         "http://localhost:5177", "http://localhost:5178", "http://localhost:5179", "http://localhost:5180",
         "http://localhost:5181", "http://localhost:5182", "http://localhost:5183",
     };
+// AllowCredentials: a landing chama /api/presence com fetch credentials:"include" (cookie de
+// sessão). Sem isto o browser exige ACAC:true e não vê → bloqueia (falha só no localhost, onde
+// não há Caddy pra complementar o header). Com WithOrigins (lista fixa, não AllowAnyOrigin) o
+// AllowCredentials é válido: a API reflete a origem no ACAO e emite ACAC:true sozinha — em prod
+// isso dispensa (e substitui) a linha Allow-Credentials do Caddy, que senão viria duplicada.
 builder.Services.AddCors(opts => opts.AddDefaultPolicy(p =>
-    p.AllowAnyHeader().AllowAnyMethod().WithOrigins(corsOrigins)));
+    p.AllowAnyHeader().AllowAnyMethod().WithOrigins(corsOrigins).AllowCredentials()));
 // Exceção não tratada → ProblemDetails (JSON) em vez de 500 cru. Importa pro CORS: numa resposta de
 // erro sem o middleware de exceção, o header Access-Control-Allow-Origin some e o browser reporta um
 // falso "erro de CORS" mascarando o crash real. Com o handler (rodando DEPOIS do UseCors) a resposta

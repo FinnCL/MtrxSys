@@ -132,6 +132,11 @@ services:
       # conta/digital (colisão). Stack A=android-data, B=android-data-2, … (ver docs/scaling.md).
       Phone__VolumeName: ${PHONE_VOLUME_1:-android-data}
       Phone__WhatsAppApkUrl: ${PHONE_WA_APK_URL_1:-}
+      # Engine do aparelho virtual: "docker-android" (default, exige /dev/kvm) ou "redroid" (sem KVM,
+      # leve; fala com o Android por adb TCP em host.docker.internal:AdbPort). Ver docs/redroid.md.
+      Phone__Engine: ${PHONE_ENGINE_1:-docker-android}
+      # Porta HOST do adb do redroid (única por ambiente: A=5555 … J=5564). Só usada se Engine=redroid.
+      Phone__AdbPort: ${PHONE_ADB_PORT_1:-5555}
       # Endurecimento opcional: mascara o número no /api/presence/chip anônimo (deploy exposto além
       # da rede do operador). Default off — a landing precisa do número cheio pra detectar duplicata.
       Presence__MaskChipPhone: ${MASK_CHIP_PHONE_1:-false}
@@ -139,6 +144,10 @@ services:
       # Socket do Docker: deixa a API ligar/parar/logar o container do emulador (deploy Linux).
       # Sem o socket acessível, a aba "Celular" mostra "indisponível" (fail-safe).
       - /var/run/docker.sock:/var/run/docker.sock
+    # Resolve host.docker.internal no Linux (no-op no Docker Desktop) — o engine redroid usa isto pra
+    # o `adb connect host.docker.internal:AdbPort` alcançar o adb do redroid publicado no loopback do host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

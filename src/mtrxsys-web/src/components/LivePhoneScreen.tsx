@@ -66,10 +66,11 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
     viewerKind === "scrcpy" && url ? scrcpyStreamUrl(url, udid || "emulator-5554") : url;
 
   const [ident, setIdent] = useState<ChipIdentity | null>(null);
-  // Servidor (PHONE_VIEW_URL setado): embute o Android AUTOMATICAMENTE — abre sozinho, sem clique e sem
-  // cair no QR quando desconectado (é desconectado que você precisa ver a tela pra instalar/registrar).
-  // Local (url vazia): começa null → mostra o QR/identidade. "Desligar tela" zera; o usuário reabre.
-  const [embed, setEmbed] = useState<string | null>(safeEmbedUrl(androidUrl));
+  // NÃO auto-embute a tela: quando não há chip conectado, mostramos o QR do WAHA PRIMEIRO — é o que
+  // você quer 99% das vezes (parear um chip pro disparo). A tela do emulador (noVNC/scrcpy) fica no
+  // botão opcional "Mostrar tela do Android". Antes o servidor (PHONE_VIEW_URL setado) abria a tela
+  // sozinho e o QR ficava ESCONDIDO atrás dela — origem da confusão "não acho o QR".
+  const [embed, setEmbed] = useState<string | null>(null);
   const [showServer, setShowServer] = useState(false);
 
   const refreshIdent = useCallback(async () => {
@@ -128,15 +129,27 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
 
 
       <div className="phone-footer">
-        {embed && (
-          <button type="button" className="phone-reload" onClick={() => setEmbed(null)}>
-            Desligar tela
-          </button>
-        )}
-        {embed && (
-          <a className="phone-reload" href={embed} target="_blank" rel="noreferrer">
-            Abrir em nova aba
-          </a>
+        {embed ? (
+          <>
+            <button type="button" className="phone-reload" onClick={() => setEmbed(null)}>
+              Desligar tela
+            </button>
+            <a className="phone-reload" href={embed} target="_blank" rel="noreferrer">
+              Abrir em nova aba
+            </a>
+          </>
+        ) : (
+          // Desconectado + tela desligada: botão OPCIONAL pra abrir o emulador (instalar WhatsApp/
+          // registrar). Quando conectado, o botão "Mostrar tela do Android" já vive no card acima.
+          url && !connected && (
+            <button
+              type="button"
+              className="phone-reload"
+              onClick={() => setEmbed(safeEmbedUrl(androidUrl))}
+            >
+              Mostrar tela do Android
+            </button>
+          )
         )}
       </div>
 
@@ -226,8 +239,8 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
   return (
     <div className="phone-server">
       <p className="phone-off-hint">
-        Android real em container — aqui o aparelho vira o <b>principal</b> do número (registro por
-        SMS), permitindo dispensar o físico. Exige host Linux com <b>/dev/kvm</b>.
+        Android real em container. Vira o <b>principal</b> do número (registro por SMS) e dispensa o
+        físico. Exige host Linux com <b>/dev/kvm</b>.
       </p>
 
       {connected && !running && (
@@ -324,8 +337,8 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
       {running && (
         <>
           <p className="phone-off-hint">
-            <b>1.</b> Instale o WhatsApp · <b>2.</b> registre por SMS (vira <b>principal</b>) ·{" "}
-            <b>3.</b> vincule o WAHA por QR (companion).
+            <b>1.</b> Instale o WhatsApp. <b>2.</b> Registre por SMS (vira <b>principal</b>).{" "}
+            <b>3.</b> Vincule o WAHA por QR (companion).
           </p>
           <div className="phone-footer">
             <button type="button" className="phone-reload" onClick={() => void installWa()} disabled={busy !== null}>

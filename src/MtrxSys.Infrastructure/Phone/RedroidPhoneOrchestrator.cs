@@ -4,32 +4,35 @@ using MtrxSys.Core.Application.Options;
 
 namespace MtrxSys.Infrastructure.Phone;
 
-/// <summary>Controla o "aparelho virtual" (Android em container, docker-android) via `docker` CLI
-/// sobre o socket montado. Tudo é fail-safe: se o docker não estiver acessível (ex.: host sem o
-/// socket), os métodos devolvem "unavailable" em vez de estourar — assim a aba "Celular" degrada de
-/// forma limpa. Exige um host com /dev/kvm (servidor Linux) pra o Android de fato bootar. Os helpers
-/// de processo/download ficam em <see cref="DockerCli"/> (compartilhados com o engine redroid).</summary>
-internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IHttpClientFactory http)
+/// <summary>Engine "redroid" do aparelho virtual: Android rodando DIRETO no kernel do host Linux
+/// (binder/ashmem), SEM QEMU/KVM — ~0.5-1 GB por instância, o que permite os 10 ambientes num
+/// servidor só. Provisiona/liga/desliga via `docker` CLI (socket montado) e fala com o Android por
+/// `adb` sobre TCP (o redroid NÃO traz adb dentro; a API tem o cliente adb e conecta em
+/// {AdbHost}:{AdbPort}, publicado pelo container). A tela NÃO é noVNC (ViewUrl fica null): embute via
+/// ws-scrcpy no front (VITE_EMULATOR_KIND=scrcpy). Contrato de State idêntico ao docker-android
+/// (unavailable/not_created/exited/running) pra o PhoneKeepAliveService rodar sem mudança. Fail-safe:
+/// sem docker acessível, tudo vira "unavailable" e a aba degrada limpo. Ver docs/phone-primary-server.md.</summary>
+internal sealed class RedroidPhoneOrchestrator(IOptions<PhoneOptions> opts, IHttpClientFactory http)
     : IPhoneOrchestrator
 {
     private PhoneOptions Opts => opts.Value;
 
+    // Serial do device pro adb TCP: o mesmo host:porta em que o redroid publica o adb (5555 interno).
+    private string Serial => $"{Opts.AdbHost}:{Opts.AdbPort}";
+
     public async Task<PhoneStatus> GetStatusAsync(CancellationToken ct)
     {
         var (state, running, unavailable) = await DockerCli.InspectStatusAsync(Opts.ContainerName, ct);
-        if (unavailable)
-        {
-            return new PhoneStatus(state, false, null); // "not_created" ou "unavailable"
-        }
-        // docker-android: quando rodando, a tela é o noVNC embutido (ViewUrl).
-        return new PhoneStatus(state, running, running ? NullIfEmpty(Opts.ViewUrl) : null);
+        // ViewUrl sempre null: a tela do redroid vem do ws-scrcpy (front), não de um noVNC embutido.
+        return unavailable ? new PhoneStatus(state, false, null) : new PhoneStatus(state, running, null);
     }
 
     public async Task<bool> IsBootedAsync(CancellationToken ct)
     {
+        await AdbConnectAsync(ct);
         // adb só responde depois do Android subir; sys.boot_completed=1 = home pronta pra instalar o APK.
-        var (code, outp, _) = await DockerCli.DockerAsync(ct,
-            "exec", Opts.ContainerName, "adb", "shell", "getprop", "sys.boot_completed");
+        var (code, outp, _) = await DockerCli.RunAsync("adb", ct,
+            "-s", Serial, "shell", "getprop", "sys.boot_completed");
         return code == 0 && outp.Trim() == "1";
     }
 
@@ -42,16 +45,21 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         }
         if (status.State == "not_created")
         {
-            // Cria o container do Android com KVM, noVNC e volume persistente — o equivalente ao
-            // serviço `android` do compose, mas disparado pela aba (sem prompt).
-            var args = new List<string> { "run", "-d", "--name", Opts.ContainerName };
-            // Política de restart: default "no" — o primário fica desligado no regime normal (acordado
-            // só no keep-alive), então não deve voltar sozinho após reboot do host.
+            // docker run do redroid: SEM /dev/kvm. O binder/ashmem vêm do kernel do host (por isso o
+            // --privileged por padrão). Volume em /data (estado do Android/sessão do WhatsApp).
+            // adb publicado em 0.0.0.0:AdbPort (NÃO 127.0.0.1): a API roda em container bridged e
+            // alcança este container pelo host-gateway (host.docker.internal) — uma porta em 127.0.0.1
+            // do host NÃO responde por esse caminho. A exposição fica travada no firewall
+            // (deploy/setup-firewall.sh dropa 5555-5564 de fora da rede docker). androidboot.* = cmdline.
+            var args = new List<string> { "run", "-itd", "--name", Opts.ContainerName };
+            if (Opts.RedroidPrivileged)
+            {
+                args.Add("--privileged");
+            }
             if (!string.IsNullOrWhiteSpace(Opts.RestartPolicy))
             {
                 args.AddRange(["--restart", Opts.RestartPolicy]);
             }
-            // Tetos de recurso: um emulador não rouba o host dos outros 9 (regra pra escalar os 10).
             if (!string.IsNullOrWhiteSpace(Opts.MemoryLimit))
             {
                 args.AddRange(["--memory", Opts.MemoryLimit]);
@@ -61,14 +69,13 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
                 args.AddRange(["--cpus", Opts.Cpus]);
             }
             args.AddRange([
-                "--device", "/dev/kvm",
-                "-e", $"EMULATOR_DEVICE={Opts.Device}",
-                "-e", "WEB_VNC=true",
-                // Bind em 127.0.0.1: o Caddy (rede host) alcança via loopback, mas o noVNC NÃO fica
-                // exposto direto na internet (furando o portão). Antes era "{porta}:6080" (= 0.0.0.0).
-                "-p", $"127.0.0.1:{Opts.NoVncPort}:6080",
-                "-v", $"{Opts.VolumeName}:/home/androidusr",
-                Opts.Image,
+                "-p", $"{Opts.AdbPort}:5555",
+                "-v", $"{Opts.VolumeName}:/data",
+                Opts.RedroidImage,
+                $"androidboot.redroid_width={Opts.Width}",
+                $"androidboot.redroid_height={Opts.Height}",
+                $"androidboot.redroid_dpi={Opts.Dpi}",
+                $"androidboot.redroid_gpu_mode={Opts.GpuMode}",
             ]);
             await DockerCli.DockerAsync(ct, args.ToArray());
             return await GetStatusAsync(ct);
@@ -98,8 +105,7 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         if (string.IsNullOrWhiteSpace(Opts.WhatsAppApkUrl))
         {
             return "Defina Phone:WhatsAppApkUrl com a URL do APK do WhatsApp (não há URL oficial " +
-                   "estável — use a sua). Alternativa manual: docker cp whatsapp.apk " +
-                   $"{Opts.ContainerName}:/tmp/wa.apk && docker exec {Opts.ContainerName} adb install -r /tmp/wa.apk";
+                   $"estável — use a sua). Alternativa manual: adb -s {Serial} install -r whatsapp.apk";
         }
         // O APK é BAIXADO por HTTP: a URL precisa ser http(s) ABSOLUTA (não caminho de arquivo local
         // nem host sem esquema), senão o GetAsync estoura "invalid request URI". Mensagem clara aqui.
@@ -107,12 +113,11 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         {
             return $"Phone:WhatsAppApkUrl inválida (\"{Opts.WhatsAppApkUrl}\") — precisa ser uma URL " +
                    "http(s) ABSOLUTA (ex.: https://seu-host/whatsapp.apk). Um caminho de arquivo local " +
-                   "NÃO funciona (o APK é baixado por HTTP): hospede o .apk, ou instale manual via " +
-                   $"docker cp + docker exec {Opts.ContainerName} adb install -r /tmp/wa.apk.";
+                   $"NÃO funciona (o APK é baixado por HTTP): hospede o .apk, ou instale manual via adb -s {Serial} install -r whatsapp.apk.";
         }
 
-        // Baixa o APK (helper compartilhado, com teto), copia pro container e instala via adb DENTRO
-        // dele (o docker-android traz o adb). O download é o único desvio do "só docker CLI".
+        // Baixa o APK (helper compartilhado, com teto) e instala via adb TCP. O redroid não tem Play
+        // Store; o sideload do APK é o caminho (e o único que precisamos pro WhatsApp).
         var (tmp, downloadErr) = await DockerCli.DownloadApkToTempAsync(http, Opts.WhatsAppApkUrl, ct);
         if (downloadErr is not null)
         {
@@ -120,14 +125,9 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         }
         try
         {
-            var (cpCode, _, cpErr) = await DockerCli.DockerAsync(ct, "cp", tmp!, $"{Opts.ContainerName}:/tmp/wa.apk");
-            if (cpCode != 0)
-            {
-                return $"Falha ao copiar o APK pro container: {cpErr}";
-            }
-
-            var (_, outp, err) = await DockerCli.DockerAsync(ct,
-                "exec", Opts.ContainerName, "adb", "install", "-r", "/tmp/wa.apk");
+            await AdbConnectAsync(ct);
+            // O APK é local à API (mesmo container do adb) — não precisa de `docker cp`, o adb envia.
+            var (_, outp, err) = await DockerCli.RunAsync("adb", ct, "-s", Serial, "install", "-r", tmp!);
             return string.IsNullOrWhiteSpace(outp) ? err : outp;
         }
 #pragma warning disable CA1031
@@ -149,11 +149,15 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         {
             return err;
         }
-        var (_, outp, e) = await DockerCli.DockerAsync(ct,
-            "exec", Opts.ContainerName, "adb", "shell", "settings", "put", "global", "http_proxy", value!);
+        await AdbConnectAsync(ct);
+        var (_, outp, e) = await DockerCli.RunAsync("adb", ct,
+            "-s", Serial, "shell", "settings", "put", "global", "http_proxy", value!);
         var result = string.IsNullOrWhiteSpace(outp) ? e : outp;
         return string.IsNullOrWhiteSpace(result) ? $"http_proxy = {value}" : result;
     }
 
-    private static string? NullIfEmpty(string s) => string.IsNullOrWhiteSpace(s) ? null : s;
+    // Garante a conexão adb-TCP antes de cada operação de device. `adb connect` é idempotente (se já
+    // conectado, é no-op); best-effort — se falhar, o comando seguinte devolve o erro real.
+    private async Task AdbConnectAsync(CancellationToken ct) =>
+        await DockerCli.RunAsync("adb", ct, "connect", Serial);
 }

@@ -34,7 +34,10 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
 WORKDIR /app
 # docker-cli: usado SÓ pela orquestração do celular Android virtual (aba "Celular"), que controla
 # o container do emulador via socket montado (deploy Linux). Inócuo onde o socket não é montado.
-RUN apk add --no-cache docker-cli
+# android-tools: traz o cliente `adb` — usado SÓ pelo engine redroid (Phone:Engine=redroid), que fala
+# com o Android por adb TCP (o redroid não traz adb dentro). Inócuo pro docker-android (que usa o adb
+# de dentro do próprio container do emulador via `docker exec`).
+RUN apk add --no-cache docker-cli android-tools
 COPY --from=build /app ./
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080

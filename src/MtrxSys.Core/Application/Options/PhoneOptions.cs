@@ -8,6 +8,11 @@ public sealed class PhoneOptions
 {
     public const string SectionName = "Phone";
 
+    /// <summary>Engine do aparelho virtual: "docker-android" (budtmo, exige /dev/kvm — default) ou
+    /// "redroid" (Android no kernel do host via binder/ashmem, SEM KVM, ~0.5-1 GB/instância; a tela
+    /// embute via ws-scrcpy por adb). Seleciona a implementação de IPhoneOrchestrator no DI.</summary>
+    public string Engine { get; set; } = "docker-android";
+
     /// <summary>Nome do container do Android deste ambiente (ex.: mtrx-android / mtrx2-android).</summary>
     public string ContainerName { get; set; } = "mtrx-android";
 
@@ -32,6 +37,40 @@ public sealed class PhoneOptions
     /// <summary>URL do APK do WhatsApp pro botão "Instalar WhatsApp" (sideload). Você fornece (não há
     /// URL oficial estável). Vazio = a aba explica como instalar manualmente.</summary>
     public string WhatsAppApkUrl { get; set; } = "";
+
+    // ── Engine redroid (usados só quando Engine = "redroid") ──────────────────────────────────
+
+    /// <summary>Imagem do redroid ao provisionar. Escolha a versão do Android + arch (ex.:
+    /// redroid/redroid:14.0.0-latest, redroid/redroid:11.0.0-latest).</summary>
+    public string RedroidImage { get; set; } = "redroid/redroid:14.0.0-latest";
+
+    /// <summary>redroid precisa de privilégios pro binder/ashmem do kernel do host (docker run
+    /// --privileged). Default true (funciona out-of-the-box). Ponha false só num host endurecido que
+    /// conceda as caps específicas por fora.</summary>
+    public bool RedroidPrivileged { get; set; } = true;
+
+    /// <summary>Host por onde a API alcança o adb do redroid. Default host.docker.internal (a API roda
+    /// em container bridged; o redroid publica o adb em 0.0.0.0:AdbPort no host e a API chega por
+    /// host-gateway). Exige extra_hosts host-gateway no serviço da api. Serial = "{AdbHost}:{AdbPort}".</summary>
+    public string AdbHost { get; set; } = "host.docker.internal";
+
+    /// <summary>Porta HOST do adb do redroid (docker run -p AdbPort:5555, bind 0.0.0.0 — travado no
+    /// firewall). ÚNICA por ambiente (1 host, 10 stacks): A=5555, B=5556, … J=5564.</summary>
+    public int AdbPort { get; set; } = 5555;
+
+    /// <summary>Resolução/densidade do redroid (androidboot.redroid_width/height/dpi). 720x1280@320
+    /// é leve e suficiente pro WhatsApp.</summary>
+    public int Width { get; set; } = 720;
+
+    /// <inheritdoc cref="Width"/>
+    public int Height { get; set; } = 1280;
+
+    /// <inheritdoc cref="Width"/>
+    public int Dpi { get; set; } = 320;
+
+    /// <summary>Modo de GPU do redroid (androidboot.redroid_gpu_mode). "guest" = render por software
+    /// (sem GPU do host) — o mais portável pros servidores. "host" exige GPU + drivers no host.</summary>
+    public string GpuMode { get; set; } = "guest";
 
     // ── Tetos de recurso do container on-demand (docker run) ──────────────────────────────────
 

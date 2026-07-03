@@ -385,6 +385,23 @@
 
   <!--MTRX_CREDS-->
   <script>
+    // Fallback de localhost: em produção o gen-config.sh injeta window.__MTRX_CREDS no lugar do
+    // comentário <!--MTRX_CREDS--> acima (roda ANTES deste script), então o `||` preserva o valor
+    // de produção. No localhost ninguém roda o gen-config → o comentário fica literal → cai aqui
+    // nos defaults dos docker-compose*.yml (Seed__Admin__*), que é o que o AdminSeeder semeia.
+    window.__MTRX_CREDS = window.__MTRX_CREDS || {
+      a: { email: "admin@local",   pass: "admin123!" },
+      b: { email: "admin-b@local", pass: "chipB123!" },
+      c: { email: "admin-c@local", pass: "chipC123!" },
+      d: { email: "admin-d@local", pass: "chipD123!" },
+      e: { email: "admin-e@local", pass: "chipE123!" },
+      f: { email: "admin-f@local", pass: "chipF123!" },
+      g: { email: "admin-g@local", pass: "chipG123!" },
+      h: { email: "admin-h@local", pass: "chipH123!" },
+      i: { email: "admin-i@local", pass: "chipI123!" },
+      j: { email: "admin-j@local", pass: "chipJ123!" },
+    };
+
     // Pré-preenche cada card com a credencial do ambiente (injetado pelo gen-config; o portão já protege).
     if (window.__MTRX_CREDS) {
       for (const env in window.__MTRX_CREDS) {
