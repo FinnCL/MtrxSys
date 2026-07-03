@@ -57,10 +57,23 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         {
             // Cria o container do Android com KVM, noVNC e volume persistente — o equivalente ao
             // serviço `android` do compose, mas disparado pela aba (sem prompt).
-            await RunAsync(ct,
-                "run", "-d",
-                "--name", Opts.ContainerName,
-                "--restart", "unless-stopped",
+            var args = new List<string> { "run", "-d", "--name", Opts.ContainerName };
+            // Política de restart: default "no" — o primário fica desligado no regime normal (acordado
+            // só no keep-alive), então não deve voltar sozinho após reboot do host.
+            if (!string.IsNullOrWhiteSpace(Opts.RestartPolicy))
+            {
+                args.AddRange(["--restart", Opts.RestartPolicy]);
+            }
+            // Tetos de recurso: um emulador não rouba o host dos outros 9 (regra pra escalar os 10).
+            if (!string.IsNullOrWhiteSpace(Opts.MemoryLimit))
+            {
+                args.AddRange(["--memory", Opts.MemoryLimit]);
+            }
+            if (!string.IsNullOrWhiteSpace(Opts.Cpus))
+            {
+                args.AddRange(["--cpus", Opts.Cpus]);
+            }
+            args.AddRange([
                 "--device", "/dev/kvm",
                 "-e", $"EMULATOR_DEVICE={Opts.Device}",
                 "-e", "WEB_VNC=true",
@@ -68,7 +81,9 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
                 // exposto direto na internet (furando o portão). Antes era "{porta}:6080" (= 0.0.0.0).
                 "-p", $"127.0.0.1:{Opts.NoVncPort}:6080",
                 "-v", $"{Opts.VolumeName}:/home/androidusr",
-                Opts.Image);
+                Opts.Image,
+            ]);
+            await RunAsync(ct, args.ToArray());
             return await GetStatusAsync(ct);
         }
         // Já existe: só garante ligado.

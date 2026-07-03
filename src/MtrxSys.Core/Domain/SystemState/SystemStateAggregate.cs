@@ -31,6 +31,11 @@ public sealed class SystemStateAggregate : Entity<int>
     // se o número conectado mudar, o aquecimento reinicia sozinho (chip novo = frio de novo).
     public string? WarmupPhone { get; private set; }
 
+    // UTC da última vez que o PRINCIPAL (emulador) esteve online — no pareamento ou num keep-alive.
+    // Governa quando o próximo keep-alive é devido (janela de ~14 dias do WhatsApp, senão o companion
+    // WAHA é deslogado). Null = nunca pareado (nada a manter vivo ainda).
+    public DateTimeOffset? PhonePrimaryLastOnlineUtc { get; private set; }
+
     public bool IsManuallyPaused => PausedReason == ManualPauseReason;
 
     private SystemStateAggregate() { }
@@ -49,6 +54,10 @@ public sealed class SystemStateAggregate : Entity<int>
     public void Pause(string reason) => PausedReason = reason;
 
     public void Resume() => PausedReason = null;
+
+    // Marca que o primário apareceu online agora (reinicia a contagem dos ~14 dias). Chamado pelo
+    // PhoneKeepAliveService ao confirmar WORKING no pareamento e a cada keep-alive.
+    public void RecordPhonePrimaryOnline(DateTimeOffset whenUtc) => PhonePrimaryLastOnlineUtc = whenUtc;
 
     // Reinicia o aquecimento a partir de hoje — a curva volta ao dia 0. Usado ao
     // trocar de chip (número novo é "frio" de novo). Zera também qualquer liberação extra.

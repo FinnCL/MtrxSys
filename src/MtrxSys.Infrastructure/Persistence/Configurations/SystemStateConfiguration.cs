@@ -21,6 +21,7 @@ internal sealed class SystemStateConfiguration : IEntityTypeConfiguration<System
         b.Property(x => x.WarmupOverrideDate).HasColumnName("warmup_override_date");
         b.Property(x => x.WarmupBonusToday).HasColumnName("warmup_bonus_today").HasDefaultValue(0);
         b.Property(x => x.WarmupPhone).HasColumnName("warmup_phone").HasMaxLength(32);
+        b.Property(x => x.PhonePrimaryLastOnlineUtc).HasColumnName("phone_primary_last_online_utc");
         b.Ignore(x => x.DomainEvents);
         b.Property<uint>("xmin").HasColumnName("xmin").IsConcurrencyToken().ValueGeneratedOnAddOrUpdate();
     }

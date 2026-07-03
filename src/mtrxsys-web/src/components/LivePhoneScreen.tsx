@@ -126,12 +126,6 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
         )}
       </div>
 
-      {embed && (
-        <p className="phone-off-hint phone-explain">
-          A tela abre <b>direto no Android</b>. Se ficar preta, dê alguns segundos (o emulador acorda)
-          ou use <b>Abrir em nova aba</b>. Depois: <b>Play Store</b> → instalar o <b>WhatsApp</b>.
-        </p>
-      )}
 
       <div className="phone-footer">
         {embed && (
@@ -149,9 +143,9 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
       {showServerOption && (
         <>
           <button type="button" className="phone-reload" onClick={() => setShowServer((s) => !s)}>
-            {showServer ? "Ocultar" : "Mostrar"} opção de servidor — Android em container (KVM)
+            {showServer ? "Ocultar" : "Configurar"} aparelho no servidor
           </button>
-          {showServer && <ServerAndroidPanel url={url} />}
+          {showServer && <ServerAndroidPanel url={url} connected={connected} />}
         </>
       )}
     </section>
@@ -161,7 +155,7 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
 // Opção de servidor: Android REAL em container (docker-android). A aba provisiona/liga/instala tudo
 // pela API (docker.sock), sem prompt. Só funciona num host Linux com /dev/kvm — fora disso, mostra
 // "indisponível" de forma limpa. Aqui o Android pode virar o dispositivo PRINCIPAL (registro por SMS).
-function ServerAndroidPanel({ url }: { url: string }) {
+function ServerAndroidPanel({ url, connected }: { url: string; connected: boolean }) {
   const [status, setStatus] = useState<PhoneStatus | null>(null);
   const [embed, setEmbed] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -217,6 +211,9 @@ function ServerAndroidPanel({ url }: { url: string }) {
     run("install", async () => setOutput((await api.phoneInstallWhatsApp()).output || "(ok)"));
   const applyProxy = () =>
     run("proxy", async () => setOutput((await api.phoneSetProxy(proxy)).output || "(ok)"));
+  // Acordar o primário adormecido (keep-alive manual). Não-bloqueante: a API só agenda; o
+  // PhoneKeepAliveService faz o ciclo (liga → online → desliga) em background.
+  const keepAlive = () => run("keepalive", async () => { await api.phoneKeepAlive(); });
 
   const loadLogs = async () => {
     try {
@@ -232,6 +229,22 @@ function ServerAndroidPanel({ url }: { url: string }) {
         Android real em container — aqui o aparelho vira o <b>principal</b> do número (registro por
         SMS), permitindo dispensar o físico. Exige host Linux com <b>/dev/kvm</b>.
       </p>
+
+      {connected && !running && (
+        <div className="phone-footer">
+          <span className="phone-off-hint">
+            💤 primário <b>dormindo</b> — o disparo roda pelo <b>WAHA</b> mesmo com o emulador desligado.
+          </span>
+          <button
+            type="button"
+            className="phone-reload"
+            onClick={() => void keepAlive()}
+            disabled={busy !== null}
+          >
+            {busy === "keepalive" ? "Acordando…" : "Acordar / Keep-alive agora"}
+          </button>
+        </div>
+      )}
 
       <div className="phone-footer">
         <button

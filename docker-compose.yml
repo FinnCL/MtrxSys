@@ -208,6 +208,9 @@ services:
   # Aparelho virtual — Android REAL em container (emulador + WhatsApp + noVNC), TUDO no container.
   # A aba "Celular" provisiona/liga/instala isto sozinha (a API fala com o docker.sock) — este serviço
   # é só a forma declarativa/pré-criada (opcional). Atrás do profile "phone" (NÃO sobe no `up` normal)
+  # DEPRECADO como forma de RODAR: o caminho ativo é o `docker run` da API (tetos de recurso +
+  # --restart no + ciclo de keep-alive — ver docs/phone-lifecycle.md). NÃO rode `--profile phone up
+  # android`: colidiria com o container de mesmo nome provisionado pela aba e ficaria 24/7 sem o ciclo.
   # e EXIGE /dev/kvm no host: só roda num Linux com KVM (bare-metal ou VPS com virtualização aninhada),
   # NÃO no Docker Desktop do Windows. Fluxo na aba (ver docs/phone.md):
   #   Provisionar → Ligar → Mostrar tela → Instalar WhatsApp → registrar por SMS (vira PRINCIPAL) →

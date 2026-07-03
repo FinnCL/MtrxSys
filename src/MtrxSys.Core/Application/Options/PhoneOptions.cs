@@ -32,4 +32,52 @@ public sealed class PhoneOptions
     /// <summary>URL do APK do WhatsApp pro botão "Instalar WhatsApp" (sideload). Você fornece (não há
     /// URL oficial estável). Vazio = a aba explica como instalar manualmente.</summary>
     public string WhatsAppApkUrl { get; set; } = "";
+
+    // ── Tetos de recurso do container on-demand (docker run) ──────────────────────────────────
+
+    /// <summary>Teto de RAM do emulador (docker run --memory). O docker-android (S10, 1440x3040) usa
+    /// ~6 GiB em regime, então 8g dá folga sem OOM. Como só 1-2 emuladores ligam por vez (lifecycle de
+    /// keep-alive), o teto por-aparelho pode ser generoso. Vazio = sem teto.</summary>
+    public string MemoryLimit { get; set; } = "8g";
+
+    /// <summary>Teto de CPU do emulador (docker run --cpus). 4 acelera o boot (o maior gasto de CPU);
+    /// em idle o emulador fica perto de 0. Vazio = sem teto.</summary>
+    public string Cpus { get; set; } = "4";
+
+    /// <summary>Política de restart (docker run --restart). Default "no": o primário fica DESLIGADO no
+    /// regime normal (acordamos só no keep-alive), então não deve voltar sozinho após reboot do host.
+    /// "unless-stopped" reproduz o comportamento antigo (24/7).</summary>
+    public string RestartPolicy { get; set; } = "no";
+
+    // ── Keep-alive do primário (o WhatsApp desloga o companion se o principal sumir ~14 dias) ──
+
+    /// <summary>Liga o loop que acorda o primário periodicamente e o desliga após parear.</summary>
+    public bool KeepAliveEnabled { get; set; } = true;
+
+    /// <summary>Intervalo entre keep-alives, em horas. Default 240h (10 dias) — margem de 4 dias sob o
+    /// limite de ~14 do WhatsApp.</summary>
+    public int KeepAliveIntervalHours { get; set; } = 240;
+
+    /// <summary>Período do tick do serviço (segundos). Curto pra o stop-after-pair reagir rápido.</summary>
+    public int KeepAliveTickSeconds { get; set; } = 60;
+
+    /// <summary>Após o WAHA vincular (WORKING), desliga o emulador pra poupar recurso.</summary>
+    public bool StopAfterPairEnabled { get; set; } = true;
+
+    /// <summary>Carência (min) entre ver o WAHA WORKING e desligar o primário — deixa o sync inicial de
+    /// histórico terminar.</summary>
+    public int StopAfterPairGraceMinutes { get; set; } = 5;
+
+    /// <summary>Minutos que o primário fica online durante o keep-alive antes de desligar de novo.</summary>
+    public int KeepAliveHoldMinutes { get; set; } = 3;
+
+    /// <summary>Teto (s) pra esperar o Android bootar no keep-alive.</summary>
+    public int KeepAliveBootTimeoutSeconds { get; set; } = 240;
+
+    /// <summary>Teto (s) pra esperar o WAHA voltar a WORKING após o wake.</summary>
+    public int KeepAliveReconnectTimeoutSeconds { get; set; } = 180;
+
+    /// <summary>Slot de escalonamento 0-9 (janela do dia em que este stack acorda). -1 = derivar do
+    /// ContainerName por hash estável, pra os 10 não acordarem juntos.</summary>
+    public int KeepAliveStaggerSlot { get; set; } = -1;
 }

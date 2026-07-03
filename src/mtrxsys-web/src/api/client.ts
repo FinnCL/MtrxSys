@@ -154,6 +154,7 @@ export const api = {
   phoneProvision: () => request<PhoneStatus>("/api/phone/provision", { method: "POST" }),
   phoneStart: () => request<PhoneStatus>("/api/phone/start", { method: "POST" }),
   phoneStop: () => request<void>("/api/phone/stop", { method: "POST" }),
+  phoneKeepAlive: () => request<void>("/api/phone/keepalive", { method: "POST" }),
   phoneLogs: (tail = 200) => request<{ logs: string }>(`/api/phone/logs?tail=${tail}`),
   phoneInstallWhatsApp: () =>
     request<{ output: string }>("/api/phone/whatsapp/install", { method: "POST" }),

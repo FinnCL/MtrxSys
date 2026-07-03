@@ -1,3 +1,4 @@
+using MtrxSys.Api.BackgroundServices;
 using MtrxSys.Core.Application.Abstractions;
 
 namespace MtrxSys.Api.Endpoints;
@@ -40,6 +41,14 @@ public static class PhoneEndpoints
 
         group.MapPost("/proxy", async (IPhoneOrchestrator phone, ProxyRequest req, CancellationToken ct) =>
             Results.Ok(new { output = await phone.SetProxyAsync(req.Server, ct) }));
+
+        // Agenda um keep-alive imediato (acordar o primário adormecido). Não-bloqueante: o wake leva
+        // minutos, então o PhoneKeepAliveService pega o sinal no próximo tick e roda o ciclo.
+        group.MapPost("/keepalive", (PhoneKeepAliveSignal signal) =>
+        {
+            signal.RequestNow();
+            return Results.Accepted();
+        });
 
         return app;
     }
