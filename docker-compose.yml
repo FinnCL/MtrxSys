@@ -23,18 +23,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: mtrx-redis
-    ports:
-      - "${MTRX_BIND:-127.0.0.1}:6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   # Builda a imagem do emulador (maquete de celular) e sai (/bin/true). Existe só pra o
   # `docker compose up --build` produzir a imagem que o `waha` usa por padrão — sem comando
   # separado. Taggeia SEMPRE mtrxsys-waha-emulator:latest (nunca o WAHA real), então é seguro

@@ -34,18 +34,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: mtrx10-redis
-    ports:
-      - "${MTRX_BIND:-127.0.0.1}:6388:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   waha:
     image: devlikeapro/waha:latest
     container_name: mtrx10-waha

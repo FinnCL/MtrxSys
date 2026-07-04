@@ -152,19 +152,10 @@ export const api = {
   phoneIdentity: () => request<ChipIdentity>("/api/presence/chip", { auth: false }),
   // Android em container (opção de servidor) — orquestração pela aba "Celular".
   phoneStatus: () => request<PhoneStatus>("/api/phone/status"),
-  phoneBooted: () => request<{ booted: boolean }>("/api/phone/booted"),
   phoneProvision: () => request<PhoneStatus>("/api/phone/provision", { method: "POST" }),
   phoneStart: () => request<PhoneStatus>("/api/phone/start", { method: "POST" }),
-  phoneStop: () => request<void>("/api/phone/stop", { method: "POST" }),
-  phoneKeepAlive: () => request<void>("/api/phone/keepalive", { method: "POST" }),
-  phoneLogs: (tail = 200) => request<{ logs: string }>(`/api/phone/logs?tail=${tail}`),
   phoneInstallWhatsApp: () =>
     request<{ output: string }>("/api/phone/whatsapp/install", { method: "POST" }),
-  phoneSetProxy: (server: string) =>
-    request<{ output: string }>("/api/phone/proxy", {
-      method: "POST",
-      body: JSON.stringify({ server }),
-    }),
   wahaQrBlobUrl: async (): Promise<string> => {
     const token = getToken();
     const resp = await fetch(`${baseUrl}/api/waha/qr.png`, {

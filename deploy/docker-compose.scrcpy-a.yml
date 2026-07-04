@@ -1,0 +1,38 @@
+# ws-scrcpy do PILOTO redroid (stack A). Espelha a tela do redroid pro navegador — o Caddy manda
+# phone-a.mtrxsys.com → 127.0.0.1:8000 (ver gen-config.sh). Compose PRÓPRIO (não mistura com o
+# stack A). Some quando o piloto acabar (é só não subir este compose).
+#
+# Subir:  docker compose -f deploy/docker-compose.scrcpy-a.yml up -d
+#         (a imagem mtrxsys-ws-scrcpy:latest já é buildada; use --build pra reconstruir do zero)
+#
+# Auto-cura (entrypoint): a imagem por padrão fala com o adb server do HOST (setup localhost). Aqui
+# o redroid roda em container, então o ws-scrcpy usa um adb server LOCAL: o entrypoint sobe esse
+# server e RECONECTA o redroid (host.docker.internal:5555) num loop — a conexão adb por TCP cai de
+# vez em quando, e sem o loop a tela some da lista de devices.
+name: mtrx-scrcpy-a
+services:
+  scrcpy:
+    build:
+      context: ../ws-scrcpy
+    image: mtrxsys-ws-scrcpy:latest
+    container_name: mtrx-scrcpy
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # alcança o adb do redroid publicado no host (5555)
+    environment:
+      # adb client fala com o server LOCAL do container (não com o do host, default da imagem).
+      ADB_SERVER_SOCKET: "tcp:127.0.0.1:5037"
+    ports:
+      - "127.0.0.1:8000:8000"                 # ws-scrcpy → Caddy proxya o phone-a pra cá
+    command:
+      - sh
+      - -c
+      - |
+        # 1) sobe o adb server LOCAL (unset ADB_SERVER_SOCKET pra ele INICIAR o server; -a = todas as
+        #    interfaces, senão o client tcp:127.0.0.1:5037 não o alcança). 2) conecta o redroid e
+        #    mantém reconectado num loop. 3) exec no ws-scrcpy (vira PID 1; os jobs seguem rodando).
+        env -u ADB_SERVER_SOCKET adb -a -P 5037 nodaemon server &
+        sleep 3
+        adb connect host.docker.internal:5555 || true
+        ( while true; do sleep 30; adb connect host.docker.internal:5555 >/dev/null 2>&1; done ) &
+        exec npm start

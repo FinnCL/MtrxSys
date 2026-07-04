@@ -10,8 +10,24 @@ services:
       Phone__ContainerName: mtrx-redroid
       Phone__AdbPort: "5555"
       Phone__VolumeName: redroid-data-a
-      # URL do APK do WhatsApp pro botão "Instalar WhatsApp" (preencha PHONE_WA_APK_URL_1 no deploy).
-      Phone__WhatsAppApkUrl: "${PHONE_WA_APK_URL_1:-}"
+      # URL do APK do WhatsApp pro botão "Instalar WhatsApp" — APK OFICIAL (138MB, bem < 400MB do teto).
+      # O botão baixa por HTTP (no container da api) e faz adb install. Hardcoded aqui pra o botão
+      # funcionar sem depender do PHONE_WA_APK_URL_1 (que fica com placeholder no .env.prod).
+      Phone__WhatsAppApkUrl: "https://www.whatsapp.com/android/current/WhatsApp.apk"
+      # PILOTO/SETUP: mantém o emulador SEMPRE ligado enquanto montamos a tela (scrcpy) e instalamos
+      # o WhatsApp. Sem isto, o stop-after-pair desliga o mtrx-redroid ~5 min depois de o WAHA ficar
+      # WORKING (exit 137, não religa). Reativar (deixar o primário dormir) no regime normal.
+      Phone__StopAfterPairEnabled: "false"
+      Phone__KeepAliveEnabled: "false"
     # A API (container bridged) alcança o adb do redroid pelo host-gateway.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+  # Aba Celular do A embute a TELA do redroid via ws-scrcpy (stream direto), no lugar do noVNC. O
+  # prod força VITE_EMULATOR_KIND="" (noVNC) — aqui sobrescrevemos SÓ pro A (este é o último -f).
+  # VITE_EMULATOR_URL vem do prod (WEB_EMULATOR_URL=https://phone-a...); UDID = o device redroid no
+  # adb do ws-scrcpy. LivePhoneScreen monta scrcpyStreamUrl() e embute o stream no iframe.
+  web:
+    build:
+      args:
+        VITE_EMULATOR_KIND: "scrcpy"
+        VITE_EMULATOR_UDID: "host.docker.internal:5555"

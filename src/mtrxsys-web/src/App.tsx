@@ -26,8 +26,8 @@ const EMULATOR_KIND = import.meta.env.VITE_EMULATOR_KIND as string | undefined;
 // "1" = mostra a seção "Android em container (KVM)" na aba Celular. Só faz sentido no SERVIDOR (Linux
 // com KVM). No localhost fica oculta (não há como provisionar Android aqui).
 const PHONE_SERVER_OPTION = import.meta.env.VITE_PHONE_SERVER === "1";
-// Device adb a espelhar na aba Celular (LDPlayer/emulador). Ex.: emulator-5554 (1ª instância do
-// LDPlayer), emulator-5556 (2ª)… Configurável por ambiente. Vazio = emulator-5554.
+// Device adb a espelhar na aba Celular (redroid/emulador). Ex.: host.docker.internal:5555 no
+// servidor (redroid). Configurável por ambiente. Vazio = emulator-5554.
 const EMULATOR_UDID = import.meta.env.VITE_EMULATOR_UDID as string | undefined;
 
 type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns" | "phone";

@@ -58,6 +58,5 @@ randomizar IMEI) + (recomendado) proxy novo. Com 1:1:1:1, um ban **não derruba 
 
 ## Docs relacionados
 - **[phone-primary-server.md](phone-primary-server.md)** — emulador no servidor (docker-android + noVNC) + teste grátis na GCP.
-- **[ldplayer.md](ldplayer.md)** — emulador local (Windows, em janela) pra teste.
 - **[recovery.md](recovery.md)** — recuperação após ban.
 - **[proxy.md](proxy.md)** — proxy por ambiente.

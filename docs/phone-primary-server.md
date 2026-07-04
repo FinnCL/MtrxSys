@@ -31,7 +31,7 @@ Com o `/dev/kvm` confirmado: instala o Docker, sobe o **docker-android (imagem c
 pública do noVNC da VM. O dashboard (local ou servidor) **embute** a tela por iframe.
 
 > Pra não gastar o crédito: `gcloud compute instances stop android-test --zone=us-central1-a` quando
-> não estiver usando. Teste local sem servidor = **LDPlayer em janela** ([ldplayer.md](ldplayer.md)).
+> não estiver usando.
 
 ## A verdade sobre o SIM (o limite físico)
 

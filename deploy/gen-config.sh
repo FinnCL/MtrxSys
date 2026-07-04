@@ -78,10 +78,15 @@ fauth() {
     echo "        reverse_proxy 127.0.0.1:${WEB_PORTS[$i]}"
     echo "    }"
     echo "}"
-    echo "# Tela do Android (noVNC) — atrás do portão."
+    # Porta da tela do Android: noVNC (docker-android) por padrão; o stack A é o PILOTO redroid,
+    # cuja tela vem do ws-scrcpy na 8000 (ver deploy/docker-compose.scrcpy-a.yml). Some quando o
+    # redroid virar o default dos 10 (aí todos apontam pro ws-scrcpy).
+    PHONE_PORT=${NOVNC_PORTS[$i]}
+    [ "$i" = "0" ] && PHONE_PORT=8000
+    echo "# Tela do Android (noVNC/ws-scrcpy) — atrás do portão."
     echo "phone-${L}.${MTRX_DOMAIN} {"
     fauth
-    echo "    reverse_proxy 127.0.0.1:${NOVNC_PORTS[$i]}"
+    echo "    reverse_proxy 127.0.0.1:${PHONE_PORT}"
     echo "}"
   done
 } > Caddyfile
