@@ -156,6 +156,11 @@ export const api = {
   phoneStart: () => request<PhoneStatus>("/api/phone/start", { method: "POST" }),
   phoneInstallWhatsApp: () =>
     request<{ output: string }>("/api/phone/whatsapp/install", { method: "POST" }),
+  // Lê o número que o WhatsApp do emulador está registrando (pré-preenche o campo do código).
+  phoneWhatsAppNumber: () => request<{ number: string | null }>("/api/phone/whatsapp-number"),
+  // Digita texto no emulador (o código do WhatsApp) — `t` vai na query (param string simples do minimal API).
+  phoneText: (t: string) =>
+    request<{ typed?: boolean }>(`/api/phone/text?t=${encodeURIComponent(t)}`, { method: "POST" }),
   wahaQrBlobUrl: async (): Promise<string> => {
     const token = getToken();
     const resp = await fetch(`${baseUrl}/api/waha/qr.png`, {
