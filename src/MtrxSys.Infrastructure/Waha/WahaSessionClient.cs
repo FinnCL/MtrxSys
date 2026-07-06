@@ -194,24 +194,24 @@ internal sealed class WahaSessionClient(WahaHttp http)
             ? WahaParsing.ParseStatus(statusEl.GetString())
             : WahaSessionStatus.Unknown;
 
-        // Só é SEGURO aplicar proxy quando a sessão está SCAN_QR_CODE — o único estado em que NÃO há
-        // conta pareada a perturbar. Em QUALQUER outro estado (Working, mas TAMBÉM Stopped/Starting/
-        // Failed de um chip JÁ pareado que só caiu), aplicar o proxy faz a conta reconectar por outro
-        // IP/ASN → o WhatsApp trata como fraude → LOGOUT + RESTRIÇÃO (comprovado). Antes o guard era
-        // "≠ Working", mas um chip pareado em Stopped (auto-start / recreate da api) escapava e era
-        // religado pelo proxy. Sessão NOVA já nasce com o proxy no CreateSessionAsync; aqui é só o QR.
-        // Logo: se o webhook já está lá e não estamos em SCAN_QR_CODE, nada a fazer com segurança.
-        if (webhookPresent && (proxyMatches || currentStatus != WahaSessionStatus.ScanQrCode))
+        // Aplica o proxy nos estados "proxyable": SCAN_QR_CODE (pareando) E WORKING (disparando). A regra
+        // antiga só aplicava em SCAN_QR_CODE porque o proxy ERA Kansas (geo US, inconsistente com o nº
+        // BR): ao aplicar num chip pareado, a conta reconectava por um IP de OUTRO país → o WhatsApp
+        // tratava como fraude → LOGOUT + RESTRIÇÃO. Com PROXY BR CONSISTENTE (nº BR + IP BR, sem salto de
+        // geo), aplicar no WORKING é SEGURO — comprovado: conta ficou estável ao ligar o proxy no Working.
+        // Assim o DISPARO também sai por BR (não só o pareamento). Stopped/Starting/Failed ficam DE FORA
+        // (estados ambíguos de um chip que pode ter caído — não arriscamos religar por proxy neles).
+        var proxyableState = currentStatus is WahaSessionStatus.ScanQrCode or WahaSessionStatus.Working;
+        if (webhookPresent && (proxyMatches || !proxyableState))
         {
             return true;
         }
 
-        // Aplica o proxy SÓ em SCAN_QR_CODE (pareando, sem conta). Em qualquer outro estado o PUT leva
-        // SÓ o webhook (o proxy fica de fora) — nunca enviamos proxy pra uma sessão que possa ter conta
-        // pareada, porque até o PUT pode fazer o WAHA reconectar. O PUT substitui o config, então
-        // mandamos webhook e (quando permitido) proxy juntos, pra um não apagar o outro.
+        // Aplica o proxy nos estados proxyable (SCAN_QR_CODE + WORKING). Fora deles, o PUT leva SÓ o
+        // webhook. O PUT SUBSTITUI o config, então mandamos webhook e (quando permitido) proxy juntos —
+        // era justamente o PUT só-webhook em Working que ANTES apagava o proxy quando a conta ficava viva.
         var proxy = http.ProxyConfigOrNull();
-        var applyProxy = proxy is not null && currentStatus == WahaSessionStatus.ScanQrCode;
+        var applyProxy = proxy is not null && proxyableState;
         object config = applyProxy
             ? new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken), proxy }
             : new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken) };
@@ -221,8 +221,8 @@ internal sealed class WahaSessionClient(WahaHttp http)
         using var putResp = await http.SendAsync(putReq, ct);
         putResp.EnsureSuccessStatusCode();
 
-        // Religa só quando de fato aplicamos um proxy novo (implica sessão não-Working) — aí o chip
-        // reconecta/pareia já pelo proxy, sem salto de IP numa conta viva.
+        // Religa só quando o proxy aplicado DIVERGE do atual — aí o chip reconecta pelo proxy novo. Com
+        // proxy BR consistente, essa religada no Working é segura (sem salto de geo que derrube a conta).
         if (applyProxy && !proxyMatches)
         {
             await TryRestartForProxyAsync(sessionId, ct);

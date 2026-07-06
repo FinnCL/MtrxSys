@@ -290,7 +290,7 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         // Lê o registration_jid dos prefs do WhatsApp no emulador — o número CANÔNICO da conta
         // (o que o WhatsApp usa de fato). Auto-preenche o Passo 2 e evita digitar o número errado.
         var (_, outp, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
-            "adb", "shell", "grep -ah registration_jid /data/data/com.whatsapp/shared_prefs/*.xml 2>/dev/null");
+            "adb", "shell", $"grep -ah registration_jid /data/data/{Opts.WhatsAppPackage}/shared_prefs/*.xml 2>/dev/null");
         var m = System.Text.RegularExpressions.Regex.Match(outp ?? "", @"registration_jid[^0-9]*([0-9]{12,13})");
         return m.Success ? m.Groups[1].Value : "";
     }
@@ -319,7 +319,7 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         // boas-vindas, pronto pra registrar OUTRO número. A conta velha some do APP (não do servidor
         // do WhatsApp). Depois re-lança o app na tela de boas-vindas.
         var (rc, outp, err) = await DockerCli.DockerAsync(ct,
-            "exec", Opts.ContainerName, "adb", "shell", "pm", "clear", "com.whatsapp");
+            "exec", Opts.ContainerName, "adb", "shell", "pm", "clear", Opts.WhatsAppPackage);
         if (rc != 0)
         {
             return string.IsNullOrWhiteSpace(err) ? outp : err;
@@ -328,9 +328,9 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         // código" na hora de vincular o WAHA. Concedida, a tela do scanner abre direto e dá pra ir em
         // "Conectar com número de telefone" sem interrupção.
         await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
-            "pm", "grant", "com.whatsapp", "android.permission.CAMERA");
+            "pm", "grant", Opts.WhatsAppPackage, "android.permission.CAMERA");
         await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
-            "monkey", "-p", "com.whatsapp", "-c", "android.intent.category.LAUNCHER", "1");
+            "monkey", "-p", Opts.WhatsAppPackage, "-c", "android.intent.category.LAUNCHER", "1");
         return "ok";
     }
 

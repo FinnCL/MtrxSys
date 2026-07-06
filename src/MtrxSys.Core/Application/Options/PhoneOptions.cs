@@ -38,6 +38,12 @@ public sealed class PhoneOptions
     /// URL oficial estável). Vazio = a aba explica como instalar manualmente.</summary>
     public string WhatsAppApkUrl { get; set; } = "";
 
+    /// <summary>Pacote do app a controlar (clear/grant/launch/ler número): "com.whatsapp" (WhatsApp
+    /// comum — default) ou "com.whatsapp.w4b" (WhatsApp Business — perfil de empresa, mais legítimo pro
+    /// destinatário, reduz denúncia "quem é esse?"). O APK instalado (local ou WhatsAppApkUrl) PRECISA
+    /// bater com este pacote — senão o clear/grant miram um app que não está instalado.</summary>
+    public string WhatsAppPackage { get; set; } = "com.whatsapp";
+
     // ── Engine redroid (usados só quando Engine = "redroid") ──────────────────────────────────
 
     /// <summary>Imagem do redroid ao provisionar. Escolha a versão do Android + arch (ex.:
