@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type ChipIdentity, type PhoneStatus } from "../api/client";
 import { WhatsAppConnect } from "./WhatsAppConnect";
+import { WarmupCard } from "./WarmupCard";
 
 // Aba "Celular" = o "aparelho virtual". Dois mundos na mesma aba:
 //  1) Tela do Android em container (redroid) espelhada pelo ws-scrcpy e embutida aqui
@@ -154,6 +155,10 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           {showServer && <ServerAndroidPanel />}
         </>
       )}
+
+      {/* Aquecimento de conversa (pool). Fica AQUI de propósito: você vê as conversas aparecerem no
+          WhatsApp da conta acima. O motor é o WAHA (companion), não a tela do emulador. */}
+      <WarmupCard />
     </section>
   );
 }
