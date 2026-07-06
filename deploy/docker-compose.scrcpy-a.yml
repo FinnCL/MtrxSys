@@ -34,5 +34,7 @@ services:
         env -u ADB_SERVER_SOCKET adb -a -P 5037 nodaemon server &
         sleep 3
         adb connect host.docker.internal:5555 || true
-        ( while true; do sleep 30; adb connect host.docker.internal:5555 >/dev/null 2>&1; done ) &
+        # reconecta SÓ se o device cair (checa antes) — reconectar à toa DESTRÓI o transporte adb e
+        # mata o input do scrcpy (tela vira "clicável por poucos segundos"). Idempotente = zero disrupção.
+        ( while true; do sleep 30; adb devices | grep -q "host.docker.internal:5555.device" || adb connect host.docker.internal:5555 >/dev/null 2>&1; done ) &
         exec npm start

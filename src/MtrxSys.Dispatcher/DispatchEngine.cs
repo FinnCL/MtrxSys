@@ -17,6 +17,7 @@ public sealed class DispatchEngine(
     IMessageTemplateRepository templates,
     IUnitOfWork uow,
     IWahaClient waha,
+    IPhoneOrchestrator phone,
     IClock clock,
     MessageComposer composer,
     DelayPolicy delay,
@@ -183,8 +184,28 @@ public sealed class DispatchEngine(
                     templateCache[job.TemplateId] = template;
                 }
                 var text = composer.Compose(template, contact);
+
+                // Confere se o número EXISTE no WhatsApp — CEDO, antes de gastar typing/delay. Disparar
+                // pra número inexistente falha (erro 463) E é gatilho de ban — foi o que restringiu a
+                // conta no teste. Inexistente → pula (não arrisca o chip). Checagem indisponível (null)
+                // → segue (não perde contato por hiccup). O chatId devolvido é o CANÔNICO do WhatsApp
+                // (resolve o 9º dígito BR) — usado no typing E no envio, pra bater no chat certo.
+                var numberCheck = await TryCheckNumberAsync(sessionId, contact, ct);
+                if (numberCheck is { Exists: false })
+                {
+                    job.MarkSkipped("número não existe no WhatsApp");
+                    await uow.SaveChangesAsync(ct);
+                    skipped++;
+                    log.LogInformation("Job {JobId} pulado: {Phone} não existe no WhatsApp.", job.Id, contact.Phone.E164);
+                    // Espaça os check-exists: pular vários RÁPIDO = validação em massa = sinal de bot
+                    // (e rate-limit da consulta). Cooldown curto entre checks de pulados protege o chip.
+                    await Task.Delay(delay.NextCheckCooldown(), ct);
+                    continue;
+                }
+                var sendTarget = numberCheck?.ChatId ?? contact.Phone.E164;
+
                 var delayBefore = delay.NextDelay();
-                var typingMs = await typing.SimulateAsync(sessionId, contact.Phone.E164, text, ct);
+                var typingMs = await typing.SimulateAsync(sessionId, sendTarget, text, ct);
 
                 // 2º freio de mão: se o operador clicou "Parar envios" enquanto a gente simulava
                 // o typing (2-5s), o envio ainda não saiu. Checa de novo aqui pra abortar ANTES
@@ -215,10 +236,16 @@ public sealed class DispatchEngine(
                     break;
                 }
 
+                // Grava o contato na agenda do emulador ANTES do envio (perfil menos-robô, ajuda
+                // anti-ban). Best-effort e idempotente: uma falha aqui é só logada e NÃO impede o
+                // envio — o disparo é o que importa. Roda dentro do gate de aquecimento, então só
+                // acontece quando o warmup já liberou o envio.
+                await TrySaveContactAsync(contact, ct);
+
                 // Anexo de imagem DESABILITADO: todo disparo sai como texto, mesmo que o template
                 // tenha imagem. Evita rejeição do WAHA (422 por mimetype/dados) e mantém o envio
                 // simples e estável. (O texto composto preserva spintax, placeholders e o "SAIR".)
-                var waMessageId = await waha.SendTextAsync(sessionId, contact.Phone.E164, text, ct);
+                var waMessageId = await waha.SendTextAsync(sessionId, sendTarget, text, ct);
 
                 var now = clock.UtcNow;
                 job.MarkSent(waMessageId, now);
@@ -356,6 +383,48 @@ public sealed class DispatchEngine(
         catch (Exception ex)
         {
             log.LogWarning(ex, "Não reconciliei o número do aquecimento; sigo com o estado atual.");
+        }
+#pragma warning restore CA1031
+    }
+
+    // Checa se o número existe no WhatsApp, best-effort: qualquer erro na checagem devolve null (= "não
+    // deu pra checar") pra o disparo seguir — não descartamos um contato por causa de um hiccup da checagem.
+    private async Task<WahaNumberCheck?> TryCheckNumberAsync(string sessionId, Contact contact, CancellationToken ct)
+    {
+        try
+        {
+            return await waha.CheckNumberExistsAsync(sessionId, contact.Phone.E164, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // best-effort: falha na checagem não pode travar nem pular o envio
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Checagem de número falhou para {Phone}; sigo com o envio.", contact.Phone.E164);
+            return null;
+        }
+#pragma warning restore CA1031
+    }
+
+    // Grava o contato na agenda do emulador antes de enviar. NUNCA propaga: se o docker/adb falhar
+    // (socket ausente, emulador fora, engine sem suporte), loga e segue — o contato salvo é perfil
+    // anti-robô, não pré-requisito do envio. Idempotente no orquestrador (não duplica número já salvo).
+    private async Task TrySaveContactAsync(Contact contact, CancellationToken ct)
+    {
+        try
+        {
+            await phone.SaveContactAsync(contact.Phone.E164, contact.Name, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // best-effort: salvar contato não pode derrubar o envio
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Não gravei o contato {Phone} na agenda; sigo com o envio.", contact.Phone.E164);
         }
 #pragma warning restore CA1031
     }

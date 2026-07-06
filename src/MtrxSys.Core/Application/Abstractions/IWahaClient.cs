@@ -36,6 +36,11 @@ public interface IWahaClient
     Task<WahaGroup> JoinGroupByInviteAsync(string sessionId, string inviteCodeOrUrl, CancellationToken ct);
 
     Task<string> SendTextAsync(string sessionId, string phoneOrChatId, string text, CancellationToken ct);
+    /// <summary>Confere se o número existe no WhatsApp e devolve o chatId CANÔNICO (o WhatsApp resolve o
+    /// 9º dígito BR pra a forma real). Evita disparar pra número inexistente — que falha com erro 463 E é
+    /// gatilho de ban (foi o que restringiu a conta no teste). Retorna null se a checagem não pôde rodar
+    /// (erro/sessão fora): aí o disparo segue, pra não descartar um contato por hiccup transitório.</summary>
+    Task<WahaNumberCheck?> CheckNumberExistsAsync(string sessionId, string phoneE164, CancellationToken ct);
     /// <summary>Envia uma imagem (bytes + mimetype) com legenda opcional. Retorna o id da mensagem no WhatsApp.</summary>
     Task<string> SendImageAsync(string sessionId, string phoneOrChatId, byte[] imageData, string mimeType, string caption, CancellationToken ct);
     Task StartTypingAsync(string sessionId, string phoneOrChatId, CancellationToken ct);
@@ -58,6 +63,10 @@ public enum WahaSessionStatus
 }
 
 public sealed record WahaIdentity(string PhoneE164, string? Name);
+
+/// <summary>Resultado do check-exists do WAHA: se o número existe no WhatsApp + o chatId canônico (a
+/// forma que o WhatsApp usa de fato — resolve o 9º dígito BR). ChatId é null quando não existe.</summary>
+public sealed record WahaNumberCheck(bool Exists, string? ChatId);
 
 // AppliedProxyServer = o config.proxy.server da sessão (o proxy que o chip REALMENTE usa; null = sem
 // proxy). Opcional pra não quebrar os construtores existentes. Ver indicador de proxy na aba Celular.

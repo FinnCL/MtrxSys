@@ -29,5 +29,9 @@ CMD ["dotnet", "watch", "--project", "src/MtrxSys.Dispatcher/MtrxSys.Dispatcher.
 
 FROM mcr.microsoft.com/dotnet/runtime:10.0-alpine AS runtime
 WORKDIR /app
+# docker-cli: o DispatchEngine grava o contato na agenda do emulador ANTES de cada envio (perfil
+# menos-robô/anti-ban) via `docker exec <emulador> adb ...` sobre o socket montado. Inócuo onde o
+# socket não é montado — o SaveContactAsync é best-effort e degrada limpo.
+RUN apk add --no-cache docker-cli
 COPY --from=build /app ./
 ENTRYPOINT ["dotnet", "MtrxSys.Dispatcher.dll"]

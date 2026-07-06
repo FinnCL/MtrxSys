@@ -1,0 +1,31 @@
+services:
+  api:
+    environment:
+      Waha__ProxyServer: "gost:8080"
+      Waha__ProxyUsername: ""
+      Waha__ProxyPassword: ""
+      Waha__ProxyReal: "${WAHA_PROXY_1}"
+      Phone__ContainerName: "mtrx-dandroid"
+      # Mantém o emulador SEMPRE ACORDADO (host tem 128GB, 1 ambiente): sem o stop-after-pair, a tela
+      # noVNC nunca dá 1006 (nada de "erro"), e o contato-save do disparo funciona (precisa do emulador
+      # ligado). Pros 10 ambientes, reavaliar (o sono economiza recurso). O keep-alive fica off junto.
+      Phone__StopAfterPairEnabled: "false"
+      Phone__KeepAliveEnabled: "false"
+    volumes:
+      - /home/ubuntu/wa.apk:/app/whatsapp.apk:ro
+  waha:
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      WAHA_LOG_LEVEL: debug
+  # Dispatcher grava o contato na agenda do emulador ANTES de cada envio (perfil anti-robô). Pra isso
+  # ganha o socket do Docker (roda `docker exec mtrx-dandroid adb ...`) e o nome do container do emulador.
+  # É best-effort: sem o socket, o SaveContactAsync degrada limpo e o envio segue.
+  dispatcher:
+    environment:
+      Phone__ContainerName: "mtrx-dandroid"
+      # Delay entre envios 60-180s (1-3 min) — mais conservador/humano que o default 45-75s. Reduz a
+      # velocidade = menos cara de robô. Combina com o teto do aquecimento + o contato salvo (anti-ban).
+      Dispatch__DelayMinSeconds: "60"
+      Dispatch__DelayMaxSeconds: "180"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

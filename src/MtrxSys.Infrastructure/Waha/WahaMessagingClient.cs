@@ -62,6 +62,30 @@ internal sealed class WahaMessagingClient(WahaHttp http)
         return await WahaParsing.ReadSentMessageIdAsync(resp, ct);
     }
 
+    public async Task<WahaNumberCheck?> CheckNumberExistsAsync(string sessionId, string phoneE164, CancellationToken ct)
+    {
+        var digits = new string((phoneE164 ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (digits.Length < 8)
+        {
+            return new WahaNumberCheck(false, null); // sem dígitos plausíveis = não existe
+        }
+        using var req = http.NewRequest(HttpMethod.Get,
+            $"api/contacts/check-exists?phone={digits}&session={WahaHttp.Esc(sessionId)}");
+        using var resp = await http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            // Checagem indisponível (sessão fora, 4xx/5xx): null = "não deu pra checar" → o disparo
+            // segue. NÃO afirma inexistente (senão perderia contato válido por um hiccup da checagem).
+            return null;
+        }
+        var dto = await resp.Content.ReadFromJsonAsync<CheckExistsDto>(WahaHttp.Json, ct);
+        if (dto is null)
+        {
+            return null;
+        }
+        return new WahaNumberCheck(dto.NumberExists ?? false, string.IsNullOrEmpty(dto.ChatId) ? null : dto.ChatId);
+    }
+
     public async Task<string> SendImageAsync(
         string sessionId, string phoneOrChatId, byte[] imageData, string mimeType, string caption, CancellationToken ct)
     {
@@ -101,3 +125,6 @@ internal sealed class WahaMessagingClient(WahaHttp http)
         resp.EnsureSuccessStatusCode();
     }
 }
+
+// DTO do check-exists do WAHA: numberExists (o número existe no WhatsApp?) + chatId (forma canônica).
+internal sealed record CheckExistsDto(bool? NumberExists, string? ChatId);

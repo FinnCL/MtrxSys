@@ -59,6 +59,8 @@ internal sealed class WahaClient : IWahaClient
         _messaging.GetChatMessagesAsync(sessionId, chatId, limit, ct);
     public Task<string> SendTextAsync(string sessionId, string phoneOrChatId, string text, CancellationToken ct) =>
         _messaging.SendTextAsync(sessionId, phoneOrChatId, text, ct);
+    public Task<WahaNumberCheck?> CheckNumberExistsAsync(string sessionId, string phoneE164, CancellationToken ct) =>
+        _messaging.CheckNumberExistsAsync(sessionId, phoneE164, ct);
     public Task<string> SendImageAsync(string sessionId, string phoneOrChatId, byte[] imageData, string mimeType, string caption, CancellationToken ct) =>
         _messaging.SendImageAsync(sessionId, phoneOrChatId, imageData, mimeType, caption, ct);
     public Task StartTypingAsync(string sessionId, string phoneOrChatId, CancellationToken ct) =>
