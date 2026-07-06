@@ -137,7 +137,10 @@ public static class DependencyInjection
         // Aquecimento de conversa (pool): estado em memória (singleton), banco de frases, fábrica de
         // clientes WAHA por membro (named HttpClient com handler pooled) e o motor (scoped — usa o
         // ISystemStateRepository pra ler o toggle). O WarmupWorker (host da API) roda o ciclo.
-        services.AddHttpClient("warmup-pool");
+        // Timeout explícito: sem ele, um peer lento/morto seguraria o worker por até 100s (default do
+        // HttpClient) por chamada — um par com um WAHA fora travaria a conversa inteira. 25s ≈ o teto
+        // do WAHA local. As chamadas são best-effort (falha é logada e a conversa segue).
+        services.AddHttpClient("warmup-pool", c => c.Timeout = TimeSpan.FromSeconds(25));
         services.AddSingleton<WarmupState>();
         services.AddSingleton<IWarmupContentProvider, TemplateWarmupContentProvider>();
         services.AddSingleton<IPoolWahaClientFactory, MtrxSys.Infrastructure.Warmup.PoolWahaClientFactory>();

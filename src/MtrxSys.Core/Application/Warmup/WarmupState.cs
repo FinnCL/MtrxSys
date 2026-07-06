@@ -2,8 +2,11 @@ namespace MtrxSys.Core.Application.Warmup;
 
 /// <summary>Estado em memória do motor de aquecimento (singleton). Guarda a contagem diária por membro
 /// (pra rampa), a agenda da próxima conversa (o gap) e os grupos já entrados (pra não reentrar). Reset
-/// por dia (Brasília). Volátil de propósito: um restart zera o dia (fica mais conservador — envia
-/// menos, o lado seguro) e reinicia a rampa (nasce mais frio). Aceitável no MVP.</summary>
+/// por dia (Brasília). Volátil (MVP): um restart reinicia a rampa (nasce mais frio → teto MENOR) mas
+/// TAMBÉM zera a contagem do dia — logo, após um restart, o motor pode enviar mais um lote até o teto da
+/// rampa naquele dia (o teto NÃO é persistente entre restarts). Aceitável porque o aquecimento é
+/// atividade de baixo risco (mão dupla com os PRÓPRIOS números); persistir a contagem fica pra depois
+/// se a cadência exigir.</summary>
 public sealed class WarmupState
 {
     private readonly object _lock = new();
