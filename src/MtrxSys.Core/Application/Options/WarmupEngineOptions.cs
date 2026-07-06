@@ -24,9 +24,10 @@ public sealed class WarmupEngineOptions
 
     // Rampa de conversas: no dia 0 cada membro envia até MessagesPerDayStart; sobe linearmente até
     // MessagesPerDayMax ao longo de RampDays. Idade não se fake — subir devagar é de propósito.
+    // Default = rampa SUAVE de 3 dias (+2/dia): dia0=4, dia1=6, dia2=8, dia3+=10. Ajustável por config.
     public int MessagesPerDayStart { get; set; } = 4;
-    public int MessagesPerDayMax { get; set; } = 20;
-    public int RampDays { get; set; } = 4;
+    public int MessagesPerDayMax { get; set; } = 10;
+    public int RampDays { get; set; } = 3;
 
     // Só conversa dentro das horas ativas (horário de Brasília), pra não mandar mensagem às 4h.
     public int ActiveHourStart { get; set; } = 8;

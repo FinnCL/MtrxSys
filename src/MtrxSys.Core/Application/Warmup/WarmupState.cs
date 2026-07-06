@@ -8,20 +8,26 @@ public sealed class WarmupState
 {
     private readonly object _lock = new();
     private DateOnly _day;
+    private DateOnly? _startedOn;
     private readonly Dictionary<string, int> _sentToday = new(StringComparer.Ordinal);
     private readonly HashSet<string> _joinedGroups = new(StringComparer.Ordinal);
 
     // Quando a rampa começou (1ª vez que o motor rodou habilitado). Null = ainda não começou.
-    public DateOnly? StartedOn { get; private set; }
+    // Leitura sob lock: o worker escreve (EnsureStarted) e o endpoint de status lê concorrente.
+    public DateOnly? StartedOn
+    {
+        get { lock (_lock) { return _startedOn; } }
+    }
 
-    // Não inicia uma nova conversa antes deste instante (o gap aleatório entre conversas).
+    // Não inicia uma nova conversa antes deste instante (o gap aleatório entre conversas). Só o worker
+    // (loop single-thread) lê/escreve — não precisa de lock.
     public DateTimeOffset NextConversationAt { get; set; } = DateTimeOffset.MinValue;
 
     public void EnsureStarted(DateOnly today)
     {
         lock (_lock)
         {
-            StartedOn ??= today;
+            _startedOn ??= today;
         }
     }
 
@@ -77,5 +83,6 @@ public sealed class WarmupState
         }
     }
 
-    private static string Key(string member, string invite) => member + "" + invite;
+    // Separador '\n' (não aparece em nome/link) evita colisão de chave entre membro e convite.
+    private static string Key(string member, string invite) => string.Concat(member, "\n", invite);
 }

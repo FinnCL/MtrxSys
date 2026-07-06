@@ -43,15 +43,16 @@ public sealed class WarmupEngine(
         var today = IClock.ToBrasiliaDate(clock.UtcNow);
         state.EnsureStarted(today);
 
-        // Grupos: entrar 1x por membro/grupo (passivo). Independe da hora/gap — é setup.
-        await EnsureGroupsJoinedAsync(o, ct);
-
-        // Só conversa dentro das horas ativas de Brasília.
+        // Só age dentro das horas ativas de Brasília — inclusive entrar em grupos (uma conta que entra
+        // em grupo às 4h da manhã destoa). Fora da janela, nada neste tick.
         var hourBrt = clock.UtcNow.ToOffset(TimeSpan.FromHours(-3)).Hour;
         if (hourBrt < o.ActiveHourStart || hourBrt >= o.ActiveHourEnd)
         {
             return;
         }
+
+        // Grupos: entrar 1x por membro/grupo (passivo). Setup — independe do gap entre conversas.
+        await EnsureGroupsJoinedAsync(o, ct);
 
         // Gap entre conversas (espalha ao longo do dia).
         if (clock.UtcNow < state.NextConversationAt)
@@ -61,7 +62,9 @@ public sealed class WarmupEngine(
 
         var (a, b) = PickPair(o.Members);
 
-        var limit = TodayLimit(o, state.StartedOn ?? today, today);
+        var startedOn = state.StartedOn ?? today;
+        var limit = WarmupRamp.LimitFor(
+            o.MessagesPerDayStart, o.MessagesPerDayMax, o.RampDays, today.DayNumber - startedOn.DayNumber);
         if (state.SentToday(a.Name, today) >= limit || state.SentToday(b.Name, today) >= limit)
         {
             // Par saturado hoje: tenta outro par em breve (gap curto), sem estourar o teto.
@@ -80,14 +83,19 @@ public sealed class WarmupEngine(
         WarmupEngineOptions o, WarmupMemberOptions a, WarmupMemberOptions b,
         IReadOnlyList<WarmupTurn> convo, DateOnly today, CancellationToken ct)
     {
+        // Um cliente WAHA por membro do par, criado UMA vez (não por turno) — evita recriar HttpClient
+        // + WahaClient a cada mensagem da conversa.
+        var clientA = poolFactory.CreateFor(a);
+        var clientB = poolFactory.CreateFor(b);
         for (var i = 0; i < convo.Count; i++)
         {
             var turn = convo[i];
-            var sender = turn.SenderSlot == 0 ? a : b;
-            var recipient = turn.SenderSlot == 0 ? b : a;
+            var fromA = turn.SenderSlot == 0;
+            var sender = fromA ? a : b;
+            var recipient = fromA ? b : a;
+            var client = fromA ? clientA : clientB;
             try
             {
-                var client = poolFactory.CreateFor(sender);
                 var typingMs = rng.NextInt(o.TypingMinSeconds, Math.Max(o.TypingMinSeconds + 1, o.TypingMaxSeconds + 1)) * 1000;
                 await client.StartTypingAsync(sender.SessionId, recipient.PhoneE164, ct);
                 await Task.Delay(typingMs, ct);
@@ -175,17 +183,5 @@ public sealed class WarmupEngine(
         }
         while (j == i);
         return (members[i], members[j]);
-    }
-
-    // Rampa linear: dia 0 = Start; sobe até Max ao longo de RampDays; depois platô no Max.
-    private static int TodayLimit(WarmupEngineOptions o, DateOnly startedOn, DateOnly today)
-    {
-        var dayIndex = Math.Max(0, today.DayNumber - startedOn.DayNumber);
-        if (o.RampDays <= 0 || dayIndex >= o.RampDays)
-        {
-            return o.MessagesPerDayMax;
-        }
-        var span = o.MessagesPerDayMax - o.MessagesPerDayStart;
-        return o.MessagesPerDayStart + (int)Math.Round((double)span * dayIndex / o.RampDays);
     }
 }
