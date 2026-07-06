@@ -102,6 +102,13 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           <span className="phone-badge off">desligado (sai pelo IP da máquina)</span>
         )}
       </p>
+      {/* IP real de saída (upstream do gost) — o proxy REAL pelo qual o chip sai. Restaurado após
+          um sync ter removido esta linha por engano; o dado sempre veio do /api/presence/chip. */}
+      {ident?.proxyReal && (
+        <p className="phone-off-hint" style={{ textAlign: "center", margin: "-2px 0 8px", fontSize: 11 }}>
+          ↳ sai por {ident.proxyReal}
+        </p>
+      )}
       <div className="phone-device">
         <div className="phone-notch" />
         {embed ? (

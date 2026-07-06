@@ -121,6 +121,9 @@ export interface ChipIdentity {
   breakerOpen?: boolean;
   // Proxy REALMENTE aplicado na sessão WAHA (host:porta) ou null se o chip sai pelo IP da máquina.
   proxy?: string | null;
+  // IP:porta do proxy REAL que a ponte gost usa como upstream (ex.: 200.160.34.167:12323) — o IP
+  // pelo qual o chip de fato SAI. Mostrado abaixo do badge gost como "↳ sai por ...".
+  proxyReal?: string | null;
 }
 
 export const api = {
