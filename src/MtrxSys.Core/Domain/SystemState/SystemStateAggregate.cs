@@ -36,6 +36,11 @@ public sealed class SystemStateAggregate : Entity<int>
     // WAHA é deslogado). Null = nunca pareado (nada a manter vivo ainda).
     public DateTimeOffset? PhonePrimaryLastOnlineUtc { get; private set; }
 
+    // Liga/desliga o MOTOR DE AQUECIMENTO DE CONVERSA (WarmupEngine) — o toggle do botão
+    // "Iniciar/Parar Aquecimento" na UI. Persistido pra o aquecimento sobreviver a restart (é um
+    // processo de dias). NÃO confunde com o teto diário de disparo (WarmupStartedOn etc.).
+    public bool WarmupEngineEnabled { get; private set; }
+
     public bool IsManuallyPaused => PausedReason == ManualPauseReason;
 
     private SystemStateAggregate() { }
@@ -58,6 +63,9 @@ public sealed class SystemStateAggregate : Entity<int>
     // Marca que o primário apareceu online agora (reinicia a contagem dos ~14 dias). Chamado pelo
     // PhoneKeepAliveService ao confirmar WORKING no pareamento e a cada keep-alive.
     public void RecordPhonePrimaryOnline(DateTimeOffset whenUtc) => PhonePrimaryLastOnlineUtc = whenUtc;
+
+    // Liga/desliga o motor de aquecimento de conversa (botão da UI).
+    public void SetWarmupEngineEnabled(bool enabled) => WarmupEngineEnabled = enabled;
 
     // Reinicia o aquecimento a partir de hoje — a curva volta ao dia 0. Usado ao
     // trocar de chip (número novo é "frio" de novo). Zera também qualquer liberação extra.

@@ -360,4 +360,18 @@ export const api = {
     const qs = q.toString();
     return request<{ count: number }>(`/api/dispatch/audience-count${qs ? `?${qs}` : ""}`);
   },
+
+  // Motor de AQUECIMENTO DE CONVERSA (pool) — distinto do warmupStatus acima (que é a rampa de teto
+  // diário do disparo). Aqui é o pool conversando de mão dupla pra ganhar reputação.
+  warmupEngineStatus: () =>
+    request<{
+      featureEnabled: boolean;
+      running: boolean;
+      memberCount: number;
+      groupCount: number;
+      startedOn: string | null;
+      members: { name: string; phone: string; sentToday: number }[];
+    }>("/api/warmup/status"),
+  startWarmupEngine: () => request<{ running: boolean }>("/api/warmup/start", { method: "POST" }),
+  stopWarmupEngine: () => request<{ running: boolean }>("/api/warmup/stop", { method: "POST" }),
 };

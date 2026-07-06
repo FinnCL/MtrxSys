@@ -36,6 +36,8 @@ builder.Services.AddSingleton<MtrxSys.Api.BackgroundServices.PhoneKeepAliveSigna
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.PhoneKeepAliveService>();
 // Re-garante o proxy na sessão do WAHA (fecha o furo de timing do ensure de startup). No-op sem proxy.
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WahaProxyEnsureService>();
+// Motor de aquecimento de conversa (pool). No-op quando WarmupEngine:Enabled=false.
+builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WarmupWorker>();
 // Origens permitidas: por padrão libera as portas web usadas no setup localhost — a landing
 // de múltiplos ambientes (5175) e os webs dos Stacks 1..10 (5173, 5174, 5176..5183; a 5175 é
 // da landing). Pode ser sobrescrito por env var Web__Origins__0, Web__Origins__1, etc.
@@ -194,5 +196,6 @@ app.MapCollectorEndpoints();
 app.MapCampaignsEndpoints();
 app.MapOptOutPublicEndpoints();
 app.MapPhoneEndpoints();
+app.MapWarmupEndpoints();
 
 await app.RunAsync();

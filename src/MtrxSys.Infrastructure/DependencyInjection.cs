@@ -8,6 +8,7 @@ using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Application.UseCases.Webhooks;
+using MtrxSys.Core.Application.Warmup;
 using MtrxSys.Core.Messaging;
 using MtrxSys.Core.Safety;
 using MtrxSys.Core.Validation;
@@ -31,6 +32,8 @@ public static class DependencyInjection
         services.AddOptions<CollectorOptions>().Bind(config.GetSection(CollectorOptions.SectionName));
         services.AddOptions<CircuitBreakerOptions>().Bind(config.GetSection(CircuitBreakerOptions.SectionName));
         services.AddOptions<WarmupOptions>().Bind(config.GetSection(WarmupOptions.SectionName));
+        // Motor de aquecimento de CONVERSA (pool) — distinto do WarmupOptions (teto diário de envio).
+        services.AddOptions<WarmupEngineOptions>().Bind(config.GetSection(WarmupEngineOptions.SectionName));
         services.AddOptions<OptOutOptions>().Bind(config.GetSection(OptOutOptions.SectionName));
         services.AddOptions<WahaOptions>()
             .Bind(config.GetSection(WahaOptions.SectionName))
@@ -130,6 +133,15 @@ public static class DependencyInjection
         services.AddScoped<TypingSimulator>();
         services.AddScoped<CircuitBreaker>();
         services.AddScoped<WarmupManager>();
+
+        // Aquecimento de conversa (pool): estado em memória (singleton), banco de frases, fábrica de
+        // clientes WAHA por membro (named HttpClient com handler pooled) e o motor (scoped — usa o
+        // ISystemStateRepository pra ler o toggle). O WarmupWorker (host da API) roda o ciclo.
+        services.AddHttpClient("warmup-pool");
+        services.AddSingleton<WarmupState>();
+        services.AddSingleton<IWarmupContentProvider, TemplateWarmupContentProvider>();
+        services.AddSingleton<IPoolWahaClientFactory, MtrxSys.Infrastructure.Warmup.PoolWahaClientFactory>();
+        services.AddScoped<WarmupEngine>();
 
         // Coletor de grupos: fila em memória (endpoint → worker), trava anti-ban da entrada, motivo
         // da última falha de busca (pro painel) e medidor de uso da busca. O medidor é COMPARTILHADO
