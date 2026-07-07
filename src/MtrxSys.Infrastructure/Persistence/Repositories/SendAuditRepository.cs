@@ -20,11 +20,13 @@ internal sealed class SendAuditRepository(MtrxDbContext db) : ISendAuditReposito
 
     public async Task<DeliveryStats> GetDeliveryStatsAsync(DateTimeOffset since, CancellationToken ct)
     {
-        // Só conta envios que já tiveram tempo de entregar (a entrega leva segundos): considera a
-        // janela inteira; a UI mostra a taxa e o operador interpreta. AsNoTracking = leitura barata.
-        var q = db.SendAuditLog.AsNoTracking().Where(e => e.OccurredAt >= since);
-        var sent = await q.CountAsync(ct);
-        var delivered = await q.CountAsync(e => e.DeliveredAt != null, ct);
-        return new DeliveryStats(sent, delivered);
+        // Enviados x entregues numa ÚNICA query (COUNT + SUM condicional) — um round-trip só.
+        // AsNoTracking = leitura barata; o índice em occurred_at cobre o filtro da janela.
+        var row = await db.SendAuditLog.AsNoTracking()
+            .Where(e => e.OccurredAt >= since)
+            .GroupBy(_ => 1)
+            .Select(g => new { Sent = g.Count(), Delivered = g.Sum(e => e.DeliveredAt != null ? 1 : 0) })
+            .FirstOrDefaultAsync(ct);
+        return row is null ? new DeliveryStats(0, 0) : new DeliveryStats(row.Sent, row.Delivered);
     }
 }

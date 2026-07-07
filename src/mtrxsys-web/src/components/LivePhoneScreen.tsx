@@ -167,8 +167,10 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>
             {ident?.proxy ? "Proxy ativo. " : ""}Pronto para disparar. Vá para a aba <b>Disparo</b>.
           </p>
-          {/* Sensor de entrega: só aparece quando houve envio na janela. Taxa baixa = possível restrição. */}
-          {delivery && delivery.sent > 0 && (
+          {/* Sensor de entrega: só aparece quando JÁ HOUVE entrega confirmada (delivered > 0) — assim
+              não mostra "0%" enganoso numa sessão que ainda não assina message.ack (pareada antes do
+              sensor). Com ACKs fluindo, uma taxa que cai é sinal de possível restrição. */}
+          {delivery && delivery.delivered > 0 && (
             <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>
               Entregas 24h: <b>{delivery.delivered}/{delivery.sent}</b>
               {delivery.rate != null ? ` (${Math.round(delivery.rate * 100)}%)` : ""}
