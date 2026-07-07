@@ -16,6 +16,15 @@ interface Props {
 const MAX_AUTO_RETRIES = 8;
 // Mínimo de dígitos plausível pra um número brasileiro: DDI (55) + DDD (2) + número (≥7).
 const MIN_PHONE_DIGITS = 12;
+// Máximo no input: BR COM o "9 extra" = 55 + DDD(2) + 9 + 8díg = 13. Acima disso é digitação errada.
+const MAX_PHONE_DIGITS = 13;
+
+// Remove o "9 extra" (nono dígito) de celular BR: o WhatsApp usa o número SEM ele no wid/pareamento.
+// 55 + DDD(2) + 9 + 8díg (13) → 55 + DDD + 8díg (12). Só casa o padrão BR-com-9; o resto passa intacto.
+function stripBrNinthDigit(digits: string): string {
+  const m = /^55(\d{2})9(\d{8})$/.exec(digits);
+  return m ? `55${m[1]}${m[2]}` : digits;
+}
 
 export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
   const [status, setStatus] = useState<WahaStatus>("Unknown");
@@ -28,6 +37,8 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
   const [pairingBusy, setPairingBusy] = useState(false);
   const previousBlobRef = useRef<string | null>(null);
   const phoneDigits = phoneInput.replace(/\D/g, "");
+  // Número que REALMENTE vai pro WhatsApp: normalizado sem o 9 extra (o usuário pode digitar com 9).
+  const pairingNumber = stripBrNinthDigit(phoneDigits);
 
   const pollStatus = useCallback(async () => {
     try {
@@ -134,8 +145,10 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
   const retrySession = useCallback(() => runWahaAction(api.wahaReset), [runWahaAction]);
 
   const requestPairingCode = useCallback(async () => {
-    if (phoneDigits.length < MIN_PHONE_DIGITS) {
-      setError("Informe o número com DDI+DDD, ex.: 5571999998888.");
+    // Número canônico do WhatsApp: BR sem o 9 extra (o usuário pode digitar com ou sem — normalizamos).
+    const number = stripBrNinthDigit(phoneDigits);
+    if (number.length < MIN_PHONE_DIGITS) {
+      setError("Informe o número com DDI + DDD, sem o 9 extra. Ex.: 557133334444.");
       return;
     }
     setPairingBusy(true);
@@ -158,7 +171,7 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
         setError("A sessão não ficou pronta a tempo. Clique 'Gerar e digitar' de novo.");
         return;
       }
-      const { code } = await api.wahaPairingCode(phoneDigits);
+      const { code } = await api.wahaPairingCode(number);
       if (!code) {
         setError("O WhatsApp não retornou o código. Tente de novo em alguns segundos.");
         return;
@@ -238,20 +251,24 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
               <input
                 type="tel"
                 inputMode="numeric"
-                placeholder="Ex.: 5571999998888"
+                placeholder="Ex.: 557133334444 (sem o 9)"
                 value={phoneInput}
-                onChange={(e) => setPhoneInput(e.target.value)}
+                onChange={(e) => setPhoneInput(e.target.value.replace(/\D/g, "").slice(0, MAX_PHONE_DIGITS))}
+                maxLength={MAX_PHONE_DIGITS}
                 disabled={pairingBusy}
-                aria-label="Número do WhatsApp com DDI e DDD"
+                aria-label="Número do WhatsApp com DDI e DDD, sem o 9 extra"
               />
               <button
                 type="button"
                 onClick={() => void requestPairingCode()}
-                disabled={pairingBusy || phoneDigits.length < MIN_PHONE_DIGITS}
+                disabled={pairingBusy || pairingNumber.length < MIN_PHONE_DIGITS}
               >
                 {pairingBusy ? "Gerando..." : codeOnly ? "Gerar e digitar" : "Gerar código"}
               </button>
             </div>
+            {pairingNumber !== phoneDigits && pairingNumber.length >= MIN_PHONE_DIGITS && (
+              <p className="muted tiny">Vamos usar <b>{pairingNumber}</b> — sem o 9 extra.</p>
+            )}
             {pairingCode && (
               <div className="pairing-code-box">
                 <p className="muted tiny">

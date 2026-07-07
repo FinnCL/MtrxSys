@@ -125,7 +125,7 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           </div>
           <p className="phone-off-hint phone-mode-hint">
             {connected
-              ? "Conectado — desconecte para trocar de modo"
+              ? "Conectado, desconecte para trocar de modo"
               : modeBusy
                 ? "Alternando…"
                 : mode === "Emulator"
@@ -143,7 +143,7 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           <p className="phone-ident-name">{ident?.name || "WhatsApp conectado"}</p>
           <p className="phone-ident-phone">{ident?.phone ?? ""}</p>
           <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>
-            {ident?.proxy ? "Proxy ativo. " : ""}Pronto para disparar — vá para a aba <b>Disparo</b>.
+            {ident?.proxy ? "Proxy ativo. " : ""}Pronto para disparar. Vá para a aba <b>Disparo</b>.
           </p>
           {onDisconnect && (
             <button type="button" className="disconnect-btn phone-disconnect" onClick={onDisconnect}>
