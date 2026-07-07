@@ -182,8 +182,8 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
         </p>
       )}
 
-      {/* Aquecimento de conversa (pool). Motor é o WAHA (companion) — vale nos dois modos. */}
-      <WarmupCard />
+      {/* Aquecimento de conversa (pool) — só no modo Com emulador; fora da área WAHA + físico. */}
+      {emulatorMode && <WarmupCard />}
     </section>
   );
 }
