@@ -42,11 +42,13 @@ function safeEmbedUrl(raw: string | null | undefined): string | null {
   try {
     const u = new URL(raw, window.location.href);
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    // noVNC (tela do servidor — sem o fragment #!action=… do ws-scrcpy): conecta sozinho e ESCALA
-    // a tela remota (nativa 1440x3040) pra caber no quadro do "celular", sem scroll.
+    // noVNC (tela do servidor — sem o fragment #!action=… do ws-scrcpy): conecta sozinho. resize=remote
+    // pede pro servidor VNC REDIMENSIONAR a tela remota ao tamanho do iframe (o aparelho encosta nas
+    // bordas do molde, sem tarja/letterbox) em vez de só escalar. Fallback do noVNC: se o servidor não
+    // suportar SetDesktopSize, ele cai pra escala sozinho — então nunca fica pior que antes.
     if (!u.hash) {
       u.searchParams.set("autoconnect", "true");
-      u.searchParams.set("resize", "scale");
+      u.searchParams.set("resize", "remote");
       return u.toString();
     }
     return raw;

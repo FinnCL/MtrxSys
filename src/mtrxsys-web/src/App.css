@@ -133,13 +133,13 @@ input[type="checkbox"], input[type="radio"] {
 .live-phone { flex: 1; min-height: 0; background: var(--bg); display: flex; flex-direction: column;
   align-items: center; justify-content: safe center; gap: 12px; padding: 16px; overflow: auto; }
 .phone-device { position: relative;
-  /* Cresce com a viewport pra a tela embutida aparecer o MAIOR possível: altura até 88vh/900px,
-     largura derivada da altura (proporção ~1:1.9 de celular) e capada em 96vw. Escala em TODOS os
-     breakpoints (só usa vh/vw) sem estourar — a .live-phone tem overflow:auto de segurança. Frame
-     maior = mesmo com o letterbox do noVNC, o device fica bem mais visível. */
-  height: min(88vh, 900px); width: min(96vw, 47vh); max-width: 96vw;
+  /* PREENCHE o espaço vertical disponível (flex: 1) — o aparelho encosta nas bordas do molde e a aba
+     INTEIRA cabe na viewport SEM scroll externo: o frame ENCOLHE pra caber os outros elementos
+     (proxy, botões, card de aquecimento). Largura na proporção de celular, capada em 96vw. Escala em
+     todos os breakpoints (flex + vw). Antes o `min(88vh)` fixo estourava a página (scroll externo). */
+  flex: 1 1 0; min-height: 0; width: min(96vw, 460px); max-width: 96vw;
   background: #0d0d0d; border-radius: 44px; padding: 12px;
-  box-shadow: 0 18px 50px rgba(0,0,0,.55), inset 0 0 0 2px #2c2c2c; flex: 0 0 auto; }
+  box-shadow: 0 18px 50px rgba(0,0,0,.55), inset 0 0 0 2px #2c2c2c; }
 /* Desconectado: a conexão (QR) vai DENTRO da tela do aparelho (imersivo). A tela rola internamente,
    e o painel de conexão fica sem borda própria — ele É a tela do "celular". */
 .phone-connect-screen { overflow-y: auto; justify-content: flex-start; padding: 18px 12px; }
