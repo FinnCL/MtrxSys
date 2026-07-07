@@ -97,6 +97,13 @@ services:
       Waha__WebhookCallbackUrl: "http://api:8080/webhooks/waha"
       # Proxy por chip (anti-correlacao de IP): aplicado no config da sessao via API do WAHA.
       # Vazio = sem proxy (sai pelo IP da maquina). Formato host:porta (sem http://). docs/proxy.md.
+      # TOPOLOGIA DECIDIDA (Opcao A): o WAHA vai DIRETO no proxy residencial autenticado (WAHA_PROXY_1
+      # + user/pass), NAO pelo gost. O WAHA e o motor de disparo e nao deve depender do gost: se o gost
+      # cair, o disparo segue. O gost (deploy/docker-compose.gost-a.yml) e uma ponte no-auth SEPARADA
+      # que existe SO pro emulador (o http_proxy do Android nao carrega usuario/senha). No modo
+      # WAHA+fisico (sem emulador) o gost e irrelevante. O IP de saida e o mesmo dos dois jeitos (mesmo
+      # upstream), entao passar o WAHA pelo gost nao ganharia anti-ban. Alternativa rejeitada (tudo pelo
+      # gost = Opcao B): ver deploy/docker-compose.a-cons.yml (orfao/desatualizado).
       Waha__ProxyServer: ${WAHA_PROXY_1:-}
       Waha__ProxyUsername: ${WAHA_PROXY_1_USER:-}
       Waha__ProxyPassword: ${WAHA_PROXY_1_PASS:-}

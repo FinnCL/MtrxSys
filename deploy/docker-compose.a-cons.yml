@@ -1,3 +1,10 @@
+# ⚠️ NOTA (topologia de proxy) — NAO e a config em uso.
+# Este override roteia o WAHA por gost:8080 (Opcao B: "tudo pelo gost"). A config CANONICA/DECIDIDA e a
+# Opcao A: WAHA DIRETO no proxy residencial autenticado (ver docker-compose.yml) + gost SO pro emulador.
+# Motivo: o WAHA e o motor de disparo e nao deve depender do gost (ponto unico de falha do egress do chip).
+# Alem disso este arquivo esta DESATUALIZADO (usa mtrx-dandroid; o box roda o piloto redroid via
+# deploy/docker-compose.redroid-a.yml) e NAO e referenciado por nenhum script. Mantido so como
+# referencia da config consolidada docker-android. Se revive-lo, troque o ProxyServer pra Opcao A.
 services:
   api:
     environment:
