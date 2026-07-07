@@ -105,6 +105,21 @@ public static class WahaEndpoints
             {
                 await TryEnsureWebhookAsync(waha, sessionId, wahaOpts.Value,
                     logFactory.CreateLogger("WahaQrProxyGuard"), ct);
+                // FECHA A JANELA config-vs-conexão: o proxy é gravado no config IMEDIATAMENTE, mas só
+                // passa a valer na RECONEXÃO (o restart que o ensure dispara). Sem esperar, um poll
+                // seguinte veria "config tem proxy" (IsProxyReady=true) enquanto a conexão AINDA é a
+                // antiga (sem proxy) e serviria um QR não-proxied — o vazamento que a trava evita.
+                // Espera a sessão SAIR de ScanQrCode (o restart derrubar a conexão antiga); ao voltar,
+                // já é a conexão nova (proxied). Best-effort e curto: se não sair em ~3s, o poll seguinte
+                // reavalia (o QR antigo já teria rotacionado no restart).
+                for (var i = 0; i < 6 && !ct.IsCancellationRequested; i++)
+                {
+                    await Task.Delay(500, ct);
+                    if (await waha.GetSessionStatusAsync(sessionId, ct) != WahaSessionStatus.ScanQrCode)
+                    {
+                        break;
+                    }
+                }
                 return Results.Problem(
                     detail: "aplicando proxy antes de parear; tente de novo",
                     statusCode: 409);

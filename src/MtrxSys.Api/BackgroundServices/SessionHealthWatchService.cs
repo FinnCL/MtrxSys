@@ -12,7 +12,6 @@ namespace MtrxSys.Api.BackgroundServices;
 /// Template: WahaProxyEnsureService.</summary>
 public sealed class SessionHealthWatchService(
     IServiceProvider services,
-    IAlertNotifier alerts,
     IOptions<AlertOptions> alertOpts,
     ILogger<SessionHealthWatchService> log) : BackgroundService
 {
@@ -33,6 +32,10 @@ public sealed class SessionHealthWatchService(
                     using var scope = services.CreateScope();
                     var dispatch = scope.ServiceProvider.GetRequiredService<IOptions<DispatchOptions>>().Value;
                     var waha = scope.ServiceProvider.GetRequiredService<IWahaClient>();
+                    // Resolve o notifier POR TICK do escopo (não injetar no singleton): ele é um typed
+                    // HttpClient e capturá-lo pra sempre travaria o HttpMessageHandler (DNS velho em
+                    // uptime longo). Igual ao IWahaClient acima.
+                    var alerts = scope.ServiceProvider.GetRequiredService<IAlertNotifier>();
                     var status = await waha.GetSessionStatusAsync(dispatch.SessionId, stoppingToken);
                     var working = status == WahaSessionStatus.Working;
 
