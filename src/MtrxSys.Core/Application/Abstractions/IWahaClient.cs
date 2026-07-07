@@ -7,6 +7,10 @@ public interface IWahaClient
     Task<string?> GetOwnPhoneE164Async(string sessionId, CancellationToken ct);
     /// <summary>Status + identidade (número/nome) da sessão numa ÚNICA leitura (evita 2 GETs).</summary>
     Task<WahaSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken ct);
+    /// <summary>True se a sessão já está com o proxy DESEJADO aplicado — ou se não há proxy configurado
+    /// (nada a esperar). TRAVA do QR: não servir QR de sessão sem proxy, senão o chip conecta (WORKING)
+    /// sem proxy e sai pelo IP do servidor — e aplicar depois, em conta viva, deslogaria.</summary>
+    Task<bool> IsProxyReadyAsync(string sessionId, CancellationToken ct);
     /// <summary>Resolve um LID (@lid, número oculto) para o telefone E.164 real, ou null se não der.</summary>
     Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct);
     Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct);

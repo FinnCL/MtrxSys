@@ -52,6 +52,21 @@ internal sealed class WahaSessionClient(WahaHttp http)
             status, identity, string.IsNullOrWhiteSpace(appliedProxy) ? null : appliedProxy);
     }
 
+    // TRAVA anti-vazamento: a sessão só está "pronta pra parear" quando o proxy DESEJADO já está no
+    // config (ou quando não há proxy configurado neste ambiente — nada a esperar). Compara o desejado
+    // (Waha:ProxyServer normalizado) com o AppliedProxyServer da sessão. O qr.png usa isto pra NÃO
+    // servir o QR de uma sessão sem proxy (senão o chip conectaria sem proxy, saindo pelo IP da máquina).
+    public async Task<bool> IsProxyReadyAsync(string sessionId, CancellationToken ct)
+    {
+        var desired = http.NormalizedProxyServer();
+        if (desired is null)
+        {
+            return true;
+        }
+        var snap = await GetSessionSnapshotAsync(sessionId, ct);
+        return string.Equals(desired, snap.AppliedProxyServer, StringComparison.OrdinalIgnoreCase);
+    }
+
     public async Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct)
     {
         using var req = http.NewRequest(HttpMethod.Get, $"api/{WahaHttp.Esc(sessionId)}/lids/{WahaHttp.Esc(lid)}");

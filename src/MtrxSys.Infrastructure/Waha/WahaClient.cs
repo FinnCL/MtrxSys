@@ -32,6 +32,8 @@ internal sealed class WahaClient : IWahaClient
         _session.GetOwnPhoneE164Async(sessionId, ct);
     public Task<WahaSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken ct) =>
         _session.GetSessionSnapshotAsync(sessionId, ct);
+    public Task<bool> IsProxyReadyAsync(string sessionId, CancellationToken ct) =>
+        _session.IsProxyReadyAsync(sessionId, ct);
     public Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct) =>
         _session.ResolveLidToPhoneE164Async(sessionId, lid, ct);
     public Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct) =>

@@ -83,17 +83,33 @@ public static class WahaEndpoints
         group.MapGet("/qr.png", async (
             IWahaClient waha,
             IOptions<DispatchOptions> dispatch,
+            IOptions<WahaOptions> wahaOpts,
+            ILoggerFactory logFactory,
             HttpContext http,
             CancellationToken ct) =>
         {
-            var status = await waha.GetSessionStatusAsync(dispatch.Value.SessionId, ct);
+            var sessionId = dispatch.Value.SessionId;
+            var status = await waha.GetSessionStatusAsync(sessionId, ct);
             if (status != WahaSessionStatus.ScanQrCode)
             {
                 return Results.Problem(
                     detail: $"session not scanning (status={status})",
                     statusCode: 409);
             }
-            var bytes = await waha.GetQrPngAsync(dispatch.Value.SessionId, ct);
+            // TRAVA anti-vazamento: NÃO serve o QR enquanto a sessão não está com o proxy aplicado.
+            // Senão o chip poderia conectar (WORKING) SEM proxy — saindo pelo IP do servidor — e não dá
+            // pra aplicar depois numa conta viva sem deslogar. Aplica o proxy (seguro em SCAN_QR_CODE,
+            // sem conta a perder; pode reiniciar a sessão pra o proxy valer) e devolve 409 pro front
+            // tentar de novo. Idempotente: uma vez aplicado, os próximos polls servem o QR direto.
+            if (!await waha.IsProxyReadyAsync(sessionId, ct))
+            {
+                await TryEnsureWebhookAsync(waha, sessionId, wahaOpts.Value,
+                    logFactory.CreateLogger("WahaQrProxyGuard"), ct);
+                return Results.Problem(
+                    detail: "aplicando proxy antes de parear; tente de novo",
+                    statusCode: 409);
+            }
+            var bytes = await waha.GetQrPngAsync(sessionId, ct);
             http.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
             return Results.File(bytes, "image/png");
         });
