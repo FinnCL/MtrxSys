@@ -87,17 +87,21 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
         previousBlobRef.current = url;
         setQrUrl(url);
       } catch (ex) {
-        // 409 = a sessão NÃO está mais em ScanQrCode (nosso `status` está defasado). Insistir a
-        // cada 10s só floodaria o console com 409. Para o poll e reavalia o status — o efeito
-        // reinicia sozinho se a sessão voltar a ScanQrCode. Outras falhas: best-effort, tenta de novo.
+        // 409 = NESTE instante a sessão não está servindo QR. Com o GOWS isso é a ROTAÇÃO do QR: a
+        // cada ~minuto ele reconecta e emite um QR novo, SEM mudar o status (segue SCAN_QR_CODE).
+        // NÃO pode matar o poll aqui: se matar, o QR exibido CONGELA no último (expirado) e o scan
+        // falha — era a causa de "escaneei e não conectou". Reconsulta o status (se realmente saiu de
+        // ScanQrCode, o efeito re-roda e limpa) e deixa o intervalo tentar de novo no próximo tick.
         if (ex instanceof ApiError && ex.status === 409) {
-          if (handle) clearInterval(handle);
           void pollStatus();
+          return;
         }
+        // Outras falhas: best-effort — o próximo tick tenta de novo (o intervalo segue vivo).
       }
     }
     void loadQr();
-    handle = setInterval(loadQr, 10_000);
+    // 5s (era 10s): durante a rotação do QR, refresca mais rápido pro usuário sempre ter um QR válido.
+    handle = setInterval(loadQr, 5_000);
     return () => {
       cancelled = true;
       if (handle) clearInterval(handle);
