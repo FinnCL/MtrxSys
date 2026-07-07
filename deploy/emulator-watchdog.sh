@@ -31,10 +31,15 @@ clean_screen() {
     xdotool search --name "Extended Controls" windowclose 2>/dev/null
     # a janelinha de ferramenta ("Emulator") — windowunmap NAO segura; joga pra fora da tela (500x850).
     for w in $(xdotool search --name "^Emulator$" 2>/dev/null); do xdotool windowmove "$w" 900 900 2>/dev/null; done
-    # forca tamanho (o emulador varia entre boots: 322x680, 401x847...) -> 402x850 preenche a altura do
-    # display e a proporcao do device; depois centraliza (bezel #0d0d0d simetrico nas laterais).
+    # forca tamanho (o emulador varia entre boots: 322x680, 401x847...) -> 402x850 preenche a altura;
+    # centraliza DINAMICO pela largura do display (404 -> x=1; 500 -> x=49) pra o device caber sem clipar.
     DEV=$(xdotool search --name "Android Emulator" 2>/dev/null | head -1)
-    if [ -n "$DEV" ]; then xdotool windowsize "$DEV" 402 850 2>/dev/null; xdotool windowmove "$DEV" 49 1 2>/dev/null; fi' >/dev/null 2>&1
+    if [ -n "$DEV" ]; then
+      xdotool windowsize "$DEV" 402 850 2>/dev/null
+      DW=$(xdotool getdisplaygeometry 2>/dev/null | cut -d" " -f1)
+      X=$(( (${DW:-404} - 402) / 2 )); [ "$X" -lt 0 ] && X=0
+      xdotool windowmove "$DEV" "$X" 1 2>/dev/null
+    fi' >/dev/null 2>&1
 }
 
 while true; do
