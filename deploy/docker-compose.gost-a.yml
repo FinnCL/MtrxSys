@@ -1,0 +1,7 @@
+services:
+  gost:
+    image: gogost/gost
+    container_name: mtrx-gost
+    restart: unless-stopped
+    command: -L "http://:8080" -F "http://${WAHA_PROXY_1_USER}:${WAHA_PROXY_1_PASS}@${WAHA_PROXY_1}"
+    networks: [default]

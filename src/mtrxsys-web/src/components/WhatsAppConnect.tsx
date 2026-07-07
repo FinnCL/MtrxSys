@@ -7,6 +7,9 @@ import type { WahaStatus } from "../api/types";
 // conexão vive junto do aparelho virtual, sem travar o resto. `onConnected` avisa quando parear.
 interface Props {
   onConnected?: () => void;
+  // Esconde o QR e mostra SÓ o código de pareamento. Usado no fluxo emulador-principal: o emulador
+  // NÃO tem câmera pra escanear, então o QR é inútil — só o código funciona.
+  codeOnly?: boolean;
 }
 
 // Quantas vezes o QR é regenerado sozinho ao expirar (Failed) antes de pedir clique manual.
@@ -14,7 +17,7 @@ const MAX_AUTO_RETRIES = 8;
 // Mínimo de dígitos plausível pra um número brasileiro: DDI (55) + DDD (2) + número (≥7).
 const MIN_PHONE_DIGITS = 12;
 
-export function WhatsAppConnect({ onConnected }: Props) {
+export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
   const [status, setStatus] = useState<WahaStatus>("Unknown");
   const [error, setError] = useState<string | null>(null);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
@@ -45,6 +48,17 @@ export function WhatsAppConnect({ onConnected }: Props) {
     const handle = setInterval(pollStatus, 3_000);
     return () => clearInterval(handle);
   }, [pollStatus]);
+
+  // Auto-preenche o número REAL do emulador (registration_jid) no fluxo codeOnly — evita digitar o
+  // número errado (a causa do pareamento não conectar). Usa o número canônico, SEM normalizar.
+  useEffect(() => {
+    if (!codeOnly) return;
+    let cancelled = false;
+    void api.phoneWhatsAppNumber()
+      .then((r) => { if (!cancelled && r.number) setPhoneInput(r.number); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [codeOnly]);
 
   useEffect(() => {
     if (status !== "ScanQrCode") {
@@ -124,18 +138,40 @@ export function WhatsAppConnect({ onConnected }: Props) {
     setError(null);
     setPairingCode(null);
     try {
+      // Reinicia a sessão pra o código sair FRESCO (a sessão GOWS expira ~1min) e AGUARDA (poll) ela
+      // voltar pra ScanQrCode antes de pedir o código. O request-code só funciona nesse estado; o tempo
+      // fixo de 6s fazia o pedido chegar cedo demais e voltar SEM código (aí nada era digitado).
+      await api.wahaReset();
+      let ready = false;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        try {
+          const s = await api.wahaStatus();
+          if (s.status === "ScanQrCode") { ready = true; break; }
+        } catch { /* status instável no restart: ignora e tenta de novo */ }
+      }
+      if (!ready) {
+        setError("A sessão não ficou pronta a tempo. Clique 'Gerar e digitar' de novo.");
+        return;
+      }
       const { code } = await api.wahaPairingCode(phoneDigits);
       if (!code) {
         setError("O WhatsApp não retornou o código. Tente de novo em alguns segundos.");
         return;
       }
       setPairingCode(code);
+      // Fluxo emulador (codeOnly): já DIGITA o código no emulador (campo focado) na hora — sem
+      // copiar/colar, timing mínimo (o código do WhatsApp expira rápido). O usuário toca o campo
+      // no emulador ANTES de gerar. Remove traço/espaço (o campo do WhatsApp já formata).
+      if (codeOnly) {
+        await api.phoneText(code.replace(/[\s-]/g, ""));
+      }
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
     } finally {
       setPairingBusy(false);
     }
-  }, [phoneDigits]);
+  }, [phoneDigits, codeOnly]);
 
   useEffect(() => {
     if (status !== "Failed" || busy || autoRetries >= MAX_AUTO_RETRIES) {
@@ -166,7 +202,7 @@ export function WhatsAppConnect({ onConnected }: Props) {
 
       {status === "Stopped" && (
         <>
-          <p className="muted tiny">A sessão está parada. Inicie pra gerar o QR de pareamento.</p>
+          <p className="muted tiny">Sessão parada. Inicie pra gerar o pareamento.</p>
           <button type="button" onClick={() => void startSession()} disabled={busy}>
             {busy ? "Iniciando..." : "Iniciar sessão"}
           </button>
@@ -177,13 +213,23 @@ export function WhatsAppConnect({ onConnected }: Props) {
 
       {status === "ScanQrCode" && (
         <>
-          <div className="qr-frame">
-            {qrUrl ? <img src={qrUrl} alt="QR de pareamento" /> : <p className="muted">Carregando QR...</p>}
-          </div>
-          <p className="muted tiny">O QR rotaciona a cada ~20s automaticamente.</p>
+          {!codeOnly && (
+            <>
+              <div className="qr-frame">
+                {qrUrl ? <img src={qrUrl} alt="QR de pareamento" /> : <p className="muted">Carregando QR...</p>}
+              </div>
+              <p className="muted tiny">O QR rotaciona a cada ~20s automaticamente.</p>
+            </>
+          )}
 
           <div className="pairing-alt">
-            <p className="muted tiny">Não fecha o scan? Conecte <b>por código</b>:</p>
+            <p className="muted tiny">
+              {codeOnly ? (
+                <><b>Código de pareamento:</b></>
+              ) : (
+                <>Não fecha o scan? Conecte <b>por código</b>:</>
+              )}
+            </p>
             <div className="pairing-row">
               <input
                 type="tel"
@@ -199,12 +245,14 @@ export function WhatsAppConnect({ onConnected }: Props) {
                 onClick={() => void requestPairingCode()}
                 disabled={pairingBusy || phoneDigits.length < MIN_PHONE_DIGITS}
               >
-                {pairingBusy ? "Gerando..." : "Gerar código"}
+                {pairingBusy ? "Gerando..." : codeOnly ? "Gerar e digitar" : "Gerar código"}
               </button>
             </div>
             {pairingCode && (
               <div className="pairing-code-box">
-                <p className="muted tiny">No celular: <b>Conectar com número de telefone</b>, e digite:</p>
+                <p className="muted tiny">
+                  {codeOnly ? "Digite no emulador:" : <>No celular: <b>Conectar com número de telefone</b>, e digite:</>}
+                </p>
                 <div className="pairing-code">{pairingCode}</div>
               </div>
             )}
@@ -215,8 +263,8 @@ export function WhatsAppConnect({ onConnected }: Props) {
       {status === "Failed" &&
         (autoRetries < MAX_AUTO_RETRIES ? (
           <p className="muted tiny">
-            O QR expirou sem leitura. Gerando um novo automaticamente
-            {autoRetries > 0 ? ` (tentativa ${autoRetries}/${MAX_AUTO_RETRIES})` : ""}...
+            Conexão caiu. Reconectando
+            {autoRetries > 0 ? ` (${autoRetries}/${MAX_AUTO_RETRIES})` : ""}...
           </p>
         ) : (
           <>
@@ -236,7 +284,7 @@ function labelFor(s: WahaStatus): string {
   switch (s) {
     case "Stopped": return "parada";
     case "Starting": return "iniciando";
-    case "ScanQrCode": return "aguardando scan";
+    case "ScanQrCode": return "aguardando pareamento";
     case "Working": return "conectado";
     case "Failed": return "falha";
     default: return "desconhecido";

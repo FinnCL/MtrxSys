@@ -1,0 +1,6 @@
+services:
+  api:
+    environment:
+      Waha__ProxyServer: ""
+      Waha__ProxyUsername: ""
+      Waha__ProxyPassword: ""

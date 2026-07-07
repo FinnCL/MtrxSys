@@ -1,0 +1,9 @@
+# Integra o docker-android manual (mtrx-dandroid) ao stack A:
+# - o api passa a MIRAR esse container (Phone__ContainerName)
+# - o WhatsApp instala do APK LOCAL embutido (montado em /app/whatsapp.apk) — sem hospedar.
+services:
+  api:
+    environment:
+      Phone__ContainerName: mtrx-dandroid
+    volumes:
+      - /home/ubuntu/wa.apk:/app/whatsapp.apk:ro

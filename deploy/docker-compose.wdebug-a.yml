@@ -1,0 +1,6 @@
+# TEMPORARIO: testa engine WEBJS (Chromium real) + debug, pra ver se o WhatsApp para de dar 401.
+services:
+  waha:
+    environment:
+      WAHA_LOG_LEVEL: debug
+      WHATSAPP_DEFAULT_ENGINE: WEBJS

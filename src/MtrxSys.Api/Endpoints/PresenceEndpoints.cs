@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using MtrxSys.Api.Services;
 using MtrxSys.Core.Application.Abstractions;
@@ -67,6 +68,7 @@ public static class PresenceEndpoints
             IOptions<MtrxSys.Api.Options.PresenceOptions> presence,
             CircuitBreaker breaker,
             IMemoryCache cache,
+            IConfiguration config,
             CancellationToken ct) =>
         {
             // Status + identidade (número/nome) do chip num cache só (5s): a landing usa o número
@@ -120,7 +122,11 @@ public static class PresenceEndpoints
             var proxy = presence.Value.MaskChipPhone && !string.IsNullOrEmpty(info.Proxy)
                 ? "***"
                 : info.Proxy;
-            return Results.Ok(new { status = info.Status, breakerOpen, phone, name = info.Name, proxy });
+            // Proxy REAL do ambiente: o `proxy` acima é a PONTE local (gost:8080); este é o upstream
+            // IPRoyal que o gost repassa (ex.: 144.225.3.236:12323), pra o operador ver QUAL IP o
+            // ambiente usa de verdade. Vem de config (Waha:ProxyReal). Escondido no modo endurecido.
+            var proxyReal = presence.Value.MaskChipPhone ? null : config["Waha:ProxyReal"];
+            return Results.Ok(new { status = info.Status, breakerOpen, phone, name = info.Name, proxy, proxyReal });
         }).AllowAnonymous();
 
         return app;

@@ -23,9 +23,6 @@ public sealed class PhoneKeepAliveService(
     // Primeira vez que vimos o WAHA WORKING com o emulador ligado — base da carência do stop-after-pair.
     private DateTimeOffset? _firstWorkingSeen;
 
-    // Até quando NÃO tentar acordar de novo após um boot falho — evita martelar start/stop a janela toda.
-    private DateTimeOffset _wakeBackoffUntil;
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var opts = phoneOpts.Value;
@@ -75,10 +72,8 @@ public sealed class PhoneKeepAliveService(
             return; // sem docker/KVM: no-op (a aba já mostra "indisponível")
         }
 
-        // Acordar-agora manual OU keep-alive vencido → ciclo de wake. O manual pula a janela, a agenda
-        // e o backoff; o agendado respeita o backoff (não martela start/stop se o boot falha em série).
-        if (opts.KeepAliveEnabled
-            && (manual || (clock.UtcNow >= _wakeBackoffUntil && await IsKeepAliveDueAsync(sp, opts, ct))))
+        // Acordar-agora manual OU keep-alive vencido → ciclo de wake (o manual pula a janela/agenda).
+        if (opts.KeepAliveEnabled && (manual || await IsKeepAliveDueAsync(sp, opts, ct)))
         {
             await WakeCycleAsync(sp, phone, opts, manual, ct);
             return;
@@ -137,12 +132,9 @@ public sealed class PhoneKeepAliveService(
             await phone.StartAsync(ct);
         }
 
-        if (!await PollUntilAsync(c => phone.IsBootedAsync(c), TimeSpan.FromSeconds(opts.KeepAliveBootTimeoutSeconds), ct))
+        if (!await WaitForBootAsync(phone, TimeSpan.FromSeconds(opts.KeepAliveBootTimeoutSeconds), ct))
         {
-            // Backoff: sem isso, um boot que falha em série faria start→espera→stop todo ciclo, a
-            // janela toda. Segura ~30 min antes de tentar de novo (a margem de 4 dias sob os 14 cobre).
-            _wakeBackoffUntil = clock.UtcNow + TimeSpan.FromMinutes(30);
-            log.LogWarning("Keep-alive: {Container} não bootou a tempo; nova tentativa em ~30 min.",
+            log.LogWarning("Keep-alive: {Container} não bootou a tempo; desligando (tenta no próximo ciclo).",
                 opts.ContainerName);
             await phone.StopAsync(ct);
             return; // NÃO grava online: o primário não subiu de fato
@@ -150,11 +142,8 @@ public sealed class PhoneKeepAliveService(
 
         // Android subiu → o primário está online (o WhatsApp reconecta em background). Espera o WAHA
         // voltar a WORKING como prova de saúde do vínculo e segura um tempo pro WhatsApp reconectar.
-        var waha = sp.GetRequiredService<IWahaClient>();
-        var sessionId = dispatchOpts.Value.SessionId;
-        var working = await PollUntilAsync(
-            async c => await waha.GetSessionStatusAsync(sessionId, c) == WahaSessionStatus.Working,
-            TimeSpan.FromSeconds(opts.KeepAliveReconnectTimeoutSeconds), ct);
+        var working = await WaitForWorkingAsync(
+            sp, dispatchOpts.Value.SessionId, TimeSpan.FromSeconds(opts.KeepAliveReconnectTimeoutSeconds), ct);
         await Task.Delay(TimeSpan.FromMinutes(Math.Max(1, opts.KeepAliveHoldMinutes)), ct);
 
         await RecordOnlineAsync(sp, ct); // primário esteve online → reinicia a janela de ~14 dias
@@ -208,15 +197,28 @@ public sealed class PhoneKeepAliveService(
         return (int)(hash % 10);
     }
 
-    // Espera uma condição virar true, pollando a cada 5s até o timeout. Genérico pro boot do Android e
-    // pra sessão WAHA voltar a WORKING — evita duas cópias quase idênticas do mesmo loop.
-    private static async Task<bool> PollUntilAsync(
-        Func<CancellationToken, Task<bool>> ready, TimeSpan timeout, CancellationToken ct)
+    private static async Task<bool> WaitForBootAsync(IPhoneOrchestrator phone, TimeSpan timeout, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (await ready(ct))
+            if (await phone.IsBootedAsync(ct))
+            {
+                return true;
+            }
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+        }
+        return false;
+    }
+
+    private static async Task<bool> WaitForWorkingAsync(
+        IServiceProvider sp, string sessionId, TimeSpan timeout, CancellationToken ct)
+    {
+        var waha = sp.GetRequiredService<IWahaClient>();
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await waha.GetSessionStatusAsync(sessionId, ct) == WahaSessionStatus.Working)
             {
                 return true;
             }

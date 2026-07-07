@@ -940,3 +940,54 @@ input[type="checkbox"], input[type="radio"] {
   .manual-modal .modal-actions button { width: 100%; }
   .manual-result-list { max-height: 40vh; }
 }
+
+/* Embed do emulador (noVNC) na aba Celular: a moldura ABRACA so a tela do device (crop do desktop
+   do Xvfb), FLEXA pra caber SEM SCROLL em qualquer altura (todos os breakpoints), e a largura sai
+   do aspecto. Calibrado ao Xvfb 500x850 do docker-android: tela em x[95,430] y[125,800]. */
+.phone-device.phone-device--embed {
+  flex: 1 1 0; min-height: 0; height: auto;
+  aspect-ratio: 1440 / 3040; width: auto; max-width: 94vw;
+  overflow: hidden; padding: 0; border-radius: 18px;
+}
+.phone-device.phone-device--embed .phone-notch { display: none; }
+.phone-device.phone-device--embed .phone-stage {
+  width: 155.3%; height: 125.0%;
+  transform: translate(-20%, -14.1%); transform-origin: top left; border-radius: 0;
+}
+
+/* --- Otimizacao responsiva do embed (analise de breakpoints) ---
+   O celular e HEIGHT-bound (retrato em painel largo): a largura sai da altura. Logo, comprimir o
+   ENTORNO (padding/gap/proxy/footer) da mais altura -> emulador maior. O flex ja evita scroll, entao
+   estes ajustes so MAXIMIZAM o tamanho por faixa de ALTURA (o gargalo real) e largura. */
+.live-phone { gap: 8px; padding: 12px 12px 8px; }
+@media (max-height: 780px) { .live-phone { gap: 6px; padding: 8px 8px 6px; } .phone-off-hint { font-size: 11px; margin-bottom: 2px; } }
+@media (max-height: 640px) { .live-phone { gap: 4px; padding: 6px; } .phone-off-hint { margin: 0; font-size: 10px; } .phone-footer .phone-reload, .phone-reload { padding: 5px 10px; font-size: 12px; } }
+@media (max-width: 640px) { .phone-device.phone-device--embed { max-width: 97vw; } }
+
+/* Modal do Passo 2 (pareamento WAHA): overlay que NÃO afeta o tamanho do emulador (nao reflow). */
+.phone-waha-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.65); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
+.phone-waha-modal { background: #111b21; border: 1px solid var(--border, #2a3942); border-radius: 14px; padding: 16px; width: min(420px, 94vw); max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+.phone-waha-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.phone-waha-modal-head span { font-weight: 700; font-size: 14px; color: var(--fg); }
+
+/* Dentro do modal do Passo 2: o .wa-connect tem largura FIXA (390px) que estoura o modal (scroll
+   horizontal). Forca 100% + tira borda/padding proprios (o modal ja tem). */
+.phone-waha-modal { overflow-x: hidden; }
+.phone-waha-modal .wa-connect { width: 100%; max-width: 100%; border: 0; padding: 0; background: transparent; }
+.phone-waha-modal .pairing-row { flex-wrap: wrap; }
+.phone-waha-modal .pairing-row input { min-width: 0; }
+
+/* Modal do Passo 2 mais compacto/responsivo (override). */
+.phone-waha-modal { width: min(360px, 92vw); padding: 14px; gap: 8px; }
+.phone-waha-modal .phone-off-hint { font-size: 12px; line-height: 1.4; }
+.phone-waha-modal .status-row { font-size: 13px; }
+.phone-waha-modal .pairing-code { font-size: 22px; letter-spacing: 2px; padding: 8px; }
+.phone-waha-modal input, .phone-waha-modal button { font-size: 13px; }
+
+/* Botões de navegação do Android (◁ ○ □) no rodapé do emulador — via keyevent no backend. */
+.phone-nav { display: flex; gap: 10px; justify-content: center; margin-bottom: 6px; }
+.phone-nav-btn { min-width: 44px; height: 32px; font-size: 16px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+
+/* Campo de "colar no emulador" (adb input text) — o noVNC nao repassa Ctrl+V. */
+.phone-type { display: flex; gap: 6px; justify-content: center; width: 100%; max-width: 340px; }
+.phone-type input { flex: 1; min-width: 0; }
