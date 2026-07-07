@@ -50,6 +50,12 @@ public sealed class DispatchEngine(
         // antigo → ban. Best-effort e uma vez por ciclo (não por job).
         await TryReconcileWarmupPhoneAsync(sessionId, ct);
 
+        // Modo de disparo (persistido): só salvamos o contato na agenda do EMULADOR no modo Emulator.
+        // Em WahaOnly (aparelho físico) o emulador NÃO é o aparelho em uso — salvar lá seria ~5 docker
+        // exec INÚTEIS por envio (falham/são no-op, com latência e spam de log). Lido 1x por ciclo.
+        var saveContactsToEmulator =
+            (await systemState.GetAsync(ct)).DispatchMode == PhoneDispatchMode.Emulator;
+
         while (!ct.IsCancellationRequested)
         {
             // Freio de mão: operador pausou os envios pelo botão "Parar envios". Leitura fresca
@@ -86,8 +92,8 @@ public sealed class DispatchEngine(
 
             // Só agora (há job pra enviar) vale checar a sessão — evita bater no WAHA em ciclos
             // ociosos. Sessão fora? Para; o job fica Pending e é retomado quando a sessão voltar.
-            // Endurecido pra NÃO atrapalhar envio saudável: erro transitório de status é engolido
-            // (assume ok) e só para em estado DEFINITIVO (Stopped/Failed) — Starting/ScanQrCode seguem.
+            // LISTA-BRANCA: só envia se WORKING (ver abaixo). Erro transitório de LEITURA de status é
+            // engolido (assume Working) pra não travar por blip de infra — a falha do envio é o backstop.
             if (dispatchOpts.Value.PauseWhenSessionDown)
             {
                 WahaSessionStatus sessionStatus;
@@ -252,11 +258,13 @@ public sealed class DispatchEngine(
                     break;
                 }
 
-                // Grava o contato na agenda do emulador ANTES do envio (perfil menos-robô, ajuda
-                // anti-ban). Best-effort e idempotente: uma falha aqui é só logada e NÃO impede o
-                // envio — o disparo é o que importa. Roda dentro do gate de aquecimento, então só
-                // acontece quando o warmup já liberou o envio.
-                await TrySaveContactAsync(contact, ct);
+                // Grava o contato na agenda do EMULADOR ANTES do envio (perfil menos-robô, ajuda
+                // anti-ban) — SÓ no modo Emulator (no físico o emulador não é o aparelho em uso).
+                // Best-effort e idempotente: uma falha aqui é só logada e NÃO impede o envio.
+                if (saveContactsToEmulator)
+                {
+                    await TrySaveContactAsync(contact, ct);
+                }
 
                 // Anexo de imagem DESABILITADO: todo disparo sai como texto, mesmo que o template
                 // tenha imagem. Evita rejeição do WAHA (422 por mimetype/dados) e mantém o envio
