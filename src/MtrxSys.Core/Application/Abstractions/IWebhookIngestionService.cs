@@ -17,6 +17,10 @@ public sealed record WahaMessagePayload(
     bool? HasMedia,
     WahaMediaInfo? Media,
     string? Participant,
-    string? NotifyName = null);
+    string? NotifyName = null,
+    // Só no evento message.ack: estado de entrega da NOSSA mensagem (WAHA/whatsmeow):
+    // -1 ERROR, 0 PENDING, 1 SERVER (saiu), 2 DEVICE (entregue), 3 READ, 4 PLAYED. Entregue = ack >= 2.
+    int? Ack = null,
+    string? AckName = null);
 
 public sealed record WahaMediaInfo(string? Url, string? Mimetype, string? Filename);

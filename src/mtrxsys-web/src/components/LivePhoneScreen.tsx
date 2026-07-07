@@ -25,6 +25,8 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
   // Modo PERSISTIDO da aba (fonte da verdade — vem do banco via /api/phone/mode). null = carregando.
   const [mode, setMode] = useState<PhoneMode | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
+  // Saúde de entrega (sensor anti-shadow-restriction) — dos envios das últimas 24h, quantos entregaram.
+  const [delivery, setDelivery] = useState<{ sent: number; delivered: number; rate: number | null } | null>(null);
 
   const refreshIdent = useCallback(async () => {
     try {
@@ -88,6 +90,26 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
   // Toggle travado quando conectado (não pode usar os dois modos ao mesmo tempo) ou durante a troca.
   const modeLocked = connected || modeBusy;
 
+  // Saúde de entrega — só quando conectado (é o chip que dispara). Poll leve; falha silenciosa.
+  useEffect(() => {
+    if (!connected) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const d = await api.deliveryHealth();
+        if (alive) setDelivery(d);
+      } catch {
+        /* ignora */
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 30000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [connected]);
+
   return (
     <section className="live-phone">
       {/* Proxy REALMENTE aplicado na sessão WAHA do chip (verde) ou saída pelo IP da máquina (cinza). */}
@@ -145,6 +167,13 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>
             {ident?.proxy ? "Proxy ativo. " : ""}Pronto para disparar. Vá para a aba <b>Disparo</b>.
           </p>
+          {/* Sensor de entrega: só aparece quando houve envio na janela. Taxa baixa = possível restrição. */}
+          {delivery && delivery.sent > 0 && (
+            <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>
+              Entregas 24h: <b>{delivery.delivered}/{delivery.sent}</b>
+              {delivery.rate != null ? ` (${Math.round(delivery.rate * 100)}%)` : ""}
+            </p>
+          )}
           {onDisconnect && (
             <button type="button" className="disconnect-btn phone-disconnect" onClick={onDisconnect}>
               Desconectar WhatsApp

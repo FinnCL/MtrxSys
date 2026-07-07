@@ -18,6 +18,11 @@ internal sealed class SendAuditEntryConfiguration : IEntityTypeConfiguration<Sen
         b.Property(x => x.DelayMs).HasColumnName("delay_ms");
         b.Property(x => x.OccurredAt).HasColumnName("occurred_at");
         b.HasIndex(x => x.OccurredAt);
+        // Sensor de entrega: wa_message_id casa com o message.ack; ack/delivered_at guardam o estado.
+        b.Property(x => x.WaMessageId).HasColumnName("wa_message_id").HasMaxLength(200).HasDefaultValue("");
+        b.Property(x => x.Ack).HasColumnName("ack").HasDefaultValue(0);
+        b.Property(x => x.DeliveredAt).HasColumnName("delivered_at");
+        b.HasIndex(x => x.WaMessageId); // lookup por id no handler do ack
         b.Ignore(x => x.DomainEvents);
     }
 }

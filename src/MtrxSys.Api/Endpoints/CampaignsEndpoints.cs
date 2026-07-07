@@ -233,6 +233,18 @@ public static class CampaignsEndpoints
             });
         });
 
+        // Saúde de ENTREGA (sensor anti-shadow-restriction): quantos dos envios das últimas 24h
+        // chegaram a "entregue" (ack >= 2). Queda forte da taxa = possível restrição silenciosa do chip
+        // (mensagem sai mas não entrega) — hoje o circuit breaker só vê falha na chamada de envio.
+        dispatch.MapGet("/delivery-health", async (
+            ISendAuditRepository audit, IClock clock, CancellationToken ct) =>
+        {
+            const int windowHours = 24;
+            var stats = await audit.GetDeliveryStatsAsync(clock.UtcNow.AddHours(-windowHours), ct);
+            double? rate = stats.Sent > 0 ? (double)stats.Delivered / stats.Sent : null;
+            return Results.Ok(new { windowHours, sent = stats.Sent, delivered = stats.Delivered, rate });
+        });
+
         dispatch.MapPost("/pause", async (ISystemStateRepository state, IUnitOfWork uow, CancellationToken ct) =>
         {
             var s = await state.GetAsync(ct);

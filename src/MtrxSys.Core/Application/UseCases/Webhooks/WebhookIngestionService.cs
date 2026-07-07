@@ -19,11 +19,20 @@ public sealed class WebhookIngestionService(
     IClock clock,
     BrazilPhoneValidator phones,
     ISharedPhoneLedger ledger,
+    ISendAuditRepository audit,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<WebhookIngestionService> log) : IWebhookIngestionService
 {
     public async Task IngestAsync(WahaWebhookEvent evt, CancellationToken ct)
     {
+        // Sensor de ENTREGA: o message.ack atualiza o estado das NOSSAS mensagens (detecta shadow-
+        // restriction — sai mas não entrega). Roteado ANTES do filtro de inbound; não gera conversa.
+        if (WahaEvents.IsAck(evt.Event))
+        {
+            await HandleAckAsync(evt, ct);
+            return;
+        }
+
         if (evt.Event is null || !WahaEvents.InboundMessageEvents.Contains(evt.Event))
         {
             log.LogDebug("Ignoring webhook event {Event}", evt.Event);
@@ -218,6 +227,31 @@ public sealed class WebhookIngestionService(
             }
 #pragma warning restore CA1031
         }
+    }
+
+    // Atualiza o estado de ENTREGA de uma mensagem NOSSA a partir de um message.ack. Só fromMe da nossa
+    // sessão; casa pelo id core com a auditoria do disparo. Best-effort e idempotente (MarkAck é
+    // monotônico): ack de mensagem que não é de disparo (resposta manual, ou já purgada) não acha e sai.
+    private async Task HandleAckAsync(WahaWebhookEvent evt, CancellationToken ct)
+    {
+        if (!string.Equals(evt.Session, dispatchOpts.Value.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+        var p = evt.Payload;
+        if (p?.Ack is null || p.FromMe != true || string.IsNullOrWhiteSpace(p.Id))
+        {
+            return;
+        }
+        var coreId = WahaChatIdentifier.ExtractMessageCore(p.Id);
+        var entry = await audit.GetByWaMessageIdAsync(coreId, ct);
+        if (entry is null)
+        {
+            return;
+        }
+        entry.MarkAck(p.Ack.Value, clock.UtcNow);
+        await uow.SaveChangesAsync(ct);
+        log.LogDebug("ACK {Ack} ({AckName}) para envio {Core}", p.Ack, p.AckName, coreId);
     }
 
     private const string OptOutConfirmationMessage =

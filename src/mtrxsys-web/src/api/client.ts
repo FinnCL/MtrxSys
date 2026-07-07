@@ -369,6 +369,12 @@ export const api = {
     request<{ paused: boolean; circuitOpen: boolean; circuitOpenUntil: string | null }>(
       "/api/dispatch/status",
     ),
+  // Saúde de ENTREGA (sensor anti-shadow-restriction): dos envios das últimas 24h, quantos entregaram
+  // (ack >= 2). rate = null quando não houve envio na janela.
+  deliveryHealth: () =>
+    request<{ windowHours: number; sent: number; delivered: number; rate: number | null }>(
+      "/api/dispatch/delivery-health",
+    ),
   warmupStatus: () => request<WarmupStatus>("/api/dispatch/warmup"),
   restartWarmup: () =>
     request<{ startedOn: string }>("/api/dispatch/warmup/restart", { method: "POST" }),

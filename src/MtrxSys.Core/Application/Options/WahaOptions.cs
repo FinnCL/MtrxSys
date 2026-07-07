@@ -17,7 +17,11 @@ public sealed class WahaOptions
 
     public string? WebhookCallbackUrl { get; set; }
 
-    public string[] WebhookEvents { get; set; } = ["message", "message.any"];
+    // message.ack = sensor de ENTREGA (detecta shadow-restriction: mensagem sai mas não entrega).
+    // Assinar isto é SEGURO pra sessões vivas: o WebhookConfigured compara só URL+token (não os
+    // eventos), então adicionar aqui NÃO dispara PUT numa sessão WORKING (não mexe no proxy/logout).
+    // O novo evento passa a valer no próximo pareamento/criação da sessão.
+    public string[] WebhookEvents { get; set; } = ["message", "message.any", "message.ack"];
 
     // Token do webhook (header X-Webhook-Token). Preenchido a partir de Webhooks:WahaToken (fonte
     // única — o mesmo token que a API valida no /webhooks/waha). Quando presente, é gravado no

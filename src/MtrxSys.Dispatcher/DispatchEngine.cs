@@ -259,7 +259,9 @@ public sealed class DispatchEngine(
                         renderedText: text,
                         typingMs: typingMs,
                         delayMs: (int)delayBefore.TotalMilliseconds,
-                        occurredAt: now),
+                        occurredAt: now,
+                        // Id "core" (mesma normalização do webhook) pro sensor de entrega casar o message.ack.
+                        waMessageId: WahaChatIdentifier.ExtractMessageCore(waMessageId)),
                     ct);
                 // Commita SÓ o registro do envio (job=Sent + contato + auditoria). A mensagem já
                 // saiu no WhatsApp (irreversível), então este commit NÃO pode tocar system_state:
