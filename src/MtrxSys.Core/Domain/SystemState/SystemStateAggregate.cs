@@ -41,6 +41,11 @@ public sealed class SystemStateAggregate : Entity<int>
     // processo de dias). NÃO confunde com o teto diário de disparo (WarmupStartedOn etc.).
     public bool WarmupEngineEnabled { get; private set; }
 
+    // Modo da aba "Celular" (toggle único da UI) — fonte da verdade do que a página renderiza.
+    // Persistido pra sobreviver a restart e ao 502 do emulador (antes era derivado do container ligado).
+    // Default WahaOnly: o modo mais simples/seguro (WAHA + aparelho real, sem depender do emulador).
+    public PhoneDispatchMode DispatchMode { get; private set; } = PhoneDispatchMode.WahaOnly;
+
     public bool IsManuallyPaused => PausedReason == ManualPauseReason;
 
     private SystemStateAggregate() { }
@@ -66,6 +71,9 @@ public sealed class SystemStateAggregate : Entity<int>
 
     // Liga/desliga o motor de aquecimento de conversa (botão da UI).
     public void SetWarmupEngineEnabled(bool enabled) => WarmupEngineEnabled = enabled;
+
+    // Troca o modo da aba "Celular" (toggle único). Persistido pelo endpoint /api/phone/mode.
+    public void SetDispatchMode(PhoneDispatchMode mode) => DispatchMode = mode;
 
     // Reinicia o aquecimento a partir de hoje — a curva volta ao dia 0. Usado ao
     // trocar de chip (número novo é "frio" de novo). Zera também qualquer liberação extra.

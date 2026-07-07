@@ -112,6 +112,12 @@ export interface PhoneStatus {
   viewUrl: string | null;
 }
 
+// Modo da aba "Celular" (toggle único), PERSISTIDO no banco (system_state). Fonte da verdade do que a
+// página renderiza — não é derivado do container do emulador estar ligado.
+//  "WahaOnly" = WAHA + aparelho real físico (sem emulador).
+//  "Emulator" = Emulador (Android em container) + WAHA.
+export type PhoneMode = "WahaOnly" | "Emulator";
+
 // Identidade real do aparelho virtual (WAHA): número + nome do chip pareado e status da sessão.
 // status === "Working" = conectado. Vem do /api/presence/chip (mesmo que a landing usa).
 export interface ChipIdentity {
@@ -153,6 +159,13 @@ export const api = {
     }),
   // Identidade real do aparelho virtual (WAHA) — número/nome do chip pareado. Mesma fonte da landing.
   phoneIdentity: () => request<ChipIdentity>("/api/presence/chip", { auth: false }),
+  // Modo persistido da aba "Celular" (WahaOnly / Emulator) — o toggle único lê e grava aqui.
+  phoneMode: () => request<{ mode: PhoneMode }>("/api/phone/mode"),
+  phoneSetMode: (mode: PhoneMode) =>
+    request<{ mode: PhoneMode }>("/api/phone/mode", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
   // Android em container (opção de servidor) — orquestração pela aba "Celular".
   phoneStatus: () => request<PhoneStatus>("/api/phone/status"),
   phoneProvision: () => request<PhoneStatus>("/api/phone/provision", { method: "POST" }),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ChipIdentity, type PhoneStatus } from "../api/client";
+import { api, type ChipIdentity, type PhoneMode, type PhoneStatus } from "../api/client";
 import { WhatsAppConnect } from "./WhatsAppConnect";
 import { WarmupCard } from "./WarmupCard";
 
@@ -76,9 +76,10 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
   // Modo de pareamento (só quando desconectado): false = pelo EMULADOR (código auto-digitado);
   // true = celular REAL (QR, sem emulador). Emulador-primeiro por padrão.
   const [pairViaPhone, setPairViaPhone] = useState(false);
-  // Emulador ligado/desligado (pro botão de power) + busy do toggle.
-  const [phoneRunning, setPhoneRunning] = useState<boolean | null>(null);
-  const [powerBusy, setPowerBusy] = useState(false);
+  // MODO PERSISTIDO da aba (fonte da verdade — vem do banco via /api/phone/mode). null = carregando.
+  // Substitui o antigo "modo derivado do container ligado": o toggle escreve aqui e a página obedece.
+  const [mode, setMode] = useState<PhoneMode | null>(null);
+  const [modeBusy, setModeBusy] = useState(false);
 
   const refreshIdent = useCallback(async () => {
     try {
@@ -94,47 +95,53 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
     return () => clearInterval(id);
   }, [refreshIdent]);
 
-  // Estado do emulador (ligado/desligado) pro botão de power — só quando há tela embutida (url).
+  // Lê o modo PERSISTIDO do banco e mantém em sincronia (outra aba/cliente pode ter trocado). Falha
+  // silenciosa preserva o valor atual (não zera → não pisca). Só faz sentido onde há emulador (url).
   useEffect(() => {
     if (!url) return;
     let alive = true;
     const tick = async () => {
       try {
-        const s = await api.phoneStatus();
-        if (alive) setPhoneRunning(s.running);
+        const m = (await api.phoneMode()).mode;
+        if (alive) setMode(m);
       } catch {
-        if (alive) setPhoneRunning(null);
+        /* mantém o valor atual */
       }
     };
     void tick();
-    const id = setInterval(() => void tick(), 8000);
+    const id = setInterval(() => void tick(), 6000);
     return () => {
       alive = false;
       clearInterval(id);
     };
   }, [url]);
 
-  // Liga/desliga o emulador. O backend (StopAsync) marca a flag-volume `<container>-off` pro
-  // emulator-watchdog NÃO religar; o StartAsync remove a flag. Assim o "Desligar" SEGURA.
-  const togglePower = async () => {
-    setPowerBusy(true);
+  // Troca o MODO (o toggle único). Persiste no banco (/api/phone/mode) e reconcilia o container do
+  // emulador com a escolha: "Emulator" liga (StartAsync remove a flag-off), "WahaOnly" desliga
+  // (StopAsync marca `<container>-off` pro watchdog NÃO religar → disparo segue só pelo WAHA).
+  const selectMode = async (next: PhoneMode) => {
+    if (modeBusy || mode === next) return;
+    setModeBusy(true);
+    setEmbed(null);
     try {
-      if (phoneRunning) {
-        await api.phoneStop();
-        setEmbed(null);
-        setPhoneRunning(false);
-      } else {
-        await api.phoneStart();
-        setPhoneRunning(true);
+      await api.phoneSetMode(next);
+      setMode(next);
+      if (url) {
+        if (next === "Emulator") await api.phoneStart();
+        else await api.phoneStop();
       }
     } catch {
-      /* fail-safe: não quebra a aba se o docker não responder */
+      /* fail-safe: não quebra a aba se o docker/endpoint não responder */
     } finally {
-      setPowerBusy(false);
+      setModeBusy(false);
     }
   };
 
   const connected = ident?.status === "Working";
+  // A view do emulador só aparece quando o MODO PERSISTIDO pede emulador E há um viewer configurado
+  // (url). No modo "WahaOnly" (ou sem viewer) nada do emulador é renderizado — o molde vira o mundo
+  // WAHA + aparelho real. `mode === null` (carregando) também NÃO mostra emulador (waha-first, seguro).
+  const emulatorActive = mode === "Emulator" && !!url;
 
   return (
     <section className="live-phone">
@@ -156,17 +163,40 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           ↳ sai por {ident.proxyReal}
         </p>
       )}
-      {/* Modo de operação ATUAL (derivado do estado do emulador — não é flag separada): emulador ligado
-          = "com emulador" (disparo + contato-save); desligado = "só WAHA" (disparo pelo aparelho real). */}
-      {phoneRunning !== null && (
-        <p className="phone-off-hint" style={{ textAlign: "center", margin: "0 0 8px" }}>
-          Modo:{" "}
-          {phoneRunning ? (
-            <span className="phone-badge ok">com emulador</span>
-          ) : (
-            <span className="phone-badge off">só WAHA (aparelho real)</span>
-          )}
-        </p>
+      {/* SELETOR DE MODO (segmented control): a ÚNICA escolha de "com emulador" vs "sem emulador",
+          gravada no BANCO (fonte da verdade do que a página renderiza). Clicar persiste o modo e
+          reconcilia o container do emulador. Com emulador = disparo pelo emulador + WAHA; sem emulador =
+          WAHA + aparelho real físico (o emulador nem é renderizado). Só onde há emulador disponível (url). */}
+      {url && mode !== null && (
+        <div className="phone-mode-wrap">
+          <div className="phone-mode" role="group" aria-label="Modo de disparo" aria-busy={modeBusy}>
+            <button
+              type="button"
+              className={`phone-mode-opt${mode === "Emulator" ? " active" : ""}`}
+              aria-pressed={mode === "Emulator"}
+              disabled={modeBusy}
+              onClick={() => void selectMode("Emulator")}
+            >
+              📱 Com emulador
+            </button>
+            <button
+              type="button"
+              className={`phone-mode-opt${mode === "WahaOnly" ? " active" : ""}`}
+              aria-pressed={mode === "WahaOnly"}
+              disabled={modeBusy}
+              onClick={() => void selectMode("WahaOnly")}
+            >
+              📵 Sem emulador
+            </button>
+          </div>
+          <p className="phone-off-hint phone-mode-hint">
+            {modeBusy
+              ? "Alternando…"
+              : mode === "Emulator"
+                ? "Disparo pelo emulador + WAHA"
+                : "WAHA + aparelho real físico"}
+          </p>
+        </div>
       )}
       <div className="phone-device">
         <div className="phone-notch" />
@@ -190,7 +220,7 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
               </button>
             )}
           </div>
-        ) : url ? (
+        ) : emulatorActive ? (
           // EMULADOR-PRIMEIRO (a pedido): desconectado, a TELA DO EMULADOR aparece no molde; o
           // pareamento (auto-digitar o código OU QR pra celular real) fica ABAIXO. Antes o ffacd78
           // mostrava o QR no molde primeiro — invertido.
@@ -220,7 +250,9 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
         </div>
       )}
 
-      {url && (
+      {/* Rodapé "mostrar/desligar tela" — só com o emulador ATIVO (no modo sem emulador não há tela). A
+          escolha do modo em si mora no seletor do topo; aqui é só ver a tela do Android ao vivo. */}
+      {emulatorActive && (
         <div className="phone-footer">
           {embed ? (
             <button type="button" className="phone-reload" onClick={() => setEmbed(null)}>
@@ -231,20 +263,13 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
               Mostrar tela do Android
             </button>
           )}
-          {/* Liga/desliga o emulador. "Desligar" marca a flag pro watchdog NÃO religar → o disparo segue
-              pelo WAHA sozinho (útil pra economizar recurso / rodar "sem emulador"). */}
-          {phoneRunning !== null && (
-            <button type="button" className={phoneRunning ? "phone-reload" : "phone-activate"} onClick={() => void togglePower()} disabled={powerBusy}>
-              {powerBusy ? "…" : phoneRunning ? "Desativar emulador (só WAHA)" : "Ativar emulador"}
-            </button>
-          )}
         </div>
       )}
 
       {/* Pareamento ABAIXO do molde (emulador-primeiro): com a tela do emulador visível acima, aqui
           ficam os controles — "Gerar e digitar" auto-digita o código no emulador (codeOnly), OU
           alternar pra QR e parear um CELULAR REAL (sem emulador). */}
-      {!connected && url && (
+      {!connected && emulatorActive && (
         <div className="phone-server">
           <div className="phone-footer">
             <button type="button" className="phone-reload" onClick={() => setPairViaPhone((v) => !v)}>
@@ -255,7 +280,9 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
         </div>
       )}
 
-      {showServerOption && (
+      {/* "Configurar aparelho no servidor" é do MUNDO DO EMULADOR (Android em container vira o principal) —
+          só faz sentido no modo "Com emulador". No modo WAHA+físico fica escondido pra não poluir. */}
+      {showServerOption && emulatorActive && (
         <>
           <button type="button" className="phone-reload" onClick={() => setShowServer((s) => !s)}>
             {showServer ? "Ocultar" : "Configurar"} aparelho no servidor

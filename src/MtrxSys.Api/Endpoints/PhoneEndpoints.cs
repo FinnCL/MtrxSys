@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using MtrxSys.Api.BackgroundServices;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Domain.SystemState;
 
 namespace MtrxSys.Api.Endpoints;
 
@@ -12,6 +13,7 @@ namespace MtrxSys.Api.Endpoints;
 public static class PhoneEndpoints
 {
     public sealed record ProxyRequest(string? Server);
+    public sealed record ModeRequest(string? Mode);
 
     public static IEndpointRouteBuilder MapPhoneEndpoints(this IEndpointRouteBuilder app)
     {
@@ -19,6 +21,28 @@ public static class PhoneEndpoints
 
         group.MapGet("/status", async (IPhoneOrchestrator phone, CancellationToken ct) =>
             Results.Ok(await phone.GetStatusAsync(ct)));
+
+        // Modo da aba "Celular" (toggle único), PERSISTIDO no system_state — a fonte da verdade do que a
+        // página renderiza (independe do container do emulador estar de pé, ao contrário do /status).
+        group.MapGet("/mode", async (ISystemStateRepository stateRepo, CancellationToken ct) =>
+        {
+            var st = await stateRepo.GetAsync(ct);
+            return Results.Ok(new { mode = st.DispatchMode.ToString() });
+        });
+
+        group.MapPost("/mode", async (ModeRequest req, ISystemStateRepository stateRepo, IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            if (!Enum.TryParse<PhoneDispatchMode>(req.Mode, ignoreCase: true, out var mode))
+            {
+                return Results.BadRequest(new { error = $"modo inválido: '{req.Mode}' (use WahaOnly ou Emulator)." });
+            }
+            var st = await stateRepo.GetAsync(ct);
+            st.SetDispatchMode(mode);
+            await stateRepo.UpdateAsync(st, ct);
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(new { mode = mode.ToString() });
+        });
 
         group.MapGet("/booted", async (IPhoneOrchestrator phone, CancellationToken ct) =>
             Results.Ok(new { booted = await phone.IsBootedAsync(ct) }));
