@@ -42,6 +42,10 @@ clean_screen() {
     fi' >/dev/null 2>&1
 }
 
+# "desligado DE PROPÓSITO" = existe o volume-flag mtrx-dandroid-off (criado pelo StopAsync / botão
+# "Desligar emulador"). Nesse caso o watchdog NÃO religa — só religa em CRASH real. O Start remove a flag.
+is_off() { docker volume inspect mtrx-dandroid-off >/dev/null 2>&1; }
+
 while true; do
   status=$(docker ps -a --filter name=mtrx-dandroid --format '{{.Status}}' 2>/dev/null)
   case "$status" in
@@ -53,7 +57,7 @@ while true; do
         clean_screen
       else
         down=$((down + 1))
-        if [ "$down" -ge 4 ]; then
+        if [ "$down" -ge 4 ] && ! is_off; then
           docker restart mtrx-dandroid >/dev/null 2>&1
           down=0
           sleep 60
@@ -64,10 +68,13 @@ while true; do
       : # container nao existe -> nao e da nossa conta
       ;;
     *)
-      # existe mas NAO esta Up (Exited/Created/Dead) -> crashou -> reergue
-      docker start mtrx-dandroid >/dev/null 2>&1
-      down=0
-      sleep 60
+      # existe mas NAO esta Up (Exited/Created/Dead) -> crashou -> reergue, A MENOS que tenha sido
+      # DESLIGADO DE PROPÓSITO (flag mtrx-dandroid-off do botão "Desligar emulador") — aí respeita.
+      if ! is_off; then
+        docker start mtrx-dandroid >/dev/null 2>&1
+        down=0
+        sleep 60
+      fi
       ;;
   esac
   sleep 20

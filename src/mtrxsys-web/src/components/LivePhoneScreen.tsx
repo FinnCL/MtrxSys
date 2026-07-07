@@ -76,6 +76,9 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
   // Modo de pareamento (só quando desconectado): false = pelo EMULADOR (código auto-digitado);
   // true = celular REAL (QR, sem emulador). Emulador-primeiro por padrão.
   const [pairViaPhone, setPairViaPhone] = useState(false);
+  // Emulador ligado/desligado (pro botão de power) + busy do toggle.
+  const [phoneRunning, setPhoneRunning] = useState<boolean | null>(null);
+  const [powerBusy, setPowerBusy] = useState(false);
 
   const refreshIdent = useCallback(async () => {
     try {
@@ -90,6 +93,46 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
     const id = setInterval(() => void refreshIdent(), 5000);
     return () => clearInterval(id);
   }, [refreshIdent]);
+
+  // Estado do emulador (ligado/desligado) pro botão de power — só quando há tela embutida (url).
+  useEffect(() => {
+    if (!url) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const s = await api.phoneStatus();
+        if (alive) setPhoneRunning(s.running);
+      } catch {
+        if (alive) setPhoneRunning(null);
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 8000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [url]);
+
+  // Liga/desliga o emulador. O backend (StopAsync) marca a flag-volume `<container>-off` pro
+  // emulator-watchdog NÃO religar; o StartAsync remove a flag. Assim o "Desligar" SEGURA.
+  const togglePower = async () => {
+    setPowerBusy(true);
+    try {
+      if (phoneRunning) {
+        await api.phoneStop();
+        setEmbed(null);
+        setPhoneRunning(false);
+      } else {
+        await api.phoneStart();
+        setPhoneRunning(true);
+      }
+    } catch {
+      /* fail-safe: não quebra a aba se o docker não responder */
+    } finally {
+      setPowerBusy(false);
+    }
+  };
 
   const connected = ident?.status === "Working";
 
@@ -174,6 +217,13 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           ) : (
             <button type="button" className="phone-activate" onClick={() => setEmbed(safeEmbedUrl(androidUrl))}>
               Mostrar tela do Android
+            </button>
+          )}
+          {/* Liga/desliga o emulador. "Desligar" marca a flag pro watchdog NÃO religar → o disparo segue
+              pelo WAHA sozinho (útil pra economizar recurso / rodar "sem emulador"). */}
+          {phoneRunning !== null && (
+            <button type="button" className={phoneRunning ? "phone-reload" : "phone-activate"} onClick={() => void togglePower()} disabled={powerBusy}>
+              {powerBusy ? "…" : phoneRunning ? "Desativar emulador (só WAHA)" : "Ativar emulador"}
             </button>
           )}
         </div>

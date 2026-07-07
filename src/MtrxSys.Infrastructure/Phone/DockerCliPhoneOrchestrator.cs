@@ -79,12 +79,20 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
 
     public async Task<PhoneStatus> StartAsync(CancellationToken ct)
     {
+        // Remove a flag "desligado DE PROPÓSITO" — o emulator-watchdog volta a religar em crash normalmente.
+        await DockerCli.DockerAsync(ct, "volume", "rm", "-f", $"{Opts.ContainerName}-off");
         await DockerCli.DockerAsync(ct, "start", Opts.ContainerName);
         return await GetStatusAsync(ct);
     }
 
-    public async Task StopAsync(CancellationToken ct) =>
+    public async Task StopAsync(CancellationToken ct)
+    {
+        // Marca "desligado DE PROPÓSITO" (flag-volume `<container>-off`) ANTES de parar, pro
+        // emulator-watchdog NÃO religar (senão ele trata o Exited como crash e reergue em ~20s).
+        // O "Ligar" (StartAsync) remove a flag. Fail-safe: se o docker não responder, não quebra.
+        await DockerCli.DockerAsync(ct, "volume", "create", $"{Opts.ContainerName}-off");
         await DockerCli.DockerAsync(ct, "stop", Opts.ContainerName);
+    }
 
     public async Task<string> GetLogsAsync(int tail, CancellationToken ct)
     {

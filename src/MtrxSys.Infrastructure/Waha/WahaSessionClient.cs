@@ -194,14 +194,14 @@ internal sealed class WahaSessionClient(WahaHttp http)
             ? WahaParsing.ParseStatus(statusEl.GetString())
             : WahaSessionStatus.Unknown;
 
-        // Aplica o proxy nos estados "proxyable": SCAN_QR_CODE (pareando) E WORKING (disparando). A regra
-        // antiga só aplicava em SCAN_QR_CODE porque o proxy ERA Kansas (geo US, inconsistente com o nº
-        // BR): ao aplicar num chip pareado, a conta reconectava por um IP de OUTRO país → o WhatsApp
-        // tratava como fraude → LOGOUT + RESTRIÇÃO. Com PROXY BR CONSISTENTE (nº BR + IP BR, sem salto de
-        // geo), aplicar no WORKING é SEGURO — comprovado: conta ficou estável ao ligar o proxy no Working.
-        // Assim o DISPARO também sai por BR (não só o pareamento). Stopped/Starting/Failed ficam DE FORA
-        // (estados ambíguos de um chip que pode ter caído — não arriscamos religar por proxy neles).
-        var proxyableState = currentStatus is WahaSessionStatus.ScanQrCode or WahaSessionStatus.Working;
+        // Mexe no proxy SÓ em SCAN_QR_CODE (pareando, SEM conta a perder). NUNCA em WORKING: aplicar
+        // (PUT) OU religar proxy num chip JÁ CONECTADO DESLOGA. O eea312f achou que aplicar no Working
+        // era seguro, mas DESLOGOU 2x no restart da api (o WahaProxyEnsure de 60s mexeu na sessão WORKING
+        // por timing). O disparo continua saindo por BR mesmo assim: o proxy é setado NA CRIAÇÃO da
+        // sessão e PERSISTE no WORKING — não precisa (nem pode) re-aplicar. Em WORKING, com o webhook já
+        // presente, o PUT é PULADO (linha abaixo) → a sessão fica intocada. É a volta ao comportamento
+        // do 0fd381f ("só aplicar proxy em sessão SEM conta"), que existia justamente pra evitar isto.
+        var proxyableState = currentStatus is WahaSessionStatus.ScanQrCode;
         if (webhookPresent && (proxyMatches || !proxyableState))
         {
             return true;
