@@ -104,9 +104,15 @@ public sealed class DispatchEngine(
                     sessionStatus = WahaSessionStatus.Working; // status indisponível: não trava o envio
                 }
 #pragma warning restore CA1031
-                if (sessionStatus is WahaSessionStatus.Stopped or WahaSessionStatus.Failed)
+                // LISTA-BRANCA (anti-ban): só envia se a sessão está WORKING. QUALQUER outro estado
+                // (SCAN_QR_CODE / Starting / Stopped / Failed / Unknown) PARA o ciclo — o job fica
+                // Pending e retoma quando o chip voltar a WORKING. Antes era lista-negra (só Stopped/
+                // Failed), que deixava passar SCAN_QR_CODE (re-pareando) e estados novos → tentava
+                // enviar numa sessão degradada. (Leitura de status indisponível cai no default WORKING
+                // acima, de propósito, pra não travar por blip de infra — a falha do envio é o backstop.)
+                if (sessionStatus is not WahaSessionStatus.Working)
                 {
-                    log.LogInformation("Sessão WAHA {Status}; ciclo parado (job volta para Pending).", sessionStatus);
+                    log.LogInformation("Sessão WAHA {Status} (não WORKING); ciclo parado (job segue Pending).", sessionStatus);
                     break;
                 }
             }
@@ -322,6 +328,19 @@ public sealed class DispatchEngine(
                     break;
                 }
 
+                // SESSÃO SAIU DE WORKING no meio do envio (WAHA respondeu, mas a sessão deslogou/caiu
+                // pra SCAN_QR_CODE): a falha NÃO é do número — é da sessão. PARA o ciclo (job segue
+                // Pending) em vez de marcar Failed, consumir tentativa e SEGUIR enviando numa sessão
+                // degradada (risco de ban). Só cai no tratamento de falha-do-número se a sessão SEGUE
+                // WORKING. Se não der pra ler o status (blip), NÃO afirma que caiu — o gate de lista-
+                // branca no topo do próximo ciclo é o backstop.
+                if (await IsSessionNotWorkingAsync(sessionId, ct))
+                {
+                    log.LogWarning(ex,
+                        "Envio do job {JobId} falhou e a sessão NÃO está WORKING; ciclo parado (job segue Pending).", job.Id);
+                    break;
+                }
+
                 // Erro permanente (4xx do WAHA: número inválido etc.) não melhora com reenvio.
                 // Falha transitória (timeout/5xx/conexão) reenvia ATÉ o teto de tentativas.
                 if (!IsPermanentFailure(ex) && job.CanRetry(dispatchOpts.Value.MaxSendAttempts))
@@ -458,6 +477,28 @@ public sealed class DispatchEngine(
     // StatusCode preenchido (o WAHA respondeu) e também não cai aqui.
     private static bool IsSessionDownFailure(Exception ex)
         => ex is HttpRequestException { StatusCode: null };
+
+    // Re-checa se a sessão SAIU de WORKING depois de uma falha de envio (deslogou/caiu pra SCAN_QR_CODE
+    // no meio do ciclo). true = confirmadamente NÃO-WORKING → o chamador PARA o ciclo (não trata como
+    // falha do número). Se o status não puder ser lido (blip), retorna false DE PROPÓSITO: não afirma
+    // queda por uma leitura instável — o gate de lista-branca no topo do próximo ciclo é o backstop.
+    private async Task<bool> IsSessionNotWorkingAsync(string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            return await waha.GetSessionStatusAsync(sessionId, ct) is not WahaSessionStatus.Working;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // leitura de status instável não pode derrubar o ciclo; backstop é o gate do topo
+        catch
+        {
+            return false;
+        }
+#pragma warning restore CA1031
+    }
 
     // Incrementa o teto de aquecimento após o commit do envio. Best-effort: o envio já ocorreu, então
     // uma falha aqui (rede/DB do contador) só é logada — nunca reverte nem reenvia. O IncrementAsync é
