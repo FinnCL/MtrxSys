@@ -1,0 +1,14 @@
+# Faz a WEB do ambiente A embutir a tela via ws-scrcpy (device-only) em vez do noVNC (que mostra o
+# DESKTOP do emulador com a janela + Extended Controls). O ws-scrcpy (mtrx-scrcpy, porta 8000, atrás
+# do phone-a no Caddy) espelha SÓ o device do dandroid via adb (mtrx-dandroid:5555) — encaixa no frame
+# do celular e é clicável (o que fazia a tela de registro país/contato funcionar).
+#
+# Aplicar como ÚLTIMO -f (sobrescreve o VITE_EMULATOR_KIND="" que o prod.yml força).
+# Pré-requisitos (feitos no deploy): mtrx-scrcpy na rede mtrxsys_default + adb connect mtrx-dandroid:5555
+# + Caddy phone-a -> 127.0.0.1:8000. Ver deploy/docker-compose.scrcpy-a.yml.
+services:
+  web:
+    build:
+      args:
+        VITE_EMULATOR_KIND: "scrcpy"
+        VITE_EMULATOR_UDID: "mtrx-dandroid:5555"
