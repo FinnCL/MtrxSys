@@ -157,6 +157,16 @@ export const api = {
   phoneStatus: () => request<PhoneStatus>("/api/phone/status"),
   phoneProvision: () => request<PhoneStatus>("/api/phone/provision", { method: "POST" }),
   phoneStart: () => request<PhoneStatus>("/api/phone/start", { method: "POST" }),
+  phoneStop: () => request<void>("/api/phone/stop", { method: "POST" }),
+  phoneBooted: () => request<{ booted: boolean }>("/api/phone/booted"),
+  phoneKeepAlive: () => request<void>("/api/phone/keepalive", { method: "POST" }),
+  phoneLogs: (tail = 200) => request<{ logs: string }>(`/api/phone/logs?tail=${tail}`),
+  // Aplica proxy no emulador (restaurado: ffacd78 removeu o botão; o backend /api/phone/proxy existe).
+  phoneSetProxy: (server: string) =>
+    request<{ output: string }>("/api/phone/proxy", {
+      method: "POST",
+      body: JSON.stringify({ server }),
+    }),
   phoneInstallWhatsApp: () =>
     request<{ output: string }>("/api/phone/whatsapp/install", { method: "POST" }),
   // Lê o número que o WhatsApp do emulador está registrando (pré-preenche o campo do código).
