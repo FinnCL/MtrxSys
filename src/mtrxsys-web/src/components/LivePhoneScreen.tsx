@@ -280,12 +280,12 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
         </div>
       )}
 
-      {/* "Configurar aparelho no servidor" é do MUNDO DO EMULADOR (Android em container vira o principal) —
-          só faz sentido no modo "Com emulador". No modo WAHA+físico fica escondido pra não poluir. */}
+      {/* Ciclo de vida/setup do emulador (provisionar, instalar WhatsApp, keep-alive) — complementa a
+          tela do molde acima, NÃO a duplica. Só no modo "Com emulador"; recolhido por padrão. */}
       {showServerOption && emulatorActive && (
         <>
           <button type="button" className="phone-reload" onClick={() => setShowServer((s) => !s)}>
-            {showServer ? "Ocultar" : "Configurar"} aparelho no servidor
+            Setup avançado do emulador {showServer ? "▲" : "▼"}
           </button>
           {showServer && <ServerAndroidPanel connected={connected} />}
         </>
@@ -298,14 +298,12 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
   );
 }
 
-// Opção de servidor: Android REAL em container (docker-android). A aba provisiona/liga/instala tudo
-// pela API (docker.sock), sem prompt. Só funciona num host Linux com /dev/kvm — fora disso, mostra
-// "indisponível" de forma limpa. Aqui o Android pode virar o dispositivo PRINCIPAL (registro por SMS).
-// RESTAURADO do 1caf31d: o ffacd78 tinha simplificado (removeu o provisionamento automático + botões
-// de instalar/proxy/keep-alive/logs/desligar), mas o backend nunca deixou de existir.
+// Setup avançado do emulador: ciclo de vida do Android em container (docker-android) — provisionar (1ª
+// vez), religar quando caiu, instalar o WhatsApp e acordar por keep-alive. Tudo pela API (docker.sock),
+// sem prompt. Só num host Linux com /dev/kvm — fora disso, mostra "indisponível" de forma limpa. NÃO
+// renderiza a tela do aparelho: a tela ao vivo é o molde acima (antes havia um iframe aqui = duplicado).
 function ServerAndroidPanel({ connected }: { connected: boolean }) {
   const [status, setStatus] = useState<PhoneStatus | null>(null);
-  const [embed, setEmbed] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -371,13 +369,6 @@ function ServerAndroidPanel({ connected }: { connected: boolean }) {
         </div>
       )}
 
-      {embed && (
-        <div className="phone-device">
-          <div className="phone-notch" />
-          <iframe className="phone-stage" src={embed} title="Android real (servidor)" sandbox={PHONE_IFRAME_SANDBOX} allow={PHONE_IFRAME_ALLOW} />
-        </div>
-      )}
-
       {!running && (
         <div className="phone-footer">
           {state === "not_created" ? (
@@ -386,7 +377,7 @@ function ServerAndroidPanel({ connected }: { connected: boolean }) {
             </button>
           ) : state === "exited" || state === "created" ? (
             <button type="button" className="phone-activate" onClick={() => void start()} disabled={busy !== null}>
-              {busy === "start" ? "Ligando…" : "Ligar aparelho"}
+              {busy === "start" ? "Ligando…" : "Religar aparelho"}
             </button>
           ) : (
             <span className="phone-off-hint">
@@ -408,14 +399,6 @@ function ServerAndroidPanel({ connected }: { connected: boolean }) {
             </button>
           </div>
         </>
-      )}
-
-      {embed && (
-        <div className="phone-footer">
-          <button type="button" className="phone-reload" onClick={() => setEmbed(null)}>
-            Desligar tela
-          </button>
-        </div>
       )}
 
       {err && (
