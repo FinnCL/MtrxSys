@@ -1,83 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ChipIdentity, type PhoneMode, type PhoneStatus } from "../api/client";
+import { api, type ChipIdentity, type PhoneMode } from "../api/client";
 import { WhatsAppConnect } from "./WhatsAppConnect";
 import { WarmupCard } from "./WarmupCard";
 
-// Aba "Celular" = o "aparelho virtual". Dois mundos na mesma aba:
-//  1) Tela do Android em container (redroid) espelhada pelo ws-scrcpy e embutida aqui
-//     (`url`=VITE_EMULATOR_URL, `udid`=VITE_EMULATOR_UDID). Ver docs/phone.md.
-//  2) Identidade do aparelho virtual WAHA (companion) que faz o disparo (número/nome reais, ao vivo).
-//  + seção recolhível "opção de servidor" (Android em container no host Linux — redroid, sem KVM).
+// Aba "Celular" — RECONSTRUÍDA DO ZERO, passo a passo.
+// Baseline (passo 1): o toggle de modo (PERSISTIDO no banco) + o mundo "WAHA + aparelho real físico"
+// (conexão do chip por QR / identidade). O mundo "Com emulador" (tela do Android, pareamento pelo
+// emulador, setup do container) será reconstruído nos próximos passos — aqui ele é só um placeholder.
+// O backend (endpoints, orquestrador, /api/phone/mode) segue intacto; isto é só a camada de tela.
 interface LivePhoneScreenProps {
-  url: string; // tela embutível (ws-scrcpy do redroid/emulador)
-  viewerKind?: string; // "scrcpy" → monta o deep-link de stream (pula a lista); senão embute a url direto
-  udid?: string; // device adb a espelhar (redroid: host.docker.internal:5555; configurável por ambiente)
-  showServerOption?: boolean; // mostra a seção "Android em container" — só faz sentido no servidor
-  onDisconnect?: () => void; // abre a confirmação de desconectar o WhatsApp (só quando conectado)
+  url: string; // viewer do emulador (ws-scrcpy/noVNC). Vazio = host sem emulador → sempre WAHA+físico.
+  viewerKind?: string; // usado no passo do emulador (deep-link scrcpy) — ainda não neste baseline.
+  udid?: string; // idem — device adb a espelhar.
+  showServerOption?: boolean; // idem — setup do Android no servidor.
+  onDisconnect?: () => void; // abre a confirmação de desconectar o WhatsApp (só quando conectado).
 }
 
-// Monta o link de stream DIRETO do ws-scrcpy (pula a lista de devices). Formato extraído do source do
-// ws-scrcpy: #!action=stream&udid=..&player=broadway&ws=<proxy-adb>. A porta do server no device = 8886.
-function scrcpyStreamUrl(base: string, udid: string): string {
-  try {
-    const u = new URL(base);
-    // Só http(s) vira tela embutida. Bloqueia `javascript:`/`data:` etc. que `new URL` parseia mas
-    // não devem virar src de iframe (vetor de XSS quando o valor vem de env/runtime).
-    if (u.protocol !== "http:" && u.protocol !== "https:") {
-      return "";
-    }
-    const wsProto = u.protocol === "https:" ? "wss:" : "ws:";
-    const eu = encodeURIComponent(udid); // redroid via adb connect = "host.docker.internal:5555" (tem ':')
-    const ws = `${wsProto}//${u.host}/?action=proxy-adb&remote=tcp:8886&udid=${eu}`;
-    return `${base.replace(/\/$/, "")}/#!action=stream&udid=${eu}&player=broadway&ws=${encodeURIComponent(ws)}`;
-  } catch {
-    return base;
-  }
-}
-
-// Só aceita http(s) como src de iframe. `url`/`viewUrl` vêm de env de build e da resposta da API —
-// não são 100% confiáveis de ponta a ponta; isto barra `javascript:`/`data:` antes de virar src.
-function safeEmbedUrl(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  try {
-    const u = new URL(raw, window.location.href);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    // noVNC (tela do servidor — sem o fragment #!action=… do ws-scrcpy): conecta sozinho e ESCALA a
-    // tela remota pra caber no quadro do "celular", SEM scroll. (resize=remote foi testado mas o
-    // budtmo não suporta SetDesktopSize → mostrava nativo com scroll; scale é o certo aqui.)
-    if (!u.hash) {
-      u.searchParams.set("autoconnect", "true");
-      u.searchParams.set("resize", "scale");
-      return u.toString();
-    }
-    return raw;
-  } catch {
-    return null;
-  }
-}
-
-// Iframe de tela embutida (ws-scrcpy/noVNC) com superfície mínima: `sandbox` permite só o necessário
-// pro mirror funcionar (scripts + acesso à própria origem) e `allow` concede apenas clipboard.
-const PHONE_IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms";
-const PHONE_IFRAME_ALLOW = "clipboard-write";
-
-export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDisconnect }: LivePhoneScreenProps) {
-  // ws-scrcpy do redroid/emulador: abre direto na tela do device; maquete/noVNC: embute a url como está.
-  const androidUrl =
-    viewerKind === "scrcpy" && url ? scrcpyStreamUrl(url, udid || "emulator-5554") : url;
-
+export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
   const [ident, setIdent] = useState<ChipIdentity | null>(null);
-  // NÃO auto-embute a tela: quando não há chip conectado, mostramos o QR do WAHA PRIMEIRO — é o que
-  // você quer 99% das vezes (parear um chip pro disparo). A tela do emulador (noVNC/scrcpy) fica no
-  // botão opcional "Mostrar tela do Android". Antes o servidor (PHONE_VIEW_URL setado) abria a tela
-  // sozinho e o QR ficava ESCONDIDO atrás dela — origem da confusão "não acho o QR".
-  const [embed, setEmbed] = useState<string | null>(null);
-  const [showServer, setShowServer] = useState(false);
-  // Modo de pareamento (só quando desconectado): false = pelo EMULADOR (código auto-digitado);
-  // true = celular REAL (QR, sem emulador). Emulador-primeiro por padrão.
-  const [pairViaPhone, setPairViaPhone] = useState(false);
-  // MODO PERSISTIDO da aba (fonte da verdade — vem do banco via /api/phone/mode). null = carregando.
-  // Substitui o antigo "modo derivado do container ligado": o toggle escreve aqui e a página obedece.
+  // Modo PERSISTIDO da aba (fonte da verdade — vem do banco via /api/phone/mode). null = carregando.
   const [mode, setMode] = useState<PhoneMode | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
 
@@ -95,8 +36,8 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
     return () => clearInterval(id);
   }, [refreshIdent]);
 
-  // Lê o modo PERSISTIDO do banco e mantém em sincronia (outra aba/cliente pode ter trocado). Falha
-  // silenciosa preserva o valor atual (não zera → não pisca). Só faz sentido onde há emulador (url).
+  // Lê o modo persistido e mantém em sincronia. Só faz sentido onde há emulador disponível (url);
+  // sem url a aba é sempre WAHA + físico (não há o que alternar). Falha silenciosa preserva o valor.
   useEffect(() => {
     if (!url) return;
     let alive = true;
@@ -116,13 +57,11 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
     };
   }, [url]);
 
-  // Troca o MODO (o toggle único). Persiste no banco (/api/phone/mode) e reconcilia o container do
-  // emulador com a escolha: "Emulator" liga (StartAsync remove a flag-off), "WahaOnly" desliga
-  // (StopAsync marca `<container>-off` pro watchdog NÃO religar → disparo segue só pelo WAHA).
+  // Troca o modo (o toggle único). Persiste no banco e reconcilia o container do emulador com a
+  // escolha (só onde há viewer): "Emulator" liga, "WahaOnly" desliga.
   const selectMode = async (next: PhoneMode) => {
     if (modeBusy || mode === next) return;
     setModeBusy(true);
-    setEmbed(null);
     try {
       await api.phoneSetMode(next);
       setMode(next);
@@ -138,16 +77,11 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
   };
 
   const connected = ident?.status === "Working";
-  // A view do emulador só aparece quando o MODO PERSISTIDO pede emulador E há um viewer configurado
-  // (url). No modo "WahaOnly" (ou sem viewer) nada do emulador é renderizado — o molde vira o mundo
-  // WAHA + aparelho real. `mode === null` (carregando) também NÃO mostra emulador (waha-first, seguro).
-  const emulatorActive = mode === "Emulator" && !!url;
+  const emulatorMode = mode === "Emulator" && !!url;
 
   return (
     <section className="live-phone">
-      {/* Indicador do proxy REALMENTE aplicado na sessão do chip (não o só-configurado). Verde =
-          o chip sai pelo IP do proxy; cinza = sai pelo IP da máquina (sem proxy). Reusa os badges
-          .phone-badge do design system (ok=verde / off=cinza) em vez de cor solta. */}
+      {/* Proxy REALMENTE aplicado na sessão WAHA do chip (verde) ou saída pelo IP da máquina (cinza). */}
       <p className="phone-off-hint" style={{ textAlign: "center", margin: "0 0 8px" }}>
         Proxy:{" "}
         {ident?.proxy ? (
@@ -156,17 +90,8 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           <span className="phone-badge off">desligado (sai pelo IP da máquina)</span>
         )}
       </p>
-      {/* IP real de saída (upstream do gost) — o proxy REAL pelo qual o chip sai. Restaurado após
-          um sync ter removido esta linha por engano; o dado sempre veio do /api/presence/chip. */}
-      {ident?.proxyReal && (
-        <p className="phone-off-hint" style={{ textAlign: "center", margin: "-2px 0 8px", fontSize: 11 }}>
-          ↳ sai por {ident.proxyReal}
-        </p>
-      )}
-      {/* SELETOR DE MODO (segmented control): a ÚNICA escolha de "com emulador" vs "sem emulador",
-          gravada no BANCO (fonte da verdade do que a página renderiza). Clicar persiste o modo e
-          reconcilia o container do emulador. Com emulador = disparo pelo emulador + WAHA; sem emulador =
-          WAHA + aparelho real físico (o emulador nem é renderizado). Só onde há emulador disponível (url). */}
+
+      {/* TOGGLE ÚNICO de modo (persistido no banco). Só aparece onde há emulador disponível (url). */}
       {url && mode !== null && (
         <div className="phone-mode-wrap">
           <div className="phone-mode" role="group" aria-label="Modo de disparo" aria-busy={modeBusy}>
@@ -198,17 +123,12 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           </p>
         </div>
       )}
+
+      {/* Molde do "celular" = conexão do chip WAHA (comum aos dois modos). Conectado → identidade;
+          desconectado → pareamento por QR do aparelho REAL (WhatsAppConnect). */}
       <div className="phone-device">
         <div className="phone-notch" />
-        {embed ? (
-          <iframe
-            className="phone-stage"
-            src={embed}
-            title="Android real"
-            sandbox={PHONE_IFRAME_SANDBOX}
-            allow={PHONE_IFRAME_ALLOW}
-          />
-        ) : connected ? (
+        {connected ? (
           <div className="phone-stage phone-off">
             <p className="phone-off-title">Aparelho virtual</p>
             <p className="phone-ident-name">{ident?.name || "WhatsApp conectado"}</p>
@@ -220,200 +140,23 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
               </button>
             )}
           </div>
-        ) : emulatorActive ? (
-          // EMULADOR-PRIMEIRO (a pedido): desconectado, a TELA DO EMULADOR aparece no molde; o
-          // pareamento (auto-digitar o código OU QR pra celular real) fica ABAIXO. Antes o ffacd78
-          // mostrava o QR no molde primeiro — invertido.
-          <iframe
-            className="phone-stage"
-            src={safeEmbedUrl(androidUrl) ?? ""}
-            title="Android real"
-            sandbox={PHONE_IFRAME_SANDBOX}
-            allow={PHONE_IFRAME_ALLOW}
-          />
         ) : (
-          // Sem emulador (url vazia): o QR/pareamento vai DENTRO do molde (imersivo).
           <div className="phone-stage phone-off phone-connect-screen">
             <WhatsAppConnect onConnected={refreshIdent} />
           </div>
         )}
       </div>
 
-      {/* Botões de navegação do Android (voltar/home/recentes) — enviam keyevent via adb pro emulador,
-          simulando os botões do aparelho. Reconstruídos: eram server-only e um sync os removeu (o
-          backend /api/phone/key + SendKeyAsync sempre existiu). Só com a tela ligada. */}
-      {embed && (
-        <div className="phone-navbar">
-          <button type="button" className="phone-nav-btn" title="Voltar" onClick={() => void api.phoneKey("back")}>◁</button>
-          <button type="button" className="phone-nav-btn" title="Início" onClick={() => void api.phoneKey("home")}>○</button>
-          <button type="button" className="phone-nav-btn" title="Recentes" onClick={() => void api.phoneKey("recents")}>▢</button>
-        </div>
+      {/* Placeholder honesto: o mundo "Com emulador" ainda não foi reconstruído neste baseline. */}
+      {emulatorMode && (
+        <p className="phone-off-hint" style={{ textAlign: "center", maxWidth: 390 }}>
+          🚧 Modo <b>Com emulador</b> em construção — a tela do Android e o pareamento pelo emulador
+          voltam no próximo passo. O disparo já funciona pelo WAHA.
+        </p>
       )}
 
-      {/* Rodapé "mostrar/desligar tela" — só com o emulador ATIVO (no modo sem emulador não há tela). A
-          escolha do modo em si mora no seletor do topo; aqui é só ver a tela do Android ao vivo. */}
-      {emulatorActive && (
-        <div className="phone-footer">
-          {embed ? (
-            <button type="button" className="phone-reload" onClick={() => setEmbed(null)}>
-              Desligar tela
-            </button>
-          ) : (
-            <button type="button" className="phone-activate" onClick={() => setEmbed(safeEmbedUrl(androidUrl))}>
-              Mostrar tela do Android
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Pareamento ABAIXO do molde (emulador-primeiro): com a tela do emulador visível acima, aqui
-          ficam os controles — "Gerar e digitar" auto-digita o código no emulador (codeOnly), OU
-          alternar pra QR e parear um CELULAR REAL (sem emulador). */}
-      {!connected && emulatorActive && (
-        <div className="phone-server">
-          <div className="phone-footer">
-            <button type="button" className="phone-reload" onClick={() => setPairViaPhone((v) => !v)}>
-              {pairViaPhone ? "↩ Parear pelo emulador (código)" : "Parear um celular real (QR) →"}
-            </button>
-          </div>
-          <WhatsAppConnect onConnected={refreshIdent} codeOnly={!pairViaPhone} />
-        </div>
-      )}
-
-      {/* Ciclo de vida/setup do emulador (provisionar, instalar WhatsApp, keep-alive) — complementa a
-          tela do molde acima, NÃO a duplica. Só no modo "Com emulador"; recolhido por padrão. */}
-      {showServerOption && emulatorActive && (
-        <>
-          <button type="button" className="phone-reload" onClick={() => setShowServer((s) => !s)}>
-            Setup avançado do emulador {showServer ? "▲" : "▼"}
-          </button>
-          {showServer && <ServerAndroidPanel connected={connected} />}
-        </>
-      )}
-
-      {/* Aquecimento de conversa (pool). Fica AQUI de propósito: você vê as conversas aparecerem no
-          WhatsApp da conta acima. O motor é o WAHA (companion), não a tela do emulador. */}
+      {/* Aquecimento de conversa (pool). Motor é o WAHA (companion) — vale nos dois modos. */}
       <WarmupCard />
     </section>
-  );
-}
-
-// Setup avançado do emulador: ciclo de vida do Android em container (docker-android) — provisionar (1ª
-// vez), religar quando caiu, instalar o WhatsApp e acordar por keep-alive. Tudo pela API (docker.sock),
-// sem prompt. Só num host Linux com /dev/kvm — fora disso, mostra "indisponível" de forma limpa. NÃO
-// renderiza a tela do aparelho: a tela ao vivo é o molde acima (antes havia um iframe aqui = duplicado).
-function ServerAndroidPanel({ connected }: { connected: boolean }) {
-  const [status, setStatus] = useState<PhoneStatus | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [output, setOutput] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      setStatus(await api.phoneStatus());
-    } catch {
-      setStatus({ state: "unavailable", running: false, viewUrl: null });
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-    const id = setInterval(() => void refresh(), 4000);
-    return () => clearInterval(id);
-  }, [refresh]);
-
-  const state = status?.state ?? "...";
-  const running = status?.running ?? false;
-
-  const run = async (name: string, fn: () => Promise<unknown>) => {
-    setBusy(name);
-    setErr(null);
-    try {
-      await fn();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-      await refresh();
-    }
-  };
-
-  const provision = () => run("provision", async () => setStatus(await api.phoneProvision()));
-  const start = () => run("start", async () => setStatus(await api.phoneStart()));
-  const installWa = () =>
-    run("install", async () => setOutput((await api.phoneInstallWhatsApp()).output || "(ok)"));
-  // Acordar o primário adormecido (keep-alive manual). Não-bloqueante: a API só agenda; o
-  // PhoneKeepAliveService faz o ciclo (liga → online → desliga) em background.
-  const keepAlive = () => run("keepalive", async () => { await api.phoneKeepAlive(); });
-
-  return (
-    <div className="phone-server">
-      <p className="phone-off-hint">
-        Android real em container. Vira o <b>principal</b> do número (registro por SMS) e dispensa o
-        físico. Exige host Linux com <b>/dev/kvm</b>.
-      </p>
-
-      {connected && !running && (
-        <div className="phone-footer">
-          <span className="phone-off-hint">
-            Primário <b>dormindo</b>. O disparo roda pelo <b>WAHA</b> mesmo com o emulador desligado.
-          </span>
-          <button
-            type="button"
-            className="phone-reload"
-            onClick={() => void keepAlive()}
-            disabled={busy !== null}
-          >
-            {busy === "keepalive" ? "Acordando…" : "Acordar / Keep-alive agora"}
-          </button>
-        </div>
-      )}
-
-      {!running && (
-        <div className="phone-footer">
-          {state === "not_created" ? (
-            <button type="button" className="phone-activate" onClick={() => void provision()} disabled={busy !== null}>
-              {busy === "provision" ? "Provisionando…" : "Provisionar aparelho"}
-            </button>
-          ) : state === "exited" || state === "created" ? (
-            <button type="button" className="phone-activate" onClick={() => void start()} disabled={busy !== null}>
-              {busy === "start" ? "Ligando…" : "Religar aparelho"}
-            </button>
-          ) : (
-            <span className="phone-off-hint">
-              Indisponível neste host (sem Docker/KVM). Rode num servidor Linux — ver docs/phone.md.
-            </span>
-          )}
-        </div>
-      )}
-
-      {running && (
-        <>
-          <p className="phone-off-hint">
-            <b>1.</b> Instale o WhatsApp. <b>2.</b> Registre por SMS (vira <b>principal</b>).{" "}
-            <b>3.</b> Vincule o WAHA por QR (companion).
-          </p>
-          <div className="phone-footer">
-            <button type="button" className="phone-reload" onClick={() => void installWa()} disabled={busy !== null}>
-              {busy === "install" ? "Instalando…" : "Instalar WhatsApp"}
-            </button>
-          </div>
-        </>
-      )}
-
-      {err && (
-        <p className="phone-off-hint" style={{ color: "var(--danger)" }}>{err}</p>
-      )}
-
-      {output !== null && (
-        <div className="phone-logs">
-          <div className="phone-logs-head">
-            <span>saída</span>
-            <button type="button" className="phone-reload" onClick={() => setOutput(null)}>fechar</button>
-          </div>
-          <pre>{output}</pre>
-        </div>
-      )}
-    </div>
   );
 }
