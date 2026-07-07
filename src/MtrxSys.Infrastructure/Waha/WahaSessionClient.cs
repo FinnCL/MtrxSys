@@ -221,9 +221,12 @@ internal sealed class WahaSessionClient(WahaHttp http)
         using var putResp = await http.SendAsync(putReq, ct);
         putResp.EnsureSuccessStatusCode();
 
-        // Religa só quando o proxy aplicado DIVERGE do atual — aí o chip reconecta pelo proxy novo. Com
-        // proxy BR consistente, essa religada no Working é segura (sem salto de geo que derrube a conta).
-        if (applyProxy && !proxyMatches)
+        // Religa a sessão SÓ em SCAN_QR_CODE (pareando, SEM conta a perder). NUNCA religa uma sessão
+        // WORKING por proxy: religar um chip JÁ CONECTADO DESLOGA — foi a causa raiz de um logout real
+        // (o WahaProxyEnsure roda a cada 60s; no restart da api leu um proxy "divergente" por timing de
+        // startup e RELIGOU a sessão WORKING → logout → SCAN_QR_CODE). Em WORKING o proxy JÁ vale (setado
+        // na criação + mantido no PUT acima), então NÃO precisa religar — o PUT sozinho basta e é seguro.
+        if (applyProxy && !proxyMatches && currentStatus is WahaSessionStatus.ScanQrCode)
         {
             await TryRestartForProxyAsync(sessionId, ct);
         }
