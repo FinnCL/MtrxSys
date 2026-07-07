@@ -18,6 +18,10 @@ interface LivePhoneScreenProps {
 
 export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
   const [ident, setIdent] = useState<ChipIdentity | null>(null);
+  // Acordeão do "Conectar WhatsApp": o QR só MONTA ao abrir. Enquanto fechado, o WhatsAppConnect nem
+  // existe → sem o poll de status/QR (perf). A detecção de conexão não depende dele: o refreshIdent
+  // abaixo (poll leve de /api/presence/chip) vira `connected` sozinho.
+  const [showConnect, setShowConnect] = useState(false);
   // Modo PERSISTIDO da aba (fonte da verdade — vem do banco via /api/phone/mode). null = carregando.
   const [mode, setMode] = useState<PhoneMode | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
@@ -97,21 +101,21 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           <div className="phone-mode" role="group" aria-label="Modo de disparo" aria-busy={modeBusy}>
             <button
               type="button"
-              className={`phone-mode-opt${mode === "Emulator" ? " active" : ""}`}
-              aria-pressed={mode === "Emulator"}
-              disabled={modeBusy}
-              onClick={() => void selectMode("Emulator")}
-            >
-              📱 Com emulador
-            </button>
-            <button
-              type="button"
               className={`phone-mode-opt${mode === "WahaOnly" ? " active" : ""}`}
               aria-pressed={mode === "WahaOnly"}
               disabled={modeBusy}
               onClick={() => void selectMode("WahaOnly")}
             >
-              📵 Sem emulador
+              Sem emulador
+            </button>
+            <button
+              type="button"
+              className={`phone-mode-opt${mode === "Emulator" ? " active" : ""}`}
+              aria-pressed={mode === "Emulator"}
+              disabled={modeBusy}
+              onClick={() => void selectMode("Emulator")}
+            >
+              Com emulador
             </button>
           </div>
           <p className="phone-off-hint phone-mode-hint">
@@ -124,28 +128,38 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
         </div>
       )}
 
-      {/* Molde do "celular" = conexão do chip WAHA (comum aos dois modos). Conectado → identidade;
-          desconectado → pareamento por QR do aparelho REAL (WhatsAppConnect). */}
-      <div className="phone-device">
-        <div className="phone-notch" />
-        {connected ? (
-          <div className="phone-stage phone-off">
-            <p className="phone-off-title">Aparelho virtual</p>
-            <p className="phone-ident-name">{ident?.name || "WhatsApp conectado"}</p>
-            <p className="phone-ident-phone">{ident?.phone ?? ""}</p>
-            <span className="phone-badge ok">conectado</span>
-            {onDisconnect && (
-              <button type="button" className="disconnect-btn phone-disconnect" onClick={onDisconnect}>
-                Desconectar WhatsApp
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="phone-stage phone-off phone-connect-screen">
-            <WhatsAppConnect onConnected={refreshIdent} />
-          </div>
-        )}
-      </div>
+      {/* Conexão do chip WAHA. Conectado → card de identidade. Desconectado → ETAPA em acordeão:
+          um botão que desliza pra baixo e monta o QR (WhatsAppConnect) só ao clicar. */}
+      {connected ? (
+        <div className="phone-ident-card">
+          <p className="phone-off-title">Aparelho virtual</p>
+          <p className="phone-ident-name">{ident?.name || "WhatsApp conectado"}</p>
+          <p className="phone-ident-phone">{ident?.phone ?? ""}</p>
+          <span className="phone-badge ok">conectado</span>
+          {onDisconnect && (
+            <button type="button" className="disconnect-btn phone-disconnect" onClick={onDisconnect}>
+              Desconectar WhatsApp
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="phone-steps">
+          <button
+            type="button"
+            className="phone-step-toggle"
+            aria-expanded={showConnect}
+            onClick={() => setShowConnect((v) => !v)}
+          >
+            <span>Conectar o WhatsApp</span>
+            <span className="phone-step-caret">{showConnect ? "▲" : "▼"}</span>
+          </button>
+          {showConnect && (
+            <div className="phone-step-body">
+              <WhatsAppConnect onConnected={refreshIdent} />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Placeholder honesto: o mundo "Com emulador" ainda não foi reconstruído neste baseline. */}
       {emulatorMode && (
