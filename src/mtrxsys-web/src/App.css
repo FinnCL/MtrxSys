@@ -187,6 +187,8 @@ input[type="checkbox"], input[type="radio"] {
 .phone-mode-opt.active { background: var(--accent, #00a884); color: #fff; }
 .phone-mode-opt:disabled { cursor: default; }
 .phone-mode[aria-busy="true"] { opacity: .6; }
+/* Travado (chip conectado): não dá pra usar os dois modos ao mesmo tempo — desconecte pra alternar. */
+.phone-mode.locked { cursor: not-allowed; }
 .phone-mode-hint { margin: 0; text-align: center; }
 /* Etapa em acordeão: um botão que DESLIZA pra baixo revelando o conteúdo. O corpo é montado só ao
    abrir (perf: o WhatsAppConnect e seu poll de status/QR nem existem enquanto fechado). */

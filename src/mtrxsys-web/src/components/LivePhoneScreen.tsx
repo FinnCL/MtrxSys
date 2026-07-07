@@ -61,10 +61,14 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
     };
   }, [url]);
 
-  // Troca o modo (o toggle único). Persiste no banco e reconcilia o container do emulador com a
-  // escolha (só onde há viewer): "Emulator" liga, "WahaOnly" desliga.
+  const connected = ident?.status === "Working";
+
+  // Troca o modo (o toggle único). Persiste no banco e reconcilia o container do emulador ("Emulator"
+  // liga, "WahaOnly" desliga). TRAVA de EXCLUSÃO MÚTUA: enquanto houver chip CONECTADO, não deixa
+  // trocar — WAHA+físico e emulador+WAHA são mutuamente exclusivos por ambiente (a sessão WAHA vincula
+  // a um aparelho só). Pra alternar, desconecte antes.
   const selectMode = async (next: PhoneMode) => {
-    if (modeBusy || mode === next) return;
+    if (modeBusy || connected || mode === next) return;
     setModeBusy(true);
     try {
       await api.phoneSetMode(next);
@@ -80,8 +84,9 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
     }
   };
 
-  const connected = ident?.status === "Working";
   const emulatorMode = mode === "Emulator" && !!url;
+  // Toggle travado quando conectado (não pode usar os dois modos ao mesmo tempo) ou durante a troca.
+  const modeLocked = connected || modeBusy;
 
   return (
     <section className="live-phone">
@@ -98,12 +103,12 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
       {/* TOGGLE ÚNICO de modo (persistido no banco). Só aparece onde há emulador disponível (url). */}
       {url && mode !== null && (
         <div className="phone-mode-wrap">
-          <div className="phone-mode" role="group" aria-label="Modo de disparo" aria-busy={modeBusy}>
+          <div className={`phone-mode${connected ? " locked" : ""}`} role="group" aria-label="Modo de disparo" aria-busy={modeBusy}>
             <button
               type="button"
               className={`phone-mode-opt${mode === "WahaOnly" ? " active" : ""}`}
               aria-pressed={mode === "WahaOnly"}
-              disabled={modeBusy}
+              disabled={modeLocked}
               onClick={() => void selectMode("WahaOnly")}
             >
               Sem emulador
@@ -112,18 +117,20 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
               type="button"
               className={`phone-mode-opt${mode === "Emulator" ? " active" : ""}`}
               aria-pressed={mode === "Emulator"}
-              disabled={modeBusy}
+              disabled={modeLocked}
               onClick={() => void selectMode("Emulator")}
             >
               Com emulador
             </button>
           </div>
           <p className="phone-off-hint phone-mode-hint">
-            {modeBusy
-              ? "Alternando…"
-              : mode === "Emulator"
-                ? "Disparo pelo emulador + WAHA"
-                : "WAHA + aparelho real físico"}
+            {connected
+              ? "Conectado — desconecte para trocar de modo"
+              : modeBusy
+                ? "Alternando…"
+                : mode === "Emulator"
+                  ? "Disparo pelo emulador + WAHA"
+                  : "WAHA + aparelho real físico"}
           </p>
         </div>
       )}
