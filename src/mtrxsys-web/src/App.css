@@ -132,7 +132,12 @@ input[type="checkbox"], input[type="radio"] {
 /* Aba "Celular": um MODELO DE CELULAR centralizado, com a tela embutida (iframe) na própria página. */
 .live-phone { flex: 1; min-height: 0; background: var(--bg); display: flex; flex-direction: column;
   align-items: center; justify-content: safe center; gap: 12px; padding: 16px; overflow: auto; }
-.phone-device { position: relative; width: min(390px, 92vw); max-width: 92vw; height: min(72vh, 760px);
+.phone-device { position: relative;
+  /* Cresce com a viewport pra a tela embutida aparecer o MAIOR possível: altura até 88vh/900px,
+     largura derivada da altura (proporção ~1:1.9 de celular) e capada em 96vw. Escala em TODOS os
+     breakpoints (só usa vh/vw) sem estourar — a .live-phone tem overflow:auto de segurança. Frame
+     maior = mesmo com o letterbox do noVNC, o device fica bem mais visível. */
+  height: min(88vh, 900px); width: min(96vw, 47vh); max-width: 96vw;
   background: #0d0d0d; border-radius: 44px; padding: 12px;
   box-shadow: 0 18px 50px rgba(0,0,0,.55), inset 0 0 0 2px #2c2c2c; flex: 0 0 auto; }
 /* Desconectado: a conexão (QR) vai DENTRO da tela do aparelho (imersivo). A tela rola internamente,
