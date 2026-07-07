@@ -164,6 +164,10 @@ export const api = {
   // Digita texto no emulador (o código do WhatsApp) — `t` vai na query (param string simples do minimal API).
   phoneText: (t: string) =>
     request<{ typed?: boolean }>(`/api/phone/text?t=${encodeURIComponent(t)}`, { method: "POST" }),
+  // Botões de navegação do Android (voltar/home/recentes) — envia keyevent via adb no emulador.
+  // (Reconstruído: era server-only e um sync o removeu; o backend /api/phone/key + SendKeyAsync existe.)
+  phoneKey: (k: "back" | "home" | "recents") =>
+    request<{ output: string }>(`/api/phone/key?k=${encodeURIComponent(k)}`, { method: "POST" }),
   wahaQrBlobUrl: async (): Promise<string> => {
     const token = getToken();
     const resp = await fetch(`${baseUrl}/api/waha/qr.png`, {

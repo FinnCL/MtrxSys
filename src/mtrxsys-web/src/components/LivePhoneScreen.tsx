@@ -42,13 +42,12 @@ function safeEmbedUrl(raw: string | null | undefined): string | null {
   try {
     const u = new URL(raw, window.location.href);
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    // noVNC (tela do servidor — sem o fragment #!action=… do ws-scrcpy): conecta sozinho. resize=remote
-    // pede pro servidor VNC REDIMENSIONAR a tela remota ao tamanho do iframe (o aparelho encosta nas
-    // bordas do molde, sem tarja/letterbox) em vez de só escalar. Fallback do noVNC: se o servidor não
-    // suportar SetDesktopSize, ele cai pra escala sozinho — então nunca fica pior que antes.
+    // noVNC (tela do servidor — sem o fragment #!action=… do ws-scrcpy): conecta sozinho e ESCALA a
+    // tela remota pra caber no quadro do "celular", SEM scroll. (resize=remote foi testado mas o
+    // budtmo não suporta SetDesktopSize → mostrava nativo com scroll; scale é o certo aqui.)
     if (!u.hash) {
       u.searchParams.set("autoconnect", "true");
-      u.searchParams.set("resize", "remote");
+      u.searchParams.set("resize", "scale");
       return u.toString();
     }
     return raw;
@@ -141,6 +140,17 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           </div>
         )}
       </div>
+
+      {/* Botões de navegação do Android (voltar/home/recentes) — enviam keyevent via adb pro emulador,
+          simulando os botões do aparelho. Reconstruídos: eram server-only e um sync os removeu (o
+          backend /api/phone/key + SendKeyAsync sempre existiu). Só com a tela ligada. */}
+      {embed && (
+        <div className="phone-navbar">
+          <button type="button" className="phone-nav-btn" title="Voltar" onClick={() => void api.phoneKey("back")}>◁</button>
+          <button type="button" className="phone-nav-btn" title="Início" onClick={() => void api.phoneKey("home")}>○</button>
+          <button type="button" className="phone-nav-btn" title="Recentes" onClick={() => void api.phoneKey("recents")}>▢</button>
+        </div>
+      )}
 
       {url && (
         <div className="phone-footer">
