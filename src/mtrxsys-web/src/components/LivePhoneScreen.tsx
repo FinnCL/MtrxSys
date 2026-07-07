@@ -156,6 +156,18 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           ↳ sai por {ident.proxyReal}
         </p>
       )}
+      {/* Modo de operação ATUAL (derivado do estado do emulador — não é flag separada): emulador ligado
+          = "com emulador" (disparo + contato-save); desligado = "só WAHA" (disparo pelo aparelho real). */}
+      {phoneRunning !== null && (
+        <p className="phone-off-hint" style={{ textAlign: "center", margin: "0 0 8px" }}>
+          Modo:{" "}
+          {phoneRunning ? (
+            <span className="phone-badge ok">com emulador</span>
+          ) : (
+            <span className="phone-badge off">só WAHA (aparelho real)</span>
+          )}
+        </p>
+      )}
       <div className="phone-device">
         <div className="phone-notch" />
         {embed ? (
