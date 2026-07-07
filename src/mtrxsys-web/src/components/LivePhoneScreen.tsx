@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type ChipIdentity, type PhoneStatus } from "../api/client";
 import { WhatsAppConnect } from "./WhatsAppConnect";
 import { WarmupCard } from "./WarmupCard";
-import { STEP_ICON, useProvisionFlow } from "../hooks/useProvisionFlow";
 
 // Aba "Celular" = o "aparelho virtual". Dois mundos na mesma aba:
 //  1) Tela do Android em container (redroid) espelhada pelo ws-scrcpy e embutida aqui
@@ -192,9 +191,7 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
   const [status, setStatus] = useState<PhoneStatus | null>(null);
   const [embed, setEmbed] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [logs, setLogs] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
-  const [proxy, setProxy] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -204,11 +201,6 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
       setStatus({ state: "unavailable", running: false, viewUrl: null });
     }
   }, []);
-
-  // Orquestração do "Provisionar número" (boot→instalar→proxy→SMS→WAHA) vive no hook — o painel só
-  // renderiza o checklist e dispara as ações.
-  const { steps, linkQr, provBusy, error: provError, provisionNumber, confirmSms, confirmWaha } =
-    useProvisionFlow(proxy, refresh);
 
   useEffect(() => {
     void refresh();
@@ -235,26 +227,11 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
 
   const provision = () => run("provision", async () => setStatus(await api.phoneProvision()));
   const start = () => run("start", async () => setStatus(await api.phoneStart()));
-  const stop = () =>
-    run("stop", async () => {
-      await api.phoneStop();
-      setEmbed(null);
-    });
   const installWa = () =>
     run("install", async () => setOutput((await api.phoneInstallWhatsApp()).output || "(ok)"));
-  const applyProxy = () =>
-    run("proxy", async () => setOutput((await api.phoneSetProxy(proxy)).output || "(ok)"));
   // Acordar o primário adormecido (keep-alive manual). Não-bloqueante: a API só agenda; o
   // PhoneKeepAliveService faz o ciclo (liga → online → desliga) em background.
   const keepAlive = () => run("keepalive", async () => { await api.phoneKeepAlive(); });
-
-  const loadLogs = async () => {
-    try {
-      setLogs((await api.phoneLogs(200)).logs || "(sem logs)");
-    } catch (e) {
-      setLogs(e instanceof Error ? e.message : String(e));
-    }
-  };
 
   return (
     <div className="phone-server">
@@ -279,59 +256,11 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
         </div>
       )}
 
-      <div className="phone-footer">
-        <button
-          type="button"
-          className="phone-activate"
-          onClick={() => void provisionNumber()}
-          disabled={provBusy}
-        >
-          {provBusy ? "Provisionando…" : "Provisionar número (automático)"}
-        </button>
-        <input
-          className="phone-proxy-input"
-          placeholder="proxy IP:porta (opcional)"
-          value={proxy}
-          onChange={(e) => setProxy(e.target.value)}
-        />
-      </div>
-
-      {steps && (
-        <div className="prov-steps">
-          {steps.map((s) => (
-            <div key={s.key} className={`prov-step prov-${s.state}`}>
-              <span className="prov-dot">{STEP_ICON[s.state]}</span>
-              <div className="prov-body">
-                <span className="prov-label">{s.label}</span>
-                {s.detail && <span className="prov-detail">{s.detail}</span>}
-                {s.key === "sms" && s.state === "wait" && (
-                  <button type="button" className="phone-reload prov-cta" onClick={() => void confirmSms()}>
-                    Registrei o número
-                  </button>
-                )}
-                {s.key === "waha" && s.state === "wait" && linkQr && (
-                  <>
-                    <img className="prov-link-qr" src={linkQr} alt="QR do WAHA pra vincular no emulador" />
-                    <button type="button" className="phone-reload prov-cta" onClick={() => confirmWaha()}>
-                      Vinculei o WAHA
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {embed ? (
+      {embed && (
         <div className="phone-device">
           <div className="phone-notch" />
           <iframe className="phone-stage" src={embed} title="Android real (servidor)" sandbox={PHONE_IFRAME_SANDBOX} allow={PHONE_IFRAME_ALLOW} />
         </div>
-      ) : (
-        <p className="phone-off-hint">
-          estado: <b>{state}</b>
-        </p>
       )}
 
       <div className="phone-footer">
@@ -364,31 +293,20 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
             <button type="button" className="phone-reload" onClick={() => void installWa()} disabled={busy !== null}>
               {busy === "install" ? "Instalando…" : "Instalar WhatsApp"}
             </button>
-            <button type="button" className="phone-reload" onClick={() => void applyProxy()} disabled={busy !== null}>
-              {busy === "proxy" ? "Aplicando…" : "Aplicar proxy (campo acima)"}
-            </button>
           </div>
         </>
       )}
 
-      <div className="phone-footer">
-        {embed && (
+      {embed && (
+        <div className="phone-footer">
           <button type="button" className="phone-reload" onClick={() => setEmbed(null)}>
             Desligar tela
           </button>
-        )}
-        {running && (
-          <button type="button" className="phone-reload" onClick={() => void stop()} disabled={busy !== null}>
-            Desligar aparelho
-          </button>
-        )}
-        <button type="button" className="phone-reload" onClick={() => void loadLogs()}>
-          Ver logs
-        </button>
-      </div>
+        </div>
+      )}
 
-      {(err || provError) && (
-        <p className="phone-off-hint" style={{ color: "var(--danger)" }}>{err || provError}</p>
+      {err && (
+        <p className="phone-off-hint" style={{ color: "var(--danger)" }}>{err}</p>
       )}
 
       {output !== null && (
@@ -398,16 +316,6 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
             <button type="button" className="phone-reload" onClick={() => setOutput(null)}>fechar</button>
           </div>
           <pre>{output}</pre>
-        </div>
-      )}
-
-      {logs !== null && (
-        <div className="phone-logs">
-          <div className="phone-logs-head">
-            <span>logs</span>
-            <button type="button" className="phone-reload" onClick={() => setLogs(null)}>fechar</button>
-          </div>
-          <pre>{logs}</pre>
         </div>
       )}
     </div>
