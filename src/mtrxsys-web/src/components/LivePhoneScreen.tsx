@@ -135,14 +135,16 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
         </div>
       )}
 
-      {/* Conexão do chip WAHA. Conectado → card de identidade. Desconectado → ETAPA em acordeão:
-          um botão que desliza pra baixo e monta o QR (WhatsAppConnect) só ao clicar. */}
+      {/* Fluxo WAHA + aparelho físico. Conectado → estado PRONTO (confirma + aponta o próximo passo).
+          Desconectado → a etapa "Conectar" em acordeão: desliza e monta o QR só ao clicar. */}
       {connected ? (
         <div className="phone-ident-card">
-          <p className="phone-off-title">Aparelho virtual</p>
+          <span className="phone-badge ok">conectado</span>
           <p className="phone-ident-name">{ident?.name || "WhatsApp conectado"}</p>
           <p className="phone-ident-phone">{ident?.phone ?? ""}</p>
-          <span className="phone-badge ok">conectado</span>
+          <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>
+            {ident?.proxy ? "Proxy ativo. " : ""}Pronto para disparar — vá para a aba <b>Disparo</b>.
+          </p>
           {onDisconnect && (
             <button type="button" className="disconnect-btn phone-disconnect" onClick={onDisconnect}>
               Desconectar WhatsApp
@@ -162,6 +164,10 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           </button>
           {showConnect && (
             <div className="phone-step-body">
+              <p className="phone-off-hint" style={{ margin: "0 0 8px" }}>
+                No WhatsApp do <b>celular físico</b>: Configurações → <b>Aparelhos conectados</b> →
+                Conectar um aparelho, e escaneie o QR abaixo.
+              </p>
               <WhatsAppConnect onConnected={refreshIdent} />
             </div>
           )}
