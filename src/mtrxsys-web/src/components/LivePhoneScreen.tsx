@@ -198,7 +198,7 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
           <button type="button" className="phone-reload" onClick={() => setShowServer((s) => !s)}>
             {showServer ? "Ocultar" : "Configurar"} aparelho no servidor
           </button>
-          {showServer && <ServerAndroidPanel url={url} connected={connected} />}
+          {showServer && <ServerAndroidPanel connected={connected} />}
         </>
       )}
 
@@ -214,7 +214,7 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
 // "indisponível" de forma limpa. Aqui o Android pode virar o dispositivo PRINCIPAL (registro por SMS).
 // RESTAURADO do 1caf31d: o ffacd78 tinha simplificado (removeu o provisionamento automático + botões
 // de instalar/proxy/keep-alive/logs/desligar), mas o backend nunca deixou de existir.
-function ServerAndroidPanel({ url, connected }: { url: string; connected: boolean }) {
+function ServerAndroidPanel({ connected }: { connected: boolean }) {
   const [status, setStatus] = useState<PhoneStatus | null>(null);
   const [embed, setEmbed] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -235,7 +235,6 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
     return () => clearInterval(id);
   }, [refresh]);
 
-  const viewUrl = status?.viewUrl ?? url ?? "";
   const state = status?.state ?? "...";
   const running = status?.running ?? false;
 
@@ -290,25 +289,23 @@ function ServerAndroidPanel({ url, connected }: { url: string; connected: boolea
         </div>
       )}
 
-      <div className="phone-footer">
-        {running ? (
-          <button type="button" className="phone-activate" onClick={() => setEmbed(safeEmbedUrl(viewUrl))} disabled={!viewUrl}>
-            Mostrar tela
-          </button>
-        ) : state === "not_created" ? (
-          <button type="button" className="phone-activate" onClick={() => void provision()} disabled={busy !== null}>
-            {busy === "provision" ? "Provisionando…" : "Provisionar aparelho"}
-          </button>
-        ) : state === "exited" || state === "created" ? (
-          <button type="button" className="phone-activate" onClick={() => void start()} disabled={busy !== null}>
-            {busy === "start" ? "Ligando…" : "Ligar aparelho"}
-          </button>
-        ) : (
-          <span className="phone-off-hint">
-            Indisponível neste host (sem Docker/KVM). Rode num servidor Linux — ver docs/phone.md.
-          </span>
-        )}
-      </div>
+      {!running && (
+        <div className="phone-footer">
+          {state === "not_created" ? (
+            <button type="button" className="phone-activate" onClick={() => void provision()} disabled={busy !== null}>
+              {busy === "provision" ? "Provisionando…" : "Provisionar aparelho"}
+            </button>
+          ) : state === "exited" || state === "created" ? (
+            <button type="button" className="phone-activate" onClick={() => void start()} disabled={busy !== null}>
+              {busy === "start" ? "Ligando…" : "Ligar aparelho"}
+            </button>
+          ) : (
+            <span className="phone-off-hint">
+              Indisponível neste host (sem Docker/KVM). Rode num servidor Linux — ver docs/phone.md.
+            </span>
+          )}
+        </div>
+      )}
 
       {running && (
         <>
