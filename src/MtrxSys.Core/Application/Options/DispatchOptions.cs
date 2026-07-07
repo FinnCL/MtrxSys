@@ -20,6 +20,11 @@ public sealed class DispatchOptions
     // antes de queimar tentativas e abrir o circuit breaker por falhas.
     public bool PauseWhenSessionDown { get; set; } = true;
 
+    // "Reassentar após reconectar": quando o chip volta a WORKING (ou após um restart do dispatcher), o
+    // disparo espera esta janela antes de voltar a enviar — evita reconectar-e-metralhar (anti-ban).
+    // 0 desliga. Só tem efeito com PauseWhenSessionDown = true (é onde o status é checado).
+    public int SettleAfterReconnectSeconds { get; set; } = 120;
+
     // Quantas vezes, no total, um disparo é tentado antes de virar falha definitiva.
     // 2 = a tentativa original + 1 reenvio automático (o contato volta pro fim da fila).
     // Falha transitória abaixo desse teto reenvia sem contar pro circuit breaker; ao atingir

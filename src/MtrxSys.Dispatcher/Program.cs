@@ -10,6 +10,8 @@ builder.Services.AddSerilog((sp, lc) => lc
     .WriteTo.Console());
 
 builder.Services.AddInfrastructure(builder.Configuration);
+// Singleton: guarda o estado do "reassentar após reconectar" ENTRE ciclos (o engine é Scoped).
+builder.Services.AddSingleton<DispatchSettleTracker>();
 builder.Services.AddScoped<DispatchEngine>();
 builder.Services.AddHostedService<DispatchWorker>();
 

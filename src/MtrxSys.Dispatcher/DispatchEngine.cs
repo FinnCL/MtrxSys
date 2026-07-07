@@ -30,6 +30,7 @@ public sealed class DispatchEngine(
     IDispatchMetrics metrics,
     ISystemStateRepository systemState,
     ISharedPhoneLedger ledger,
+    DispatchSettleTracker settle,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
 {
@@ -112,7 +113,16 @@ public sealed class DispatchEngine(
                 // acima, de propósito, pra não travar por blip de infra — a falha do envio é o backstop.)
                 if (sessionStatus is not WahaSessionStatus.Working)
                 {
+                    settle.Reset(); // caiu: o próximo WORKING recomeça a contagem do reassentamento.
                     log.LogInformation("Sessão WAHA {Status} (não WORKING); ciclo parado (job segue Pending).", sessionStatus);
+                    break;
+                }
+                // REASSENTAR APÓS RECONECTAR: se a sessão voltou a WORKING há pouco (ou o dispatcher
+                // reiniciou), espera a janela antes de enviar — evita reconectar-e-metralhar (anti-ban).
+                var settleWindow = TimeSpan.FromSeconds(Math.Max(0, dispatchOpts.Value.SettleAfterReconnectSeconds));
+                if (settleWindow > TimeSpan.Zero && settle.IsSettling(clock.UtcNow, settleWindow))
+                {
+                    log.LogInformation("Chip reassentando após reconectar; ciclo aguarda (job segue Pending).");
                     break;
                 }
             }
