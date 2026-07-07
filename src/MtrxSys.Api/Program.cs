@@ -29,6 +29,8 @@ builder.Services.AddOptions<MtrxSys.Core.Application.Options.SyncOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Core.Application.Options.SyncOptions.SectionName));
 builder.Services.AddOptions<MtrxSys.Api.Options.PresenceOptions>()
     .Bind(builder.Configuration.GetSection(MtrxSys.Api.Options.PresenceOptions.SectionName));
+builder.Services.AddOptions<MtrxSys.Core.Application.Options.AlertOptions>()
+    .Bind(builder.Configuration.GetSection(MtrxSys.Core.Application.Options.AlertOptions.SectionName));
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WhatsAppAutoSyncService>();
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.CollectorWorker>();
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.LedgerOptOutBackfillService>();
@@ -36,6 +38,8 @@ builder.Services.AddSingleton<MtrxSys.Api.BackgroundServices.PhoneKeepAliveSigna
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.PhoneKeepAliveService>();
 // Re-garante o proxy na sessão do WAHA (fecha o furo de timing do ensure de startup). No-op sem proxy.
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WahaProxyEnsureService>();
+// Vigia a saúde da sessão: alerta (log + webhook) quando o chip sai/volta de WORKING.
+builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.SessionHealthWatchService>();
 // Motor de aquecimento de conversa (pool). No-op quando WarmupEngine:Enabled=false.
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WarmupWorker>();
 // Origens permitidas: por padrão libera as portas web usadas no setup localhost — a landing

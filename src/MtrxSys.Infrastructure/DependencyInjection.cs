@@ -146,6 +146,11 @@ public static class DependencyInjection
         services.AddSingleton<IPoolWahaClientFactory, MtrxSys.Infrastructure.Warmup.PoolWahaClientFactory>();
         services.AddScoped<WarmupEngine>();
 
+        // Alerta operacional (chip offline etc.) por webhook configurável (Slack/Discord/relay). No-op
+        // sem Alert:WebhookUrl. Timeout curto: um alerta lento não pode segurar o watch de sessão.
+        services.AddHttpClient<IAlertNotifier, MtrxSys.Infrastructure.Alerting.WebhookAlertNotifier>(
+            c => c.Timeout = TimeSpan.FromSeconds(10));
+
         // Coletor de grupos: fila em memória (endpoint → worker), trava anti-ban da entrada, motivo
         // da última falha de busca (pro painel) e medidor de uso da busca. O medidor é COMPARTILHADO
         // (agrega os 10 ambientes, persistente) quando há banco compartilhado; senão, local em memória.

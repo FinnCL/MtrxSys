@@ -108,6 +108,10 @@ services:
       Waha__ProxyUsername: ${WAHA_PROXY_1_USER:-}
       Waha__ProxyPassword: ${WAHA_PROXY_1_PASS:-}
       Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}
+      # Alerta operacional: o watch de sessão avisa quando o chip sai/volta de WORKING. WebhookUrl vazio
+      # = só loga (docker logs); preenchido = POSTa {text} (Slack/Discord/relay). Label distingue os stacks.
+      Alert__WebhookUrl: ${ALERT_WEBHOOK_URL:-}
+      Alert__Label: ${ALERT_LABEL:-}
       Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
       # Busca de grupos por nicho (Coletor) via SearXNG (container abaixo). Vazio = usa Telegram.
       Collector__SearxngBaseUrl: ${COLLECTOR_SEARXNG_URL:-http://searxng:8080}
