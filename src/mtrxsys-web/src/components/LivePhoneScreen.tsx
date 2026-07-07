@@ -73,6 +73,9 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
   // sozinho e o QR ficava ESCONDIDO atrás dela — origem da confusão "não acho o QR".
   const [embed, setEmbed] = useState<string | null>(null);
   const [showServer, setShowServer] = useState(false);
+  // Modo de pareamento (só quando desconectado): false = pelo EMULADOR (código auto-digitado);
+  // true = celular REAL (QR, sem emulador). Emulador-primeiro por padrão.
+  const [pairViaPhone, setPairViaPhone] = useState(false);
 
   const refreshIdent = useCallback(async () => {
     try {
@@ -132,9 +135,19 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
               </button>
             )}
           </div>
+        ) : url ? (
+          // EMULADOR-PRIMEIRO (a pedido): desconectado, a TELA DO EMULADOR aparece no molde; o
+          // pareamento (auto-digitar o código OU QR pra celular real) fica ABAIXO. Antes o ffacd78
+          // mostrava o QR no molde primeiro — invertido.
+          <iframe
+            className="phone-stage"
+            src={safeEmbedUrl(androidUrl) ?? ""}
+            title="Android real"
+            sandbox={PHONE_IFRAME_SANDBOX}
+            allow={PHONE_IFRAME_ALLOW}
+          />
         ) : (
-          // Desconectado: o QR de conexão fica DENTRO da tela do aparelho (imersivo) — você escaneia
-          // como se o "celular" estivesse mostrando o QR. A tela rola internamente se precisar.
+          // Sem emulador (url vazia): o QR/pareamento vai DENTRO do molde (imersivo).
           <div className="phone-stage phone-off phone-connect-screen">
             <WhatsAppConnect onConnected={refreshIdent} />
           </div>
@@ -163,6 +176,20 @@ export function LivePhoneScreen({ url, viewerKind, udid, showServerOption, onDis
               Mostrar tela do Android
             </button>
           )}
+        </div>
+      )}
+
+      {/* Pareamento ABAIXO do molde (emulador-primeiro): com a tela do emulador visível acima, aqui
+          ficam os controles — "Gerar e digitar" auto-digita o código no emulador (codeOnly), OU
+          alternar pra QR e parear um CELULAR REAL (sem emulador). */}
+      {!connected && url && (
+        <div className="phone-server">
+          <div className="phone-footer">
+            <button type="button" className="phone-reload" onClick={() => setPairViaPhone((v) => !v)}>
+              {pairViaPhone ? "↩ Parear pelo emulador (código)" : "Parear um celular real (QR) →"}
+            </button>
+          </div>
+          <WhatsAppConnect onConnected={refreshIdent} codeOnly={!pairViaPhone} />
         </div>
       )}
 
