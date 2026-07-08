@@ -196,8 +196,7 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           {showConnect && (
             <div className="phone-step-body">
               <p className="phone-off-hint" style={{ margin: "0 0 8px" }}>
-                No WhatsApp do <b>celular físico</b>: Configurações → <b>Aparelhos conectados</b> →
-                Conectar um aparelho, e escaneie o QR abaixo.
+                No celular: <b>Aparelhos conectados → Conectar um aparelho</b> e escaneie o QR.
               </p>
               <WhatsAppConnect onConnected={refreshIdent} />
             </div>
