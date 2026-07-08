@@ -186,15 +186,9 @@ services:
       # PRA DEPOIS do aquecimento: delays humanos 90-240s entre envios (mais lento = menos cara de bot).
       Dispatch__DelayMinSeconds: ${DISPATCH_DELAY_MIN:-90}
       Dispatch__DelayMaxSeconds: ${DISPATCH_DELAY_MAX:-240}
-      # Curva de aquecimento: teto de envios/dia subindo devagar (índice = dias desde Warmup__StartedOnUtc,
-      # que a app seta ao iniciar o disparo). Começa MUITO baixo. Ajuste os passos conforme a maturação.
-      Warmup__Curve__0: "5"
-      Warmup__Curve__1: "10"
-      Warmup__Curve__2: "20"
-      Warmup__Curve__3: "40"
-      Warmup__Curve__4: "70"
-      Warmup__Curve__5: "120"
-      Warmup__Curve__6: "200"
+      # Curva de aquecimento: NÃO sobrescrever aqui. O código já tem um default calibrado
+      # (10,15,25,40,50,65,80,100 — estabiliza em 100/dia em 8 dias), que é o que a UI/API mostra.
+      # Sobrescrever só no dispatcher divergia display (UI) do enforcement — confunde o operador.
       # O dispatcher não serve HTTP, mas herda a validação de JwtOptions via AddInfrastructure.
       # Sem a chave ele falha no startup (ValidateOnStart) e entra em crash-loop (exit 139).
       Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
