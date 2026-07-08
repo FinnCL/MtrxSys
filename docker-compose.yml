@@ -56,6 +56,11 @@ services:
       # Permite rodar muitos ambientes na mesma máquina sem o engine cair ("browser disconnected").
       # Trocar de engine exige reparear o chip (a sessão antiga WEBJS não serve pro NOWEB).
       WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
+      # WEBJS: versão fixada do WhatsApp Web. Sem isto o whatsapp-web.js quebra ("Cannot read ...
+      # VERSION") e a sessão nem pareia. WEBJS é o único engine SEM o bug do 463/tctoken (WAHA #2050),
+      # por isso é o escolhido. A versão ENVELHECE: quando o VERSION voltar, troque WAHA_WEBJS_WEB_VERSION
+      # por uma mais nova do repo wppconnect/wa-version (github.com/wppconnect-team/wa-version/html).
+      WAHA_WEBJS_WEB_VERSION: ${WAHA_WEBJS_WEB_VERSION:-}
       # NAO ha proxy aqui: o WAHA 2026.x (CORE/NOWEB) IGNORA a env var WHATSAPP_PROXY_SERVER
       # (comprovado). O proxy por chip e aplicado no CONFIG DA SESSAO pela api (Waha__Proxy*).
       # Ver docs/proxy.md.
@@ -107,6 +112,10 @@ services:
       Waha__ProxyServer: ${WAHA_PROXY_1:-}
       Waha__ProxyUsername: ${WAHA_PROXY_1_USER:-}
       Waha__ProxyPassword: ${WAHA_PROXY_1_PASS:-}
+      # WEBJS: a API grava webVersion+cache no config.webjs da sessão (criação+PUT) — cura o VERSION e
+      # mantém o engine que NÃO tem o 463/tctoken. Mesma versão do WAHA_WEBJS_WEB_VERSION acima.
+      Waha__WebVersion: ${WAHA_WEBJS_WEB_VERSION:-}
+      Waha__WebVersionCacheType: ${WAHA_WEBJS_CACHE_TYPE:-remote}
       Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}
       # Alerta operacional: o watch de sessão avisa quando o chip sai/volta de WORKING. WebhookUrl vazio
       # = só loga (docker logs); preenchido = POSTa {text} (Slack/Discord/relay). Label distingue os stacks.
@@ -172,6 +181,20 @@ services:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
       Waha__BaseUrl: "http://waha:3000"
       Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+      # RAMPA ANTI-BAN — a conta precisa ser AQUECIDA (uso humano no celular ~10 dias) ANTES de
+      # automatizar; nunca disparar logo após parear (gatilho nº1 de logout/ban). Estes limites valem
+      # PRA DEPOIS do aquecimento: delays humanos 90-240s entre envios (mais lento = menos cara de bot).
+      Dispatch__DelayMinSeconds: ${DISPATCH_DELAY_MIN:-90}
+      Dispatch__DelayMaxSeconds: ${DISPATCH_DELAY_MAX:-240}
+      # Curva de aquecimento: teto de envios/dia subindo devagar (índice = dias desde Warmup__StartedOnUtc,
+      # que a app seta ao iniciar o disparo). Começa MUITO baixo. Ajuste os passos conforme a maturação.
+      Warmup__Curve__0: "5"
+      Warmup__Curve__1: "10"
+      Warmup__Curve__2: "20"
+      Warmup__Curve__3: "40"
+      Warmup__Curve__4: "70"
+      Warmup__Curve__5: "120"
+      Warmup__Curve__6: "200"
       # O dispatcher não serve HTTP, mas herda a validação de JwtOptions via AddInfrastructure.
       # Sem a chave ele falha no startup (ValidateOnStart) e entra em crash-loop (exit 139).
       Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
