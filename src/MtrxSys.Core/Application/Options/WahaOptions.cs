@@ -42,4 +42,14 @@ public sealed class WahaOptions
     // pareado volta a Working sozinho em ~1 ciclo do auto-sync, em vez de esperar clique manual.
     // NÃO mexe em Failed (fica como "chip com falha") nem força nada além de iniciar.
     public bool AutoStart { get; set; } = true;
+
+    // Engine WEBJS: fixa a versão do WhatsApp Web + o tipo de cache. Sem isto, o whatsapp-web.js
+    // carrega o WhatsApp Web AO VIVO (versão atual), que a lib não consegue parsear → erro "Cannot
+    // read properties of undefined (reading 'VERSION')" → a sessão nem chega no QR. Com cacheType
+    // 'remote' + uma webVersion existente no repo wppconnect/wa-version, o WEBJS injeta o HTML já
+    // compatível e pareia. Vai no config.webjs da sessão (criação E PUT — senão o PUT do ensurer
+    // apaga). VAZIO (GOWS/NOWEB) => não envia webjs config. Setar só nos stacks em WEBJS, via
+    // Waha__WebVersion — a versão "envelhece" (o WhatsApp Web muda), então é env pra trocar sem build.
+    public string? WebVersion { get; set; }
+    public string WebVersionCacheType { get; set; } = "remote";
 }

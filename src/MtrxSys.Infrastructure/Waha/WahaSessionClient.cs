@@ -116,6 +116,11 @@ internal sealed class WahaSessionClient(WahaHttp http)
         {
             config["webhooks"] = webhooks;
         }
+        var webjs = http.WebjsConfigOrNull();
+        if (webjs is not null)
+        {
+            config["webjs"] = webjs;
+        }
         object payload = config.Count == 0
             ? new { name = sessionId, start = true }
             : new { name = sessionId, start = true, config };
@@ -239,9 +244,22 @@ internal sealed class WahaSessionClient(WahaHttp http)
         // era justamente o PUT só-webhook em Working que ANTES apagava o proxy quando a conta ficava viva.
         var proxy = http.ProxyConfigOrNull();
         var applyProxy = proxy is not null && proxyableState;
-        object config = applyProxy
-            ? new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken), proxy }
-            : new { webhooks = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken) };
+        var config = new Dictionary<string, object>
+        {
+            ["webhooks"] = WahaParsing.BuildWebhooks(webhookUrl, events, webhookToken),
+        };
+        if (applyProxy)
+        {
+            config["proxy"] = proxy!;
+        }
+        // Reenvia o config.webjs (webVersion + cache) TAMBÉM no PUT: o PUT SUBSTITUI o config, então
+        // sem isto ele APAGARIA o webjs setado na criação → o whatsapp-web.js voltaria a carregar o
+        // WhatsApp Web ao vivo (erro VERSION → sessão FAILED). Null (GOWS/NOWEB) → não envia.
+        var webjs = http.WebjsConfigOrNull();
+        if (webjs is not null)
+        {
+            config["webjs"] = webjs;
+        }
 
         using var putReq = http.NewRequest(HttpMethod.Put, $"api/sessions/{WahaHttp.Esc(sessionId)}");
         putReq.Content = JsonContent.Create(new { name = sessionId, config }, options: WahaHttp.Json);

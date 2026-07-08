@@ -65,6 +65,19 @@ internal sealed class WahaHttp(HttpClient http, IOptions<WahaOptions> opts)
         return WahaParsing.BuildWebhooks(url, opts.Value.WebhookEvents, opts.Value.WebhookToken);
     }
 
+    // Config do engine WEBJS (null = sem WebVersion → não envia; GOWS/NOWEB ignoram). Fixa a versão
+    // do WhatsApp Web + o cache pra o whatsapp-web.js não quebrar com "reading 'VERSION'". Vai no
+    // config.webjs da sessão. Campos batem com o WebjsConfig do WAHA (webVersion + cacheType).
+    public object? WebjsConfigOrNull()
+    {
+        var version = opts.Value.WebVersion;
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return null;
+        }
+        return new { webVersion = version, cacheType = opts.Value.WebVersionCacheType };
+    }
+
     public string? NormalizedProxyServer() => NormalizeServer(opts.Value.ProxyServer);
 
     // host:porta sem espaços e sem esquema (o WAHA quer "host:porta", não "http://host:porta").
