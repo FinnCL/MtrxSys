@@ -51,6 +51,20 @@ internal sealed class WahaHttp(HttpClient http, IOptions<WahaOptions> opts)
         return new { server };
     }
 
+    // Config de webhook pro config de sessão (null = sem URL). Incluir JÁ na CRIAÇÃO é essencial: este
+    // WAHA aplica a URL adicionada por PUT numa sessão rodando, mas NÃO o customHeader (token) — só na
+    // criação/start. Sem isto, toda sessão recriada (reset/re-pareamento) mandava webhook SEM token →
+    // 401 no app → opt-out/inbound/sensor quebrados até um restart.
+    public object[]? WebhookConfigOrNull()
+    {
+        var url = opts.Value.WebhookCallbackUrl;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return null;
+        }
+        return WahaParsing.BuildWebhooks(url, opts.Value.WebhookEvents, opts.Value.WebhookToken);
+    }
+
     public string? NormalizedProxyServer() => NormalizeServer(opts.Value.ProxyServer);
 
     // host:porta sem espaços e sem esquema (o WAHA quer "host:porta", não "http://host:porta").

@@ -101,12 +101,24 @@ internal sealed class WahaSessionClient(WahaHttp http)
     private async Task CreateSessionAsync(string sessionId, CancellationToken ct)
     {
         using var req = http.NewRequest(HttpMethod.Post, "api/sessions");
-        // Proxy JÁ na criação: o WAHA conecta no WhatsApp logo no start; sem o proxy aqui, a 1ª
-        // conexão sairia pelo IP da máquina (vazamento) antes de o ensurer aplicar o config depois.
+        // Proxy E WEBHOOK já na CRIAÇÃO. Proxy: o WAHA conecta no start; sem ele aqui, a 1ª conexão
+        // sairia pelo IP da máquina (vazamento). Webhook: este WAHA só aplica o customHeader (token)
+        // na criação/start — adicioná-lo por PUT depois numa sessão rodando NÃO pega (webhooks saem
+        // 401 sem token → opt-out/inbound/sensor quebrados). Criar com o config completo fecha os dois.
+        var config = new Dictionary<string, object>();
         var proxy = http.ProxyConfigOrNull();
-        object payload = proxy is null
+        if (proxy is not null)
+        {
+            config["proxy"] = proxy;
+        }
+        var webhooks = http.WebhookConfigOrNull();
+        if (webhooks is not null)
+        {
+            config["webhooks"] = webhooks;
+        }
+        object payload = config.Count == 0
             ? new { name = sessionId, start = true }
-            : new { name = sessionId, start = true, config = new { proxy } };
+            : new { name = sessionId, start = true, config };
         req.Content = JsonContent.Create(payload, options: WahaHttp.Json);
         using var resp = await http.SendAsync(req, ct);
         // 422/409 = corrida: a sessão já foi criada nesse meio-tempo. Considera concluído.
