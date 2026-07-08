@@ -52,4 +52,11 @@ public sealed class WahaOptions
     // Waha__WebVersion — a versão "envelhece" (o WhatsApp Web muda), então é env pra trocar sem build.
     public string? WebVersion { get; set; }
     public string WebVersionCacheType { get; set; } = "remote";
+
+    // Engine NOWEB: markOnline=false conecta o companion PASSIVO (não se anuncia "online" ao servidor).
+    // O default do WAHA é true — companion que marca online + manda typing + envia parece uma sessão de
+    // BOT ATIVA, e o WhatsApp pode remover o aparelho (stream:error conflict/device_removed) numa conta
+    // nova logo no 1º disparo. Passivo é o tweak de estabilidade conhecido do Baileys. Vai no config.noweb
+    // (criação + PUT). null = não mexe (mantém o default true do WAHA). Setar via Waha__NowebMarkOnline.
+    public bool? NowebMarkOnline { get; set; }
 }

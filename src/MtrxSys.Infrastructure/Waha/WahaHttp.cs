@@ -78,6 +78,18 @@ internal sealed class WahaHttp(HttpClient http, IOptions<WahaOptions> opts)
         return new { webVersion = version, cacheType = opts.Value.WebVersionCacheType };
     }
 
+    // Config do engine NOWEB (null = não envia → mantém default do WAHA). markOnline=false = companion
+    // PASSIVO (não se anuncia online) — tweak anti-remoção-de-aparelho pra conta nova. Campo bate com o
+    // NowebConfig do WAHA. Vai no config.noweb da sessão.
+    public object? NowebConfigOrNull()
+    {
+        if (opts.Value.NowebMarkOnline is not { } markOnline)
+        {
+            return null;
+        }
+        return new { markOnline };
+    }
+
     public string? NormalizedProxyServer() => NormalizeServer(opts.Value.ProxyServer);
 
     // host:porta sem espaços e sem esquema (o WAHA quer "host:porta", não "http://host:porta").

@@ -121,6 +121,11 @@ internal sealed class WahaSessionClient(WahaHttp http)
         {
             config["webjs"] = webjs;
         }
+        var noweb = http.NowebConfigOrNull();
+        if (noweb is not null)
+        {
+            config["noweb"] = noweb;
+        }
         object payload = config.Count == 0
             ? new { name = sessionId, start = true }
             : new { name = sessionId, start = true, config };
@@ -259,6 +264,11 @@ internal sealed class WahaSessionClient(WahaHttp http)
         if (webjs is not null)
         {
             config["webjs"] = webjs;
+        }
+        var noweb = http.NowebConfigOrNull();
+        if (noweb is not null)
+        {
+            config["noweb"] = noweb;
         }
 
         using var putReq = http.NewRequest(HttpMethod.Put, $"api/sessions/{WahaHttp.Esc(sessionId)}");
