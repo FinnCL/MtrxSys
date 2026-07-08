@@ -115,10 +115,26 @@ public static class WahaEndpoints
                 for (var i = 0; i < 6 && !ct.IsCancellationRequested; i++)
                 {
                     await Task.Delay(500, ct);
-                    if (await waha.GetSessionStatusAsync(sessionId, ct) != WahaSessionStatus.ScanQrCode)
+                    // Best-effort: um hiccup do WAHA na leitura de status (comum logo após o restart que
+                    // o ensure dispara) NÃO pode virar 500 — o front só trata 409 (re-poll). Na falha,
+                    // sai do loop e cai no 409 documentado; o próximo poll reavalia.
+                    try
+                    {
+                        if (await waha.GetSessionStatusAsync(sessionId, ct) != WahaSessionStatus.ScanQrCode)
+                        {
+                            break;
+                        }
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+#pragma warning disable CA1031
+                    catch
                     {
                         break;
                     }
+#pragma warning restore CA1031
                 }
                 return Results.Problem(
                     detail: "aplicando proxy antes de parear; tente de novo",

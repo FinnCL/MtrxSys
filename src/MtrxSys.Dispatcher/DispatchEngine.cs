@@ -215,15 +215,34 @@ public sealed class DispatchEngine(
                 var numberCheck = await TryCheckNumberAsync(sessionId, contact, ct);
                 if (numberCheck is null)
                 {
-                    // Checagem INDISPONÍVEL (sessão degradada/hiccup do WAHA): NÃO enviar pro E164 CRU.
-                    // O E164 vem da libphonenumber COM o 9º dígito, mas o WhatsApp guarda MUITOS números
-                    // SEM ele — enviar pra forma errada dá 463 (número inexistente), que é GATILHO DE BAN
-                    // (foi o que restringiu a conta). Na dúvida a gente NÃO ARRISCA: para o ciclo; o job
-                    // fica Pending e re-tenta quando a checagem voltar. (Antes: caía no E164 cru = 463.)
-                    log.LogInformation(
-                        "Checagem de número indisponível para {Phone}; ciclo parado (job segue Pending) pra NÃO arriscar 463/ban.",
-                        contact.Phone.E164);
-                    break;
+                    // Checagem INDISPONÍVEL: NÃO enviar pro E164 CRU. O E164 vem da libphonenumber COM o
+                    // 9º dígito, mas o WhatsApp guarda MUITOS números SEM ele — enviar pra forma errada
+                    // dá 463 (número inexistente), que é GATILHO DE BAN (foi o que restringiu a conta).
+                    // Mas também NÃO travar a fila: um `break` deixaria ESTE job na cabeça pra sempre
+                    // (DequeueNextPending ordena por ScheduledAt ASC), então um número que o check-exists
+                    // rejeite de forma determinística (4xx/429) bloquearia TODA a fila, silenciosamente.
+                    // Em vez disso, reenfileira pro FIM (como falha transitória) e segue com os outros;
+                    // após o teto, PULA (número inresolvível). Cooldown evita martelar o check-exists.
+                    if (job.CanRetry(dispatchOpts.Value.MaxSendAttempts))
+                    {
+                        job.ScheduleRetry(clock.UtcNow, "checagem de número indisponível");
+                        await uow.SaveChangesAsync(ct);
+                        retried++;
+                        log.LogWarning(
+                            "Checagem de número indisponível para {Phone}; reenfileirado (tentativa {Attempt} de {Max}) — não envio sem resolver (evita 463) nem travo a fila.",
+                            contact.Phone.E164, job.AttemptCount + 1, dispatchOpts.Value.MaxSendAttempts);
+                    }
+                    else
+                    {
+                        job.MarkSkipped("checagem de número indisponível após várias tentativas");
+                        await uow.SaveChangesAsync(ct);
+                        skipped++;
+                        log.LogWarning(
+                            "Job {JobId} pulado: checagem de {Phone} indisponível após várias tentativas.",
+                            job.Id, contact.Phone.E164);
+                    }
+                    await Task.Delay(delay.NextCheckCooldown(), ct);
+                    continue;
                 }
                 if (numberCheck.Exists == false)
                 {
