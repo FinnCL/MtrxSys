@@ -73,6 +73,7 @@ public static class ConversationsEndpoints
             SendMessageRequest req,
             IConversationRepository conv,
             IChatMessageRepository msgs,
+            IContactRepository contacts,
             IWahaClient waha,
             IOptions<DispatchOptions> dispatch,
             IClock clock,
@@ -90,7 +91,28 @@ public static class ConversationsEndpoints
                 return Results.NotFound();
             }
 
+            // SAIR é sagrado — TAMBÉM na resposta manual. Sem isto, este endpoint era a brecha que
+            // deixava enviar pra quem deu opt-out (o resto do sistema bloqueia). Grupo/sem-contato não
+            // tem opt-out individual, então só checa quando há contato vinculado.
+            if (conversation.ContactId is { } contactId)
+            {
+                var contact = await contacts.GetByIdAsync(contactId, ct);
+                if (contact?.OptOutAt is not null)
+                {
+                    return Results.Problem("Este contato pediu para SAIR — envio bloqueado.", statusCode: 409);
+                }
+            }
+
             var sessionId = dispatch.Value.SessionId;
+            // Não envia em sessão degradada (gatilho nº1 de ban): só com a sessão WORKING. Antes este
+            // endpoint disparava em qualquer estado (logo após parear, em SCAN_QR, na janela de settle).
+            var status = await waha.GetSessionStatusAsync(sessionId, ct);
+            if (status is not WahaSessionStatus.Working)
+            {
+                return Results.Problem(
+                    $"WhatsApp não está conectado (status={status}); tente de novo quando reconectar.",
+                    statusCode: 409);
+            }
             var waMessageId = await waha.SendTextAsync(sessionId, conversation.WaChatId, req.Text, ct);
             if (string.IsNullOrEmpty(waMessageId))
             {

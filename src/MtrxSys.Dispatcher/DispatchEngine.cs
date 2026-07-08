@@ -84,6 +84,23 @@ public sealed class DispatchEngine(
                 break;
             }
 
+            // GUARD DE SAÚDE-DE-ENTREGA (anti-shadow-restriction): o 463/shadow-ban NÃO é falha de envio
+            // (o WhatsApp aceita mas não entrega), então o breaker não pega. Se a taxa entregue/enviado
+            // cair abaixo do limiar numa janela recente (com amostra mínima), PARA o ciclo — é o freio
+            // que faltava pra não drenar o cap diário num número morto (o que vira ban duro). Re-checado
+            // a cada job; acks atrasados recuperam a taxa e o ciclo volta sozinho.
+            if (dispatchOpts.Value.DeliveryHealthGuardEnabled
+                && await IsDeliveryUnhealthyAsync(ct) is { } bad)
+            {
+                metrics.RecordWarmupBlocked();
+                log.LogWarning(
+                    "SAÚDE DE ENTREGA baixa: {Delivered}/{Sent} entregues ({Rate:P0}) em {Hours}h < limiar "
+                    + "{Min:P0}. Possível shadow-restriction — ciclo PARADO (anti-ban). Investigue o chip.",
+                    bad.Delivered, bad.Sent, bad.Rate, dispatchOpts.Value.DeliveryHealthWindowHours,
+                    dispatchOpts.Value.DeliveryHealthMinRate);
+                break;
+            }
+
             var job = await jobs.DequeueNextPendingAsync(clock.UtcNow, ct);
             if (job is null)
             {
@@ -108,7 +125,11 @@ public sealed class DispatchEngine(
 #pragma warning disable CA1031
                 catch
                 {
-                    sessionStatus = WahaSessionStatus.Working; // status indisponível: não trava o envio
+                    // Status indisponível: assume Working pra não travar por blip (a falha do envio é o
+                    // backstop). Mas RESETA o settle: se a leitura falha (possível flap da sessão), o
+                    // reassentamento reinicia — evita contar a janela como WORKING contínuo durante um flap.
+                    sessionStatus = WahaSessionStatus.Working;
+                    settle.Reset();
                 }
 #pragma warning restore CA1031
                 // LISTA-BRANCA (anti-ban): só envia se a sessão está WORKING. QUALQUER outro estado
@@ -529,6 +550,35 @@ public sealed class DispatchEngine(
     // StatusCode preenchido (o WAHA respondeu) e também não cai aqui.
     private static bool IsSessionDownFailure(Exception ex)
         => ex is HttpRequestException { StatusCode: null };
+
+    // Saúde de entrega na janela: retorna os números SE a taxa entregue/enviado estiver abaixo do limiar
+    // (com amostra mínima) — sinal de shadow-restriction. null = ok / sem dados suficientes / erro de
+    // leitura (fail-open: um hiccup de DB não pausa; os outros guards seguem valendo).
+    private async Task<(int Sent, int Delivered, double Rate)?> IsDeliveryUnhealthyAsync(CancellationToken ct)
+    {
+        var opts = dispatchOpts.Value;
+        try
+        {
+            var since = clock.UtcNow.AddHours(-Math.Max(1, opts.DeliveryHealthWindowHours));
+            var stats = await audit.GetDeliveryStatsAsync(since, ct);
+            if (stats.Sent < Math.Max(1, opts.DeliveryHealthMinSample))
+            {
+                return null; // amostra insuficiente: não afirma shadow-restriction
+            }
+            var rate = (double)stats.Delivered / stats.Sent;
+            return rate < opts.DeliveryHealthMinRate ? (stats.Sent, stats.Delivered, rate) : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031
+        catch
+        {
+            return null; // leitura indisponível: fail-open (não pausa por hiccup de infra)
+        }
+#pragma warning restore CA1031
+    }
 
     // Re-checa se a sessão SAIU de WORKING depois de uma falha de envio (deslogou/caiu pra SCAN_QR_CODE
     // no meio do ciclo). true = confirmadamente NÃO-WORKING → o chamador PARA o ciclo (não trata como
