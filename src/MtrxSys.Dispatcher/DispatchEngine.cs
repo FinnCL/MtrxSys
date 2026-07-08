@@ -213,7 +213,19 @@ public sealed class DispatchEngine(
                 // → segue (não perde contato por hiccup). O chatId devolvido é o CANÔNICO do WhatsApp
                 // (resolve o 9º dígito BR) — usado no typing E no envio, pra bater no chat certo.
                 var numberCheck = await TryCheckNumberAsync(sessionId, contact, ct);
-                if (numberCheck is { Exists: false })
+                if (numberCheck is null)
+                {
+                    // Checagem INDISPONÍVEL (sessão degradada/hiccup do WAHA): NÃO enviar pro E164 CRU.
+                    // O E164 vem da libphonenumber COM o 9º dígito, mas o WhatsApp guarda MUITOS números
+                    // SEM ele — enviar pra forma errada dá 463 (número inexistente), que é GATILHO DE BAN
+                    // (foi o que restringiu a conta). Na dúvida a gente NÃO ARRISCA: para o ciclo; o job
+                    // fica Pending e re-tenta quando a checagem voltar. (Antes: caía no E164 cru = 463.)
+                    log.LogInformation(
+                        "Checagem de número indisponível para {Phone}; ciclo parado (job segue Pending) pra NÃO arriscar 463/ban.",
+                        contact.Phone.E164);
+                    break;
+                }
+                if (numberCheck.Exists == false)
                 {
                     job.MarkSkipped("número não existe no WhatsApp");
                     await uow.SaveChangesAsync(ct);
@@ -224,7 +236,9 @@ public sealed class DispatchEngine(
                     await Task.Delay(delay.NextCheckCooldown(), ct);
                     continue;
                 }
-                var sendTarget = numberCheck?.ChatId ?? contact.Phone.E164;
+                // Só chega aqui com Exists=true: usa o chatId CANÔNICO do WhatsApp (resolve o 9º dígito);
+                // se a checagem confirmou existência mas não devolveu chatId, o E164 já foi validado.
+                var sendTarget = numberCheck.ChatId ?? contact.Phone.E164;
 
                 var delayBefore = delay.NextDelay();
                 var typingMs = await typing.SimulateAsync(sessionId, sendTarget, text, ct);

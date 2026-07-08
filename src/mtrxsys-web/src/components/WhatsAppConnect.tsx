@@ -13,7 +13,12 @@ interface Props {
 }
 
 // Quantas vezes o QR é regenerado sozinho ao expirar (Failed) antes de pedir clique manual.
-const MAX_AUTO_RETRIES = 8;
+// BAIXO de propósito (anti-ban): cada retry é um wahaReset (logout+delete+recria = NOVO vínculo de
+// aparelho). Muitos re-vínculos rápidos = sinal de abuso → o WhatsApp restringe. 2 tentativas espaçadas
+// e depois pede clique manual — em vez das 8 a cada 1,5s de antes, que ajudavam a queimar a conta.
+const MAX_AUTO_RETRIES = 2;
+// Espaço entre as auto-tentativas. Um reset completo leva segundos; re-vincular a cada 1,5s era churn.
+const AUTO_RETRY_BACKOFF_MS = 15_000;
 // Mínimo de dígitos plausível pra um número brasileiro: DDI (55) + DDD (2) + número (≥7).
 const MIN_PHONE_DIGITS = 12;
 // Máximo no input: BR COM o "9 extra" = 55 + DDD(2) + 9 + 8díg = 13. Acima disso é digitação errada.
@@ -197,7 +202,7 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
     const handle = setTimeout(() => {
       setAutoRetries((n) => n + 1);
       void retrySession();
-    }, 1_500);
+    }, AUTO_RETRY_BACKOFF_MS);
     return () => clearTimeout(handle);
   }, [status, busy, autoRetries, retrySession]);
 
