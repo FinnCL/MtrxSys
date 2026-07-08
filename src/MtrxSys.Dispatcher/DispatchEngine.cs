@@ -215,32 +215,28 @@ public sealed class DispatchEngine(
                 var numberCheck = await TryCheckNumberAsync(sessionId, contact, ct);
                 if (numberCheck is null)
                 {
-                    // Checagem INDISPONÍVEL: NÃO enviar pro E164 CRU. O E164 vem da libphonenumber COM o
-                    // 9º dígito, mas o WhatsApp guarda MUITOS números SEM ele — enviar pra forma errada
-                    // dá 463 (número inexistente), que é GATILHO DE BAN (foi o que restringiu a conta).
-                    // Mas também NÃO travar a fila: um `break` deixaria ESTE job na cabeça pra sempre
-                    // (DequeueNextPending ordena por ScheduledAt ASC), então um número que o check-exists
-                    // rejeite de forma determinística (4xx/429) bloquearia TODA a fila, silenciosamente.
-                    // Em vez disso, reenfileira pro FIM (como falha transitória) e segue com os outros;
-                    // após o teto, PULA (número inresolvível). Cooldown evita martelar o check-exists.
-                    if (job.CanRetry(dispatchOpts.Value.MaxSendAttempts))
+                    // Checagem INDISPONÍVEL: NÃO enviar pro E164 CRU (vem da libphonenumber COM o 9º dígito,
+                    // mas o WhatsApp guarda MUITOS números SEM ele → 463 = GATILHO DE BAN). Distingue a causa:
+                    if (await IsSessionNotWorkingAsync(sessionId, ct))
                     {
-                        job.ScheduleRetry(clock.UtcNow, "checagem de número indisponível");
-                        await uow.SaveChangesAsync(ct);
-                        retried++;
+                        // Sessão caiu/degradou (WAHA fora): é hiccup de SESSÃO, não do número. PARA o ciclo;
+                        // o job fica Pending, SEM consumir tentativa nem pular — igual o caminho de envio.
+                        // (Sem isto, uma queda do WAHA marcaria a fila INTEIRA como terminal e perderia msgs.)
                         log.LogWarning(
-                            "Checagem de número indisponível para {Phone}; reenfileirado (tentativa {Attempt} de {Max}) — não envio sem resolver (evita 463) nem travo a fila.",
-                            contact.Phone.E164, job.AttemptCount + 1, dispatchOpts.Value.MaxSendAttempts);
+                            "Checagem de número indisponível e sessão NÃO-WORKING; ciclo parado (job {JobId} segue Pending).",
+                            job.Id);
+                        break;
                     }
-                    else
-                    {
-                        job.MarkSkipped("checagem de número indisponível após várias tentativas");
-                        await uow.SaveChangesAsync(ct);
-                        skipped++;
-                        log.LogWarning(
-                            "Job {JobId} pulado: checagem de {Phone} indisponível após várias tentativas.",
-                            job.Id, contact.Phone.E164);
-                    }
+                    // Sessão WORKING mas o check-exists falhou (hiccup pontual): ADIA pro fim da fila — SEM
+                    // consumir tentativa de envio (escassa) e SEM marcar terminal (não perde o contato). Não
+                    // trava a fila (DequeueNextPending ordena por ScheduledAt ASC; o nextAt futuro sai depois
+                    // dos Pending) e não arrisca 463. Re-checa quando o nextAt chegar.
+                    job.Defer(clock.UtcNow.AddSeconds(NumberCheckDeferSeconds), "checagem de número indisponível (hiccup)");
+                    await uow.SaveChangesAsync(ct);
+                    retried++;
+                    log.LogWarning(
+                        "Checagem de número indisponível para {Phone} (sessão WORKING); adiado {Sec}s — não envio sem resolver (evita 463).",
+                        contact.Phone.E164, NumberCheckDeferSeconds);
                     await Task.Delay(delay.NextCheckCooldown(), ct);
                     continue;
                 }
@@ -503,6 +499,11 @@ public sealed class DispatchEngine(
 
     // Respiro após uma falha, pra não martelar o WAHA em loop quando a fila só tem o job que falha.
     private static readonly TimeSpan FailureCooldown = TimeSpan.FromSeconds(5);
+
+    // Quanto adiar um job quando a checagem de número fica indisponível com a sessão WORKING (hiccup
+    // pontual do check-exists). Futuro o bastante pra não re-checar em loop; curto o bastante pra o
+    // contato não esperar demais quando o check voltar.
+    private const int NumberCheckDeferSeconds = 60;
 
     // Falha definitiva = a que não melhora reenviando: respostas 4xx do WAHA (request inválido,
     // número ruim), EXCETO 408 (timeout) e 429 (rate limit), que são transitórios. Timeout do

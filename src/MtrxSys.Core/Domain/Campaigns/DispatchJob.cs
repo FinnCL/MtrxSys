@@ -63,4 +63,16 @@ public sealed class DispatchJob : Entity<Guid>
         Status = DispatchStatus.Skipped;
         ErrorReason = reason;
     }
+
+    // Adia o disparo pra frente (nextAt futuro) SEM consumir tentativa de envio e SEM marcar terminal.
+    // Diferente de ScheduleRetry (que incrementa AttemptCount) e de MarkSkipped (terminal). Uso: a
+    // checagem de número ficou indisponível por hiccup — não é falha do número nem do envio, então não
+    // pode queimar o AttemptCount (escasso) nem perder o contato. Fica Retrying (segue sendo dequeuado
+    // quando o nextAt chegar), pra o ciclo seguir com os outros e re-checar este depois.
+    public void Defer(DateTimeOffset nextAt, string reason)
+    {
+        Status = DispatchStatus.Retrying;
+        ScheduledAt = nextAt;
+        ErrorReason = reason;
+    }
 }

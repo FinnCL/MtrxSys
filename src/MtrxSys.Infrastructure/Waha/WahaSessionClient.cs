@@ -116,11 +116,6 @@ internal sealed class WahaSessionClient(WahaHttp http)
         {
             config["webhooks"] = webhooks;
         }
-        var webjs = http.WebjsConfigOrNull();
-        if (webjs is not null)
-        {
-            config["webjs"] = webjs;
-        }
         var noweb = http.NowebConfigOrNull();
         if (noweb is not null)
         {
@@ -256,14 +251,6 @@ internal sealed class WahaSessionClient(WahaHttp http)
         if (applyProxy)
         {
             config["proxy"] = proxy!;
-        }
-        // Reenvia o config.webjs (webVersion + cache) TAMBÉM no PUT: o PUT SUBSTITUI o config, então
-        // sem isto ele APAGARIA o webjs setado na criação → o whatsapp-web.js voltaria a carregar o
-        // WhatsApp Web ao vivo (erro VERSION → sessão FAILED). Null (GOWS/NOWEB) → não envia.
-        var webjs = http.WebjsConfigOrNull();
-        if (webjs is not null)
-        {
-            config["webjs"] = webjs;
         }
         var noweb = http.NowebConfigOrNull();
         if (noweb is not null)

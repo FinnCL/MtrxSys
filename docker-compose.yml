@@ -115,10 +115,6 @@ services:
       Waha__ProxyServer: ${WAHA_PROXY_1:-}
       Waha__ProxyUsername: ${WAHA_PROXY_1_USER:-}
       Waha__ProxyPassword: ${WAHA_PROXY_1_PASS:-}
-      # WEBJS: a API grava webVersion+cache no config.webjs da sessão (criação+PUT) — cura o VERSION e
-      # mantém o engine que NÃO tem o 463/tctoken. Mesma versão do WAHA_WEBJS_WEB_VERSION acima.
-      Waha__WebVersion: ${WAHA_WEBJS_WEB_VERSION:-}
-      Waha__WebVersionCacheType: ${WAHA_WEBJS_CACHE_TYPE:-remote}
       Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}
       # Alerta operacional: o watch de sessão avisa quando o chip sai/volta de WORKING. WebhookUrl vazio
       # = só loga (docker logs); preenchido = POSTa {text} (Slack/Discord/relay). Label distingue os stacks.
