@@ -66,6 +66,7 @@ public sealed class WebhookOptOutE2ETests : IAsyncLifetime
             new FixedClock(),
             _phones,
             new NoOpSharedPhoneLedger(),
+            new SendAuditRepository(_db),
             Options.Create(new DispatchOptions { SessionId = "default" }),
             NullLogger<WebhookIngestionService>.Instance);
 

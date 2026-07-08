@@ -20,6 +20,7 @@ public sealed class WebhookIngestionServiceTests
     private readonly IUnitOfWork _uow = Substitute.For<IUnitOfWork>();
     private readonly IClock _clock = Substitute.For<IClock>();
     private readonly ISharedPhoneLedger _ledger = Substitute.For<ISharedPhoneLedger>();
+    private readonly ISendAuditRepository _audit = Substitute.For<ISendAuditRepository>();
 
     private WebhookIngestionService BuildService()
     {
@@ -35,6 +36,7 @@ public sealed class WebhookIngestionServiceTests
             _clock,
             new MtrxSys.Core.Validation.BrazilPhoneValidator(),
             _ledger,
+            _audit,
             opts,
             NullLogger<WebhookIngestionService>.Instance);
     }
