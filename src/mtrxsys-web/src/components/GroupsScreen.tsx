@@ -124,6 +124,8 @@ export function GroupsScreen() {
         </div>
         <p className="muted">
           Grupos que o WhatsApp logado participa. Importe os participantes pra cadastrá-los como contatos no CRM.
+          Entrou gente nova depois? Clique <strong>Importar</strong> de novo — só os novos são adicionados
+          (os já cadastrados são pulados como duplicados).
         </p>
       </header>
       {loadError && <p className="error">{loadError}</p>}
@@ -150,8 +152,9 @@ export function GroupsScreen() {
                 onClick={() => void importOne(i)}
                 disabled={row.importing}
                 className="import-btn"
+                title="Importa os participantes como contatos. Entrou gente nova no grupo depois? Clique de novo — só os novos são adicionados; os já cadastrados são pulados (duplicados)."
               >
-                {row.importing ? "Importando..." : "Importar contatos"}
+                {row.importing ? "Importando..." : row.result ? "Importar novos" : "Importar contatos"}
               </button>
               <button
                 type="button"
