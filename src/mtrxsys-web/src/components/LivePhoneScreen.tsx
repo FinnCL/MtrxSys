@@ -196,7 +196,7 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           {showConnect && (
             <div className="phone-step-body">
               <p className="phone-off-hint" style={{ margin: "0 0 8px" }}>
-                No celular: <b>Aparelhos conectados → Conectar um aparelho</b> e escaneie o QR.
+                Em <b>Aparelhos conectados</b>, toque <b>Conectar um aparelho</b> e escaneie o QR.
               </p>
               <WhatsAppConnect onConnected={refreshIdent} />
             </div>
@@ -207,7 +207,7 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
       {/* Placeholder honesto: o mundo "Com emulador" ainda não foi reconstruído neste baseline. */}
       {emulatorMode && (
         <p className="phone-off-hint" style={{ textAlign: "center", maxWidth: 390 }}>
-          🚧 Modo <b>Com emulador</b> em construção — a tela do Android e o pareamento pelo emulador
+          Modo <b>Com emulador</b> em construção. A tela do Android e o pareamento pelo emulador
           voltam no próximo passo. O disparo já funciona pelo WAHA.
         </p>
       )}
