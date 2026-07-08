@@ -61,6 +61,9 @@ services:
       # por isso é o escolhido. A versão ENVELHECE: quando o VERSION voltar, troque WAHA_WEBJS_WEB_VERSION
       # por uma mais nova do repo wppconnect/wa-version (github.com/wppconnect-team/wa-version/html).
       WAHA_WEBJS_WEB_VERSION: ${WAHA_WEBJS_WEB_VERSION:-}
+      # Nível de log. debug = mostra os nós crus do protocolo (diagnóstico de 463/logout/device_removed).
+      # Volte pra info depois de diagnosticar — debug é MUITO verboso (enche o disco/log em uptime longo).
+      WAHA_LOG_LEVEL: ${WAHA_LOG_LEVEL:-info}
       # NAO ha proxy aqui: o WAHA 2026.x (CORE/NOWEB) IGNORA a env var WHATSAPP_PROXY_SERVER
       # (comprovado). O proxy por chip e aplicado no CONFIG DA SESSAO pela api (Waha__Proxy*).
       # Ver docs/proxy.md.
