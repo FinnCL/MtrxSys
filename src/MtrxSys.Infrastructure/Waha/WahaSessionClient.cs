@@ -234,7 +234,22 @@ internal sealed class WahaSessionClient(WahaHttp http)
         // presente, o PUT é PULADO (linha abaixo) → a sessão fica intocada. É a volta ao comportamento
         // do 0fd381f ("só aplicar proxy em sessão SEM conta"), que existia justamente pra evitar isto.
         var proxyableState = currentStatus is WahaSessionStatus.ScanQrCode;
-        if (webhookPresent && (proxyMatches || !proxyableState))
+
+        // GUARD DURO (anti-logout): só é seguro dar PUT/re-config numa sessão em SCAN_QR_CODE (pareando,
+        // SEM conta a perder). Em QUALQUER outro estado — WORKING sobretudo — um PUT DESLOGA o companion.
+        // Foi a CAUSA RAIZ de um logout real: o WahaProxyEnsure roda a cada 60s e, no restart da api, com
+        // o webhook lido como "sem token", caía no PUT e reescrevia o config da sessão WORKING → logout →
+        // SCAN_QR_CODE. Então, fora de SCAN_QR_CODE, NUNCA mexe: retorna sem tocar na sessão. Um webhook
+        // sem token numa sessão viva (raro — nasce com token na criação) só custa o inbound até o próximo
+        // pareamento, o que é MENOS grave que perder o chip com um PUT. (Bug antigo: o short-circuit era
+        // `webhookPresent && (proxyMatches || !proxyableState)`, que em WORKING virava só `webhookPresent`
+        // — deixando o PUT disparar quando o token faltava e derrubando a sessão conectada.)
+        if (!proxyableState)
+        {
+            return true;
+        }
+        // Daqui pra baixo a sessão está em SCAN_QR_CODE (PUT é seguro). Se já está tudo certo, pula.
+        if (webhookPresent && proxyMatches)
         {
             return true;
         }
