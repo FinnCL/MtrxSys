@@ -5,8 +5,11 @@ public sealed class DispatchOptions
     public const string SectionName = "Dispatch";
 
     public string SessionId { get; set; } = "default";
-    public int DelayMinSeconds { get; set; } = 45;
-    public int DelayMaxSeconds { get; set; } = 75;
+    // Espaçamento entre envios (sorteado no intervalo). 90-240s é o default conservador anti-ban:
+    // ritmo humano, longe do padrão-de-bot que dispara o anti-abuso do WhatsApp em conta nova.
+    // Vale nos 10 stacks. Pode ser sobrescrito por stack via Dispatch__DelayMin/MaxSeconds no .env.
+    public int DelayMinSeconds { get; set; } = 90;
+    public int DelayMaxSeconds { get; set; } = 240;
     public int TypingMinSeconds { get; set; } = 2;
     public int TypingMaxSeconds { get; set; } = 5;
     public double TypingJitter { get; set; } = 0.15;

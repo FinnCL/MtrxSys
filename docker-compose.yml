@@ -181,10 +181,9 @@ services:
       Waha__BaseUrl: "http://waha:3000"
       Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
       # RAMPA ANTI-BAN — a conta precisa ser AQUECIDA (uso humano no celular ~10 dias) ANTES de
-      # automatizar; nunca disparar logo após parear (gatilho nº1 de logout/ban). Estes limites valem
-      # PRA DEPOIS do aquecimento: delays humanos 90-240s entre envios (mais lento = menos cara de bot).
-      Dispatch__DelayMinSeconds: ${DISPATCH_DELAY_MIN:-90}
-      Dispatch__DelayMaxSeconds: ${DISPATCH_DELAY_MAX:-240}
+      # automatizar; nunca disparar logo após parear (gatilho nº1 de logout/ban). Delays entre envios:
+      # NÃO sobrescrever aqui — o código já tem o default anti-ban (90-240s), uniforme nos 10 stacks.
+      # Se um stack precisar de outro ritmo, sete Dispatch__DelayMin/MaxSeconds no .env dele.
       # Curva de aquecimento: NÃO sobrescrever aqui. O código já tem um default calibrado
       # (10,15,25,40,50,65,80,100 — estabiliza em 100/dia em 8 dias), que é o que a UI/API mostra.
       # Sobrescrever só no dispatcher divergia display (UI) do enforcement — confunde o operador.
