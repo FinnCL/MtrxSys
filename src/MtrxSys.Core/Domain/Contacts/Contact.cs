@@ -41,6 +41,33 @@ public sealed class Contact : Entity<Guid>
 
     public void RegisterSend(DateTimeOffset at) => LastSentAt = at;
 
+    /// <summary>Libera ESTE contato pra um novo disparo: zera o marcador de "já enviado"
+    /// (LastSentAt) — equivalente per-contato do "Renovar lista". Como o filtro de disparo exclui
+    /// quem tem LastSentAt, ele volta ao público. Não apaga histórico (o próximo disparo cria um
+    /// job novo) e não mexe em Stage/OptOut. Retorna true se havia algo a limpar.</summary>
+    public bool ClearLastSent()
+    {
+        if (LastSentAt is null)
+        {
+            return false;
+        }
+        LastSentAt = null;
+        return true;
+    }
+
+    /// <summary>Descarta (soft delete) ESTE contato: some das listas, do disparo, do Chat e do
+    /// resultado dos envios, mas a linha e o opt-out ficam no banco (anti-ban: o sync não recria e
+    /// quem pediu "SAIR" continua suprimido). Reversível via ReimportInto. Retorna true se mudou.</summary>
+    public bool Discard(DateTimeOffset at)
+    {
+        if (DeletedAt is not null)
+        {
+            return false;
+        }
+        DeletedAt = at;
+        return true;
+    }
+
     /// <summary>Preenche o nome só se ainda estiver vazio (ex.: backfill com o PushName de uma resposta).</summary>
     public void FillNameIfEmpty(string? name)
     {

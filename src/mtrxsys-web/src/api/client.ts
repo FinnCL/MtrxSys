@@ -236,9 +236,27 @@ export const api = {
   listContactGroupTags: () => request<ContactGroupTag[]>("/api/contacts/group-tags"),
   reactivateContact: (id: string) =>
     request<Contact>(`/api/contacts/${id}/reactivate`, { method: "POST" }),
-  // Exclui os contatos de um grupo (e suas conversas/disparos).
+  // Libera o contato pra novo disparo (zera o "já enviado" só dele) — volta ao público do disparo.
+  resendContact: (id: string) =>
+    request<Contact>(`/api/contacts/${id}/resend`, { method: "POST" }),
+  // Descarta (soft delete) um contato: some das listas, do disparo, do chat e do resultado dos envios.
+  discardContact: (id: string) =>
+    request<{ discarded: boolean }>(`/api/contacts/${id}/discard`, { method: "POST" }),
+  // Descarta (soft delete) os contatos de um grupo: somem de tudo, mas ficam no banco (reversível).
   deleteGroupContacts: (groupTag: string) =>
     request<{ deleted: number }>("/api/contacts/delete-by-group", {
+      method: "POST",
+      body: JSON.stringify({ groupTag }),
+    }),
+  // PERMANENTE — purge seguro: apaga de vez os SEM opt-out; quem deu "SAIR" fica só descartado (soft).
+  purgeGroupContacts: (groupTag: string) =>
+    request<{ purged: number; keptOptedOut: number }>("/api/contacts/purge-by-group", {
+      method: "POST",
+      body: JSON.stringify({ groupTag }),
+    }),
+  // PERMANENTE — apaga TUDO do grupo (inclusive quem deu opt-out). Irreversível.
+  hardDeleteGroupContacts: (groupTag: string) =>
+    request<{ deleted: number }>("/api/contacts/hard-delete-by-group", {
       method: "POST",
       body: JSON.stringify({ groupTag }),
     }),

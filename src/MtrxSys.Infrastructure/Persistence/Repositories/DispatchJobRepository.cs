@@ -33,9 +33,17 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         return Task.CompletedTask;
     }
 
+    // Exclui os jobs de contatos descartados (soft delete) do relatório E dos contadores — igual às
+    // listas e ao Chat. Filtra pelo JOB (não pelo join do contato) pra a linha inteira sair, em vez de
+    // virar linha com telefone/nome em branco; o NOT-EXISTS-descartado preserva jobs órfãos (sem
+    // contato correspondente), que aparecem como antes. Reversível: reativar/re-importar o contato
+    // (zera DeletedAt) traz os jobs dele de volta.
+    private IQueryable<DispatchJob> ExcludingDiscardedContacts(IQueryable<DispatchJob> jobs) =>
+        jobs.Where(j => !db.Contacts.Any(c => c.Id == j.ContactId && c.DeletedAt != null));
+
     public async Task<DispatchStats> GetStatsAsync(CancellationToken ct)
     {
-        var grouped = await db.DispatchJobs
+        var grouped = await ExcludingDiscardedContacts(db.DispatchJobs)
             .GroupBy(j => j.Status)
             .Select(g => new { Status = g.Key, Count = g.Count() })
             .ToListAsync(ct);
@@ -60,6 +68,10 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         {
             baseQuery = baseQuery.Where(j => j.Status == s);
         }
+
+        // Contatos descartados (soft delete) somem do resultado dos envios — mesmo filtro dos
+        // contadores (ver ExcludingDiscardedContacts).
+        baseQuery = ExcludingDiscardedContacts(baseQuery);
 
         // Duas queries pra ordenar cada grupo na direção certa — não dá pra fazer em uma só
         // porque histórico precisa de DESC e Pending precisa de ASC.

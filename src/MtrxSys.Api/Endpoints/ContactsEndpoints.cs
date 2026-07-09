@@ -197,6 +197,52 @@ public static class ContactsEndpoints
             return Results.Ok(ToDto(contact));
         });
 
+        // Libera UM contato pra um novo disparo: zera só o LastSentAt dele (equivalente per-contato
+        // do "Renovar lista"). Ele volta ao público do disparo — o filtro exclui quem tem LastSentAt.
+        // Não apaga o histórico de jobs (o próximo disparo cria um job novo) nem mexe em Stage/OptOut.
+        group.MapPost("/{id:guid}/resend", async (
+            Guid id,
+            IContactRepository contacts,
+            IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            var contact = await contacts.GetByIdAsync(id, ct);
+            if (contact is null)
+            {
+                return Results.NotFound();
+            }
+            if (contact.ClearLastSent())
+            {
+                await contacts.UpdateAsync(contact, ct);
+                await uow.SaveChangesAsync(ct);
+            }
+            return Results.Ok(ToDto(contact));
+        });
+
+        // Descarta (soft delete) UM contato: some das listas, do disparo, do Chat e do resultado dos
+        // envios, mas a linha e o opt-out ficam no banco (reversível; anti-ban preservado). É o mesmo
+        // efeito do "Descartar contatos deste grupo", só que pra um contato.
+        group.MapPost("/{id:guid}/discard", async (
+            Guid id,
+            IContactRepository contacts,
+            IClock clock,
+            IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            var contact = await contacts.GetByIdAsync(id, ct);
+            if (contact is null)
+            {
+                return Results.NotFound();
+            }
+            var discarded = contact.Discard(clock.UtcNow);
+            if (discarded)
+            {
+                await contacts.UpdateAsync(contact, ct);
+                await uow.SaveChangesAsync(ct);
+            }
+            return Results.Ok(new { discarded });
+        });
+
         // Descarta (soft delete) os contatos de UM grupo: somem das listas/disparo e do Chat,
         // mas a linha e o opt-out ficam no banco (reversível). O WhatsApp do celular não é tocado.
         group.MapPost("/delete-by-group", async (
@@ -211,6 +257,39 @@ public static class ContactsEndpoints
             }
             // ExecuteUpdate persiste sozinho (não passa pelo UnitOfWork), igual ao delete anterior.
             var deleted = await contacts.DiscardByGroupTagAsync(req.GroupTag.Trim(), clock.UtcNow, ct);
+            return Results.Ok(new { deleted });
+        });
+
+        // PERMANENTE (irreversível) — purge SEGURO: apaga FISICAMENTE do banco os contatos do grupo
+        // SEM opt-out (com conversas, mensagens e jobs), e mantém quem deu "SAIR" só como descartado
+        // (soft) pra preservar a supressão anti-ban. Libera espaço sem risco de re-disparar pra quem saiu.
+        group.MapPost("/purge-by-group", async (
+            DeleteByGroupRequest req,
+            IContactRepository contacts,
+            IClock clock,
+            CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.GroupTag))
+            {
+                return Results.Problem("groupTag é obrigatório", statusCode: 400);
+            }
+            var (purged, keptOptedOut) = await contacts.PurgeByGroupTagAsync(req.GroupTag.Trim(), clock.UtcNow, ct);
+            return Results.Ok(new { purged, keptOptedOut });
+        });
+
+        // PERMANENTE (irreversível) — apaga TUDO: remove FISICAMENTE do banco TODOS os contatos do
+        // grupo, INCLUSIVE quem deu "SAIR" (perde a marca de opt-out — risco anti-ban), com conversas,
+        // mensagens e jobs. Sem volta e sem backup.
+        group.MapPost("/hard-delete-by-group", async (
+            DeleteByGroupRequest req,
+            IContactRepository contacts,
+            CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.GroupTag))
+            {
+                return Results.Problem("groupTag é obrigatório", statusCode: 400);
+            }
+            var deleted = await contacts.HardDeleteByGroupTagAsync(req.GroupTag.Trim(), ct);
             return Results.Ok(new { deleted });
         });
 

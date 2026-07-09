@@ -22,6 +22,18 @@ public interface IContactRepository
     /// listas/disparo, mas a linha e o opt-out ficam no banco. Retorna quantos foram descartados.</summary>
     Task<int> DiscardByGroupTagAsync(string groupTag, DateTimeOffset now, CancellationToken ct);
 
+    /// <summary>Purge SEGURO do grupo: apaga FISICAMENTE (irreversível) os contatos SEM opt-out —
+    /// junto das linhas-filhas (jobs de disparo, conversas e mensagens) — e mantém quem tem opt-out
+    /// apenas como SOFT delete (deleted_at), preservando a supressão anti-ban. Transacional.
+    /// Retorna (apagados de vez, preservados por opt-out).</summary>
+    Task<(int Purged, int KeptOptedOut)> PurgeByGroupTagAsync(string groupTag, DateTimeOffset now, CancellationToken ct);
+
+    /// <summary>Apaga FISICAMENTE (irreversível) TODOS os contatos do grupo — INCLUSIVE quem deu
+    /// opt-out — junto das linhas-filhas (jobs, conversas, mensagens). Perde a marca de opt-out
+    /// desses números (risco anti-ban: podem ser reimportados/re-disparados). Transacional.
+    /// Retorna quantos contatos foram apagados.</summary>
+    Task<int> HardDeleteByGroupTagAsync(string groupTag, CancellationToken ct);
+
     /// <summary>Zera o marcador de envio (LastSentAt) de todos os contatos. Usado no "Renovar
     /// lista": quem só tinha recebido volta a "Novo", consistente com voltar a ser re-disparável.</summary>
     Task<int> ClearLastSentAsync(CancellationToken ct);
