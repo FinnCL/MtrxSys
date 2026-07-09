@@ -38,9 +38,19 @@ public static class DependencyInjection
         services.AddOptions<WahaOptions>()
             .Bind(config.GetSection(WahaOptions.SectionName))
             // Fonte única do token: reusa Webhooks:WahaToken (o mesmo que a API valida no endpoint),
-            // pra não duplicar o segredo numa Waha:WebhookToken separada. Só sobrepõe se não veio
-            // explicitamente na seção Waha. Assim o WahaClient grava o customHeader na sessão do WAHA.
-            .PostConfigure(o => o.WebhookToken ??= config["Webhooks:WahaToken"])
+            // pra não duplicar o segredo numa Waha:WebhookToken separada. Assim o WahaClient grava o
+            // customHeader na sessão do WAHA. IMPORTANTE: usa IsNullOrWhiteSpace, não `??=` — o Bind
+            // pode materializar "" (env unset lido como vazio / appsettings ""), e "" NÃO é null, então
+            // o `??=` antigo NÃO sobrepunha → a sessão nascia com token VAZIO → o WAHA mandava vazio →
+            // a api rejeitava o webhook com 401 (acks/inbound/SAIR não chegavam). IsNullOrWhiteSpace
+            // cobre os dois casos (null e vazio).
+            .PostConfigure(o =>
+            {
+                if (string.IsNullOrWhiteSpace(o.WebhookToken))
+                {
+                    o.WebhookToken = config["Webhooks:WahaToken"];
+                }
+            })
             .ValidateDataAnnotations()
             .ValidateOnStart();
         services.AddOptions<JwtOptions>()
