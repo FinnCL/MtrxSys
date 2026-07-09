@@ -36,6 +36,7 @@ appsettings.*.local.json
 
 # Deploy de produção (segredos + artefatos gerados — não commitar)
 deploy/.env.prod
+deploy/.env.homolog
 deploy/Caddyfile
 deploy/landing/
 

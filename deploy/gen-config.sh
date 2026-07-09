@@ -89,6 +89,36 @@ fauth() {
     echo "    reverse_proxy 127.0.0.1:${PHONE_PORT}"
     echo "}"
   done
+
+  # ── HOMOLOGAÇÃO (staging) — mesmo padrão dos ambientes, apontando pro stack ISOLADO mtrxhml
+  #    (api 127.0.0.1:5190 / web 127.0.0.1:5191). Sem tela de Android (homolog é WahaOnly). Se o
+  #    stack de homolog não estiver no ar, só o hml.<domínio> dá 502 — os 10 não são afetados. ──
+  echo
+  echo "# Homologação (dashboard + api mesma-origem) — atrás do portão + CORS p/ a landing."
+  echo "hml.${MTRX_DOMAIN} {"
+  echo "    @preflight method OPTIONS"
+  echo "    @api path /api/* /webhooks/* /health*"
+  echo "    @optout path /sair*"
+  echo "    handle @preflight {"
+  echo "        header Access-Control-Allow-Origin \"https://app.${MTRX_DOMAIN}\""
+  echo "        header Access-Control-Allow-Credentials \"true\""
+  echo "        header Access-Control-Allow-Methods \"GET, POST, OPTIONS\""
+  echo "        header Access-Control-Allow-Headers \"Content-Type\""
+  echo "        header Access-Control-Max-Age \"600\""
+  echo "        respond 204"
+  echo "    }"
+  echo "    # Opt-out PÚBLICO (LGPD): o /sair não passa pelo portão (o destinatário não tem login)."
+  echo "    handle @optout {"
+  echo "        reverse_proxy 127.0.0.1:5190"
+  echo "    }"
+  echo "    handle {"
+  echo "        forward_auth ${GATE_UP} {"
+  echo "            uri /authz"
+  echo "        }"
+  echo "        reverse_proxy @api 127.0.0.1:5190"
+  echo "        reverse_proxy 127.0.0.1:5191"
+  echo "    }"
+  echo "}"
 } > Caddyfile
 echo "✓ deploy/Caddyfile gerado."
 

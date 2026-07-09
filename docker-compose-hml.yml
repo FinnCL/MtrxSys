@@ -1,0 +1,184 @@
+# Ambiente de HOMOLOGAÇÃO (staging) — 1 stack isolado que replica prod no software.
+# WAHA REAL (pareia um chip DESCARTÁVEL e envia de verdade), DB/Redis próprios, LEDGER DESLIGADO
+# (nunca toca o registro compartilhado dos 10 → sem risco anti-ban). Servido em
+# https://hml.mtrxsys.com pelo Caddy (bloco gerado por deploy/gen-config.sh).
+#
+# Sobe com:  bash deploy/up-homolog.sh   (aplica também deploy/docker-compose.prod.yml p/ same-origin).
+# Isolamento: name=mtrxhml → volumes/rede próprios; portas na faixa 549x/639x/309x/519x (fora dos 10).
+# Pra flipar pro WAHA FALSO (emulador):  WAHA_IMAGE=mtrxsys-waha-emulator:latest bash deploy/up-homolog.sh
+name: mtrxhml
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: mtrxhml-postgres
+    environment:
+      POSTGRES_DB: mtrx
+      POSTGRES_USER: mtrx
+      POSTGRES_PASSWORD: ${PGH_PASS:-mtrx}
+      TZ: UTC
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:5490:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mtrx", "-d", "mtrx"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+    restart: unless-stopped
+
+  # Espelha o Redis dos stacks de prod (hoje órfão, mas mantido pra fidelidade). mtrxhml-redis.
+  redis:
+    image: redis:7-alpine
+    container_name: mtrxhml-redis
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:6390:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+    restart: unless-stopped
+
+  waha:
+    # WAHA REAL por padrão (homolog envia de verdade). Flip pro emulador: WAHA_IMAGE=mtrxsys-waha-emulator:latest.
+    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
+    container_name: mtrxhml-waha
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:3090:3000"
+    environment:
+      TZ: UTC
+      # Engine NOWEB (leve) por padrão — igual prod. Reparear o chip ao trocar de engine.
+      WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
+      WAHA_WEBJS_WEB_VERSION: ${WAHA_WEBJS_WEB_VERSION:-}
+      WAHA_LOG_LEVEL: ${WAHA_LOG_LEVEL:-info}
+      # Bypass do proxy pro host interno (api) — senão o webhook do "SAIR" pode ir pelo proxy e sumir.
+      NO_PROXY: "api,localhost,127.0.0.1"
+      no_proxy: "api,localhost,127.0.0.1"
+      WAHA_DASHBOARD_ENABLED: "true"
+      WAHA_DASHBOARD_USERNAME: ${WAHAH_DASH_USER:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHAH_DASH_PASS:-admin}
+      WHATSAPP_API_KEY: ${WAHAH_API_KEY:-mtrxsys-dev-key-homolog}
+      WHATSAPP_HOOK_URL: ${WAHAH_HOOK_URL:-http://api:8080/webhooks/waha}
+      WHATSAPP_HOOK_EVENTS: ${WAHAH_HOOK_EVENTS:-message,message.any}
+      WHATSAPP_SWAGGER_USERNAME: ${WAHAH_SWAGGER_USER:-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHAH_SWAGGER_PASS:-admin}
+      Webhooks__WahaToken: ${WAHAH_HOOK_TOKEN:-}
+    volumes:
+      - waha-sessions:/app/.sessions
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Api/Dockerfile
+    container_name: mtrxhml-api
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:5190:8080"
+    environment:
+      TZ: UTC
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PGH_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHAH_API_KEY:-mtrxsys-dev-key-homolog}
+      Waha__WebhookCallbackUrl: "http://api:8080/webhooks/waha"
+      # Proxy do chip do homolog (opcional). Vazio = sai pelo IP do host.
+      Waha__ProxyServer: ${WAHA_PROXY_H:-}
+      Waha__ProxyUsername: ${WAHA_PROXY_H_USER:-}
+      Waha__ProxyPassword: ${WAHA_PROXY_H_PASS:-}
+      Webhooks__WahaToken: ${WAHAH_HOOK_TOKEN:-}
+      Jwt__SigningKey: ${JWTH_SIGNING_KEY:-dev-only-signing-key-homolog-change-me-32-chars-min}
+      # LEDGER DESLIGADO: homolog nunca escreve/consulta o registro compartilhado dos 10 (anti-ban).
+      SharedLedger__Mode: ${SHARED_LEDGER_MODE_H:-Off}
+      Seed__Admin__Email: ${SEEDH_ADMIN_EMAIL:-admin-hml@local}
+      Seed__Admin__Password: ${SEEDH_ADMIN_PASS:-homolog123!}
+      Seed__Admin__DisplayName: ${SEEDH_ADMIN_NAME:-Admin Homolog}
+      Presence__MaskChipPhone: ${MASK_CHIP_PHONE_H:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+    restart: unless-stopped
+
+  dispatcher:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Dispatcher/Dockerfile
+    container_name: mtrxhml-dispatcher
+    environment:
+      TZ: UTC
+      DOTNET_ENVIRONMENT: Production
+      # Link "sair" de 1 clique aponta pro subdomínio do homolog.
+      OptOut__PublicBaseUrl: ${OPTOUT_PUBLIC_URL_H:-}
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PGH_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHAH_API_KEY:-mtrxsys-dev-key-homolog}
+      Jwt__SigningKey: ${JWTH_SIGNING_KEY:-dev-only-signing-key-homolog-change-me-32-chars-min}
+      SharedLedger__Mode: ${SHARED_LEDGER_MODE_H:-Off}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./src/mtrxsys-web
+      dockerfile: Dockerfile
+      args:
+        # Same-origin: o deploy/docker-compose.prod.yml sobrescreve VITE_API_URL com
+        # WEB_PUBLIC_API_URL (https://hml.mtrxsys.com), exportado pelo up-homolog.sh. Este default
+        # cobre quem subir sem o override.
+        VITE_API_URL: "https://hml.mtrxsys.com"
+        VITE_APP_LABEL: "HML"
+    container_name: mtrxhml-web
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:5191:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  waha-sessions:
