@@ -305,13 +305,18 @@ export function CampaignsScreen() {
   // Tabela de resultados: busca por telefone/nome e paginação, tudo sobre o que já foi carregado.
   const REPORT_PAGE_SIZE = 25;
   const reportQuery = reportSearch.trim().toLowerCase();
-  const filteredReport = reportQuery
+  const searchedReport = reportQuery
     ? report.filter(
         (i) =>
           (i.phone ?? "").toLowerCase().includes(reportQuery) ||
           (i.name ?? "").toLowerCase().includes(reportQuery),
       )
     : report;
+  // Ordena: contatos do CHIP ATUAL primeiro; os de OUTRO chip (cinza/desabilitados) vão pro FIM da
+  // lista. sort é estável no JS moderno → preserva a ordem interna (histórico/fila) dentro de cada grupo.
+  const filteredReport = [...searchedReport].sort(
+    (a, b) => Number(b.fromCurrentChip) - Number(a.fromCurrentChip),
+  );
   const reportTotalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
   // Clamp na leitura (sem setState): se o poll de 5s muda o total, a página nunca "estoura".
   const reportCurrentPage = Math.min(reportPage, reportTotalPages);
