@@ -19,8 +19,6 @@ export function ContactsScreen() {
     | { kind: "resend"; id: string; tag: string; label: string }
     | { kind: "discardOne"; id: string; tag: string; label: string }
     | { kind: "delete"; tag: string }
-    | { kind: "purge"; tag: string }
-    | { kind: "hardDelete"; tag: string }
     | null
   >(null);
   const [busy, setBusy] = useState(false);
@@ -57,8 +55,8 @@ export function ContactsScreen() {
     }
   }
 
-  // Após esvaziar um grupo (descarte/purge/hard delete): fecha o acordeão, limpa o cache local e
-  // recarrega a lista de grupos (o grupo vazio some sozinho).
+  // Após descartar os contatos de um grupo: fecha o acordeão, limpa o cache local e recarrega a
+  // lista de grupos (o grupo vazio some sozinho).
   async function forgetEmptiedGroup(tag: string) {
     setExpanded((e) => (e === tag ? null : e));
     setContactsByGroup((prev) => {
@@ -92,17 +90,6 @@ export function ContactsScreen() {
       } else if (pending.kind === "delete") {
         const r = await api.deleteGroupContacts(pending.tag);
         setActionMsg(`${r.deleted} contato(s) do grupo "${pending.tag}" excluído(s).`);
-        await forgetEmptiedGroup(pending.tag);
-      } else if (pending.kind === "purge") {
-        const r = await api.purgeGroupContacts(pending.tag);
-        setActionMsg(
-          `${r.purged} contato(s) apagado(s) de vez do grupo "${pending.tag}"` +
-            (r.keptOptedOut > 0 ? `; ${r.keptOptedOut} com opt-out preservado(s).` : "."),
-        );
-        await forgetEmptiedGroup(pending.tag);
-      } else {
-        const r = await api.hardDeleteGroupContacts(pending.tag);
-        setActionMsg(`${r.deleted} contato(s) apagado(s) permanentemente do grupo "${pending.tag}".`);
         await forgetEmptiedGroup(pending.tag);
       }
     } catch (ex) {
@@ -191,40 +178,6 @@ export function ContactsScreen() {
               <br />
               <strong>Não são apagados do banco</strong> (o opt-out de quem saiu é preservado) e o{" "}
               <strong>WhatsApp do celular não é afetado</strong>. É reversível.
-            </>
-          ),
-        };
-      case "purge":
-        return {
-          title: "Apagar permanentemente (preserva quem saiu)?",
-          confirmLabel: "Sim, apagar",
-          danger: true,
-          message: (
-            <>
-              Os contatos de <strong>“{p.tag}”</strong> <strong>sem opt-out</strong> são{" "}
-              <strong>APAGADOS DE VEZ do banco</strong> — junto com suas conversas, mensagens e jobs de
-              disparo. <strong>Isto é irreversível.</strong>
-              <br />
-              <br />
-              Quem pediu <strong>“SAIR”</strong> é preservado (fica só descartado) para continuar suprimido
-              no anti-ban. O WhatsApp do celular não é afetado.
-            </>
-          ),
-        };
-      case "hardDelete":
-        return {
-          title: "Apagar TUDO permanentemente?",
-          confirmLabel: "Sim, apagar tudo",
-          danger: true,
-          message: (
-            <>
-              <strong>TODOS</strong> os contatos de <strong>“{p.tag}”</strong> — inclusive{" "}
-              <strong>quem deu “SAIR”</strong> — são <strong>APAGADOS DE VEZ do banco</strong>, com conversas,
-              mensagens e jobs. <strong>Irreversível e sem backup.</strong>
-              <br />
-              <br />
-              ⚠️ <strong>Anti-ban:</strong> quem pediu para sair perde a marca de opt-out e pode ser
-              reimportado e disparado de novo no próximo sync.
             </>
           ),
         };
@@ -389,24 +342,6 @@ export function ContactsScreen() {
                         onClick={() => setPending({ kind: "delete", tag: g.groupTag })}
                       >
                         Descartar contatos deste grupo
-                      </button>
-                      <button
-                        type="button"
-                        className="group-delete-link danger"
-                        disabled={busy}
-                        title="APAGA DE VEZ do banco os contatos sem opt-out (com conversas, mensagens e jobs). Quem deu SAIR é preservado (descartado). Irreversível."
-                        onClick={() => setPending({ kind: "purge", tag: g.groupTag })}
-                      >
-                        Apagar permanentemente (preserva quem saiu)
-                      </button>
-                      <button
-                        type="button"
-                        className="group-delete-link danger"
-                        disabled={busy}
-                        title="APAGA DE VEZ TODOS os contatos do grupo, INCLUSIVE quem deu SAIR (perde o opt-out — risco anti-ban). Irreversível e sem backup."
-                        onClick={() => setPending({ kind: "hardDelete", tag: g.groupTag })}
-                      >
-                        Apagar tudo permanentemente
                       </button>
                     </div>
                   </div>

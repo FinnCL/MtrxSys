@@ -1,4 +1,3 @@
-using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Domain.Campaigns;
@@ -60,45 +59,6 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         await db.Contacts
             .Where(c => c.GroupTag == groupTag && c.DeletedAt == null)
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.DeletedAt, now), ct);
-
-    // Purge SEGURO do grupo: apaga DE VEZ quem NÃO tem opt-out (com as filhas) e mantém quem deu
-    // "SAIR" como soft delete (preserva a supressão — anti-ban/LGPD). Transacional: ou faz tudo, ou
-    // nada. Retorna (apagados, preservados por opt-out).
-    public async Task<(int Purged, int KeptOptedOut)> PurgeByGroupTagAsync(string groupTag, DateTimeOffset now, CancellationToken ct)
-    {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        // Quem deu opt-out NÃO é apagado: vira soft delete (some da UI, mas o número segue suprimido).
-        var keptOptedOut = await db.Contacts
-            .Where(c => c.GroupTag == groupTag && c.OptOutAt != null && c.DeletedAt == null)
-            .ExecuteUpdateAsync(s => s.SetProperty(c => c.DeletedAt, now), ct);
-        // Os demais (sem opt-out) são apagados fisicamente, junto das linhas-filhas.
-        var purged = await HardDeleteContactsAsync(c => c.GroupTag == groupTag && c.OptOutAt == null, ct);
-        await tx.CommitAsync(ct);
-        return (purged, keptOptedOut);
-    }
-
-    // Apaga DE VEZ todos os contatos do grupo (inclusive opt-out) + filhas. Irreversível. Transacional.
-    public async Task<int> HardDeleteByGroupTagAsync(string groupTag, CancellationToken ct)
-    {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        var deleted = await HardDeleteContactsAsync(c => c.GroupTag == groupTag, ct);
-        await tx.CommitAsync(ct);
-        return deleted;
-    }
-
-    // Núcleo do hard delete: apaga as filhas que NÃO caem por cascata de FK (dispatch_jobs e
-    // conversations não têm FK pro contato → seriam órfãs) e depois os contatos. As chat_messages
-    // caem por cascata ao apagar a conversation; contact_notes/stage_changes/tag_assignments caem
-    // por cascata ao apagar o contato. Usa EXISTS no conjunto-alvo (subconsulta) — traduz sempre e
-    // é set-based (sem lista de ids em memória). Os contatos são apagados por último, então o alvo
-    // ainda existe quando as filhas são removidas. Deve rodar dentro de uma transação (ver chamadores).
-    private async Task<int> HardDeleteContactsAsync(Expression<Func<Contact, bool>> match, CancellationToken ct)
-    {
-        var targets = db.Contacts.Where(match);
-        await db.DispatchJobs.Where(j => targets.Any(c => c.Id == j.ContactId)).ExecuteDeleteAsync(ct);
-        await db.Conversations.Where(cv => targets.Any(c => c.Id == cv.ContactId)).ExecuteDeleteAsync(ct);
-        return await db.Contacts.Where(match).ExecuteDeleteAsync(ct);
-    }
 
     // "Renovar lista": zera o LastSentAt de quem tinha recebido, pra o selo voltar a "Novo"
     // junto com a fila zerada. Não toca em Stage/OptOut (respondeu/saiu continuam).

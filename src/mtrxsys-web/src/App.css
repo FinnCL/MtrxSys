@@ -328,15 +328,12 @@ input[type="checkbox"], input[type="radio"] {
 .leave-btn { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 6px 14px; font-size: 13px; flex-shrink: 0; }
 .leave-btn:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
 /* Excluir contatos do grupo: link discreto, só dentro do grupo aberto (evita miss-click). */
-.group-delete-row { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; }
+.group-delete-row { display: flex; justify-content: flex-end; margin-top: 10px; }
 .group-delete-link {
   background: transparent; border: none; cursor: pointer;
   color: var(--muted); font-size: 12px; padding: 2px 4px;
 }
 .group-delete-link:hover:not(:disabled) { color: var(--danger); background: transparent; text-decoration: underline; }
-/* Permanentes (irreversíveis): já saem em vermelho pra sinalizar o peso da ação. */
-.group-delete-link.danger { color: var(--danger); }
-.group-delete-link.danger:hover:not(:disabled) { text-decoration: underline; }
 .topbar button { background: transparent; color: var(--muted); padding: 4px 8px; }
 .topbar button:hover { color: var(--fg); background: var(--bg-3); }
 

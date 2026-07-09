@@ -260,39 +260,6 @@ public static class ContactsEndpoints
             return Results.Ok(new { deleted });
         });
 
-        // PERMANENTE (irreversível) — purge SEGURO: apaga FISICAMENTE do banco os contatos do grupo
-        // SEM opt-out (com conversas, mensagens e jobs), e mantém quem deu "SAIR" só como descartado
-        // (soft) pra preservar a supressão anti-ban. Libera espaço sem risco de re-disparar pra quem saiu.
-        group.MapPost("/purge-by-group", async (
-            DeleteByGroupRequest req,
-            IContactRepository contacts,
-            IClock clock,
-            CancellationToken ct) =>
-        {
-            if (string.IsNullOrWhiteSpace(req.GroupTag))
-            {
-                return Results.Problem("groupTag é obrigatório", statusCode: 400);
-            }
-            var (purged, keptOptedOut) = await contacts.PurgeByGroupTagAsync(req.GroupTag.Trim(), clock.UtcNow, ct);
-            return Results.Ok(new { purged, keptOptedOut });
-        });
-
-        // PERMANENTE (irreversível) — apaga TUDO: remove FISICAMENTE do banco TODOS os contatos do
-        // grupo, INCLUSIVE quem deu "SAIR" (perde a marca de opt-out — risco anti-ban), com conversas,
-        // mensagens e jobs. Sem volta e sem backup.
-        group.MapPost("/hard-delete-by-group", async (
-            DeleteByGroupRequest req,
-            IContactRepository contacts,
-            CancellationToken ct) =>
-        {
-            if (string.IsNullOrWhiteSpace(req.GroupTag))
-            {
-                return Results.Problem("groupTag é obrigatório", statusCode: 400);
-            }
-            var deleted = await contacts.HardDeleteByGroupTagAsync(req.GroupTag.Trim(), ct);
-            return Results.Ok(new { deleted });
-        });
-
         // Cadastro manual: digita/cola uma lista de números (origem NÃO confiável, ao contrário do
         // import de grupo). Normaliza pra E.164, auto-corrige o 9º dígito quando dá, dedup pelo
         // E.164 e devolve o status de cada linha. Números avulsos caem no grupo "Avulsos" por padrão.

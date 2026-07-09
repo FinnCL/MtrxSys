@@ -248,18 +248,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ groupTag }),
     }),
-  // PERMANENTE — purge seguro: apaga de vez os SEM opt-out; quem deu "SAIR" fica só descartado (soft).
-  purgeGroupContacts: (groupTag: string) =>
-    request<{ purged: number; keptOptedOut: number }>("/api/contacts/purge-by-group", {
-      method: "POST",
-      body: JSON.stringify({ groupTag }),
-    }),
-  // PERMANENTE — apaga TUDO do grupo (inclusive quem deu opt-out). Irreversível.
-  hardDeleteGroupContacts: (groupTag: string) =>
-    request<{ deleted: number }>("/api/contacts/hard-delete-by-group", {
-      method: "POST",
-      body: JSON.stringify({ groupTag }),
-    }),
   getContact: (id: string) => request<ContactDetail>(`/api/contacts/${id}`),
   patchContact: (id: string, payload: { stage?: Stage; addTags?: string[]; removeTags?: string[] }) =>
     request<Contact>(`/api/contacts/${id}`, {
