@@ -8,6 +8,9 @@ services:
   postgres:
     container_name: mtrxe2e-postgres
     ports: !override ["15432:5432"]
+  redis:
+    container_name: mtrxe2e-redis
+    ports: !override ["16379:6379"]
   waha:
     container_name: mtrxe2e-waha
     ports: !override ["13000:3000"]

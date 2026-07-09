@@ -1,6 +1,11 @@
-# TEMPORARIO: testa engine WEBJS (Chromium real) + debug, pra ver se o WhatsApp para de dar 401.
+# WEBJS: engine que NÃO tem o bug do tctoken/463 (WAHA #2050 confirma). webVersion via app cura o VERSION.
 services:
   waha:
     environment:
       WAHA_LOG_LEVEL: debug
       WHATSAPP_DEFAULT_ENGINE: WEBJS
+      WAHA_WEBJS_WEB_VERSION: "2.3000.1042833424-alpha"
+  api:
+    environment:
+      Waha__WebVersion: "2.3000.1042833424-alpha"
+      Waha__WebVersionCacheType: "remote"

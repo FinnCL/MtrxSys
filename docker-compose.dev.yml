@@ -19,14 +19,6 @@ services:
       # Em modo dev (Vite dev server) as env vars sao lidas em runtime — espelha o build-arg
       # do docker-compose.yml pra a aba mostrar "MtrxSys A" tambem em dev mode.
       VITE_APP_LABEL: "A"
-      # DEV ESPELHA PROD: as mesmas vars da aba "Celular" que o docker-compose.yml passa como
-      # build-arg. Setando PHONE_VIEW_URL_1 (e afins) no .env, o hot-reload reproduz a condição de
-      # PRODUÇÃO (tela do emulador configurada) — assim você VÊ o comportamento real no localhost,
-      # sem subir pra prod. Vazias (default) = como hoje (sem tela embutida).
-      VITE_EMULATOR_URL: ${PHONE_VIEW_URL_1:-}
-      VITE_EMULATOR_KIND: ${PHONE_VIEWER_KIND_1:-}
-      VITE_PHONE_SERVER: ${PHONE_SERVER_OPTION_1:-}
-      VITE_EMULATOR_UDID: ${PHONE_UDID_1:-}
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 
   # Backend com hot-reload (dotnet watch). Reaproveita tudo do docker-compose.yml (env, ports,
