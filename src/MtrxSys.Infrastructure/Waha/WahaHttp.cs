@@ -65,16 +65,19 @@ internal sealed class WahaHttp(HttpClient http, IOptions<WahaOptions> opts)
         return WahaParsing.BuildWebhooks(url, opts.Value.WebhookEvents, opts.Value.WebhookToken);
     }
 
-    // Config do engine NOWEB (null = não envia → mantém default do WAHA). markOnline=false = companion
-    // PASSIVO (não se anuncia online) — tweak anti-remoção-de-aparelho pra conta nova. Campo bate com o
-    // NowebConfig do WAHA. Vai no config.noweb da sessão.
-    public object? NowebConfigOrNull()
+    // Config do engine NOWEB. Vai no config.noweb da sessão (na CRIAÇÃO). Sempre retorna não-null
+    // porque o STORE é OBRIGATÓRIO:
+    //   store.enabled + fullSync = o companion sincroniza o ESTADO da conta (chats/grupos/relações).
+    // SEM isso: os endpoints de chat/contatos dão 400 E — comprovado — o envio a um co-membro dá 463,
+    // porque o vinculado é um device "magro" que não sabe que a conta está no grupo (o WhatsApp trata
+    // como frio). Com o full_sync o companion baixa o histórico e passa a mandar como co-membro.
+    // markOnline=false (se configurado) = companion PASSIVO (não se anuncia online).
+    public object NowebConfig()
     {
-        if (opts.Value.NowebMarkOnline is not { } markOnline)
-        {
-            return null;
-        }
-        return new { markOnline };
+        var store = new { enabled = true, fullSync = true };
+        return opts.Value.NowebMarkOnline is { } markOnline
+            ? new { markOnline, store }
+            : new { store };
     }
 
     public string? NormalizedProxyServer() => NormalizeServer(opts.Value.ProxyServer);

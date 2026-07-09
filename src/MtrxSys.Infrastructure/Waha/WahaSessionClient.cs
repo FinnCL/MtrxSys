@@ -116,11 +116,7 @@ internal sealed class WahaSessionClient(WahaHttp http)
         {
             config["webhooks"] = webhooks;
         }
-        var noweb = http.NowebConfigOrNull();
-        if (noweb is not null)
-        {
-            config["noweb"] = noweb;
-        }
+        config["noweb"] = http.NowebConfig();
         object payload = config.Count == 0
             ? new { name = sessionId, start = true }
             : new { name = sessionId, start = true, config };
@@ -267,11 +263,7 @@ internal sealed class WahaSessionClient(WahaHttp http)
         {
             config["proxy"] = proxy!;
         }
-        var noweb = http.NowebConfigOrNull();
-        if (noweb is not null)
-        {
-            config["noweb"] = noweb;
-        }
+        config["noweb"] = http.NowebConfig();
 
         using var putReq = http.NewRequest(HttpMethod.Put, $"api/sessions/{WahaHttp.Esc(sessionId)}");
         putReq.Content = JsonContent.Create(new { name = sessionId, config }, options: WahaHttp.Json);
