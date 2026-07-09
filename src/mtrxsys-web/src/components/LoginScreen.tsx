@@ -14,8 +14,10 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
 
 export function LoginScreen() {
   const { login } = useAuth();
-  const [email, setEmail] = useState("admin@local");
-  const [password, setPassword] = useState("admin123!");
+  // Campos VAZIOS por padrão (segurança): não pré-preencher credenciais no formulário. O navegador
+  // ainda pode salvar/preencher via autoComplete (username/current-password) se o usuário quiser.
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
