@@ -467,9 +467,9 @@ public static class CampaignsEndpoints
                 sentAt = i.SentAt,
                 errorReason = i.ErrorReason,
                 attemptCount = i.AttemptCount,
-                // Legado (ImportedByPhone null) → tratado como do chip atual (não marca); só é "outro
-                // chip" quem tem marca EXPLÍCITA de um chip diferente.
-                fromCurrentChip = currentChip is null || i.ImportedByPhone is null
+                // ESTRITO: só "do chip atual" quando a marca bate com o chip conectado. Legado (sem
+                // marca) OU de outro chip → cinza, sem envio.
+                fromCurrentChip = currentChip is null
                     || string.Equals(i.ImportedByPhone, currentChip, StringComparison.Ordinal),
             }));
         });
