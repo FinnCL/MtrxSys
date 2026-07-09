@@ -115,7 +115,7 @@ public sealed class WahaProxyConfigE2ETests
     {
         // Chip JÁ pareado que caiu pra STOPPED (blip / recreate da api): NÃO aplicar proxy nem religar.
         // Religar uma conta pareada (mesmo parada) por outro IP -> reconecta por IP novo -> RESTRIÇÃO.
-        // Só o webhook é garantido (PUT sem proxy). Era o furo do guard "≠ Working": Stopped escapava.
+        // Nada é tocado — nem PUT nem restart: o guard anti-logout só age em SCAN_QR_CODE (Stopped/Working ficam intactos).
         var (client, handler) = Build(ProxyOpts(), req =>
         {
             if (req.Method == HttpMethod.Get)
@@ -128,9 +128,9 @@ public sealed class WahaProxyConfigE2ETests
         await client.EnsureWebhookConfiguredAsync(
             "default", "http://api:8080/webhooks/waha", ["message"], null, CancellationToken.None);
 
-        var put = handler.Calls.Single(c => c.Method == "PUT" && c.Path == "/api/sessions/default");
-        put.Body.Should().NotContain("\"proxy\""); // webhook garantido, mas SEM proxy
-        handler.Calls.Should().NotContain(c => c.Path.EndsWith("/restart", StringComparison.Ordinal)); // e sem religar
+        // Guard anti-logout: em STOPPED (fora de SCAN_QR_CODE) a sessão NÃO é tocada — sem PUT e sem restart.
+        handler.Calls.Should().NotContain(c => c.Method == "PUT" && c.Path == "/api/sessions/default");
+        handler.Calls.Should().NotContain(c => c.Path.EndsWith("/restart", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -158,10 +158,11 @@ public sealed class WahaProxyConfigE2ETests
     [Fact]
     public async Task EnsureWebhook_sem_proxy_configurado_nao_manda_proxy_nem_religa()
     {
-        // Sem ProxyServer: comportamento antigo preservado — PUT só com webhook, nenhum restart.
+        // Sem ProxyServer, numa sessão em SCAN_QR_CODE (onde o PUT é seguro): o PUT leva SÓ o webhook
+        // (nenhum proxy) e não há restart (restart só quando applyProxy && proxy divergente).
         var (client, handler) = Build(new WahaOptions(), req =>
             req.Method == HttpMethod.Get
-                ? (HttpStatusCode.OK, """{ "name":"default","status":"WORKING","config":{ "webhooks":[] } }""")
+                ? (HttpStatusCode.OK, """{ "name":"default","status":"SCAN_QR_CODE","config":{ "webhooks":[] } }""")
                 : (HttpStatusCode.OK, "{}"));
 
         await client.EnsureWebhookConfiguredAsync(
