@@ -19,6 +19,7 @@ internal sealed class ContactConfiguration : IEntityTypeConfiguration<Contact>
         b.Navigation(x => x.Phone).IsRequired();
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(200);
         b.Property(x => x.GroupTag).HasColumnName("group_tag").HasMaxLength(80);
+        b.Property(x => x.ImportedByPhone).HasColumnName("imported_by_phone").HasMaxLength(20);
         b.Property(x => x.Theme).HasColumnName("theme").HasMaxLength(80);
         b.Property(x => x.OptInAt).HasColumnName("opt_in_at");
         b.Property(x => x.OptOutAt).HasColumnName("opt_out_at");

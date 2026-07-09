@@ -7,6 +7,11 @@ public sealed class Contact : Entity<Guid>
     public PhoneNumber Phone { get; private set; } = null!;
     public string? Name { get; private set; }
     public string? GroupTag { get; private set; }
+    /// <summary>Número (E164) do chip que estava CONECTADO quando este contato foi importado — ou seja,
+    /// o chip que compartilha grupo com ele. O disparo só manda pros contatos do chip conectado no
+    /// momento (co-membros dele); os de outros chips são frios → pulados (anti-463). Re-importar com
+    /// outro chip "move" o contato pra ele. null = legado/sem marca (tratado como não-do-chip-atual).</summary>
+    public string? ImportedByPhone { get; private set; }
     public string? Theme { get; private set; }
     public DateTimeOffset? OptInAt { get; private set; }
     public DateTimeOffset? OptOutAt { get; private set; }
@@ -19,7 +24,7 @@ public sealed class Contact : Entity<Guid>
 
     private Contact() { }
 
-    public static Contact Create(Guid id, PhoneNumber phone, string? name, string? groupTag, string? theme, DateTimeOffset? optInAt)
+    public static Contact Create(Guid id, PhoneNumber phone, string? name, string? groupTag, string? theme, DateTimeOffset? optInAt, string? importedByPhone = null)
     {
         return new Contact
         {
@@ -29,6 +34,7 @@ public sealed class Contact : Entity<Guid>
             GroupTag = groupTag,
             Theme = theme,
             OptInAt = optInAt,
+            ImportedByPhone = importedByPhone,
             Stage = ContactStage.Lead,
         };
     }
@@ -50,7 +56,7 @@ public sealed class Contact : Entity<Guid>
     /// estava sem. Não move entre grupos (só preenche quando vazio). Retorna true se algo mudou —
     /// é a forma de trazer de volta um contato descartado, que some da lista e não teria como
     /// reativar de outro jeito.</summary>
-    public bool ReimportInto(string? groupTag)
+    public bool ReimportInto(string? groupTag, string? importedByPhone = null)
     {
         var changed = false;
         if (DeletedAt is not null)
@@ -61,6 +67,14 @@ public sealed class Contact : Entity<Guid>
         if (string.IsNullOrWhiteSpace(GroupTag) && !string.IsNullOrWhiteSpace(groupTag))
         {
             GroupTag = groupTag;
+            changed = true;
+        }
+        // Re-importar com um chip DIFERENTE "move" o contato pra ele: passa a ser co-membro DESTE chip
+        // (que está no grupo agora), então o disparo deste chip pode mandar pra ele. É como o operador
+        // "ativa" um contato antigo pro chip atual — só re-importar do grupo com o chip conectado.
+        if (!string.IsNullOrWhiteSpace(importedByPhone) && !string.Equals(ImportedByPhone, importedByPhone, StringComparison.Ordinal))
+        {
+            ImportedByPhone = importedByPhone;
             changed = true;
         }
         return changed;

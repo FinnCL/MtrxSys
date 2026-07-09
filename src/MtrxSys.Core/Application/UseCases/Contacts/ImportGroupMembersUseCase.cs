@@ -82,7 +82,7 @@ public sealed class ImportGroupMembersUseCase(
                     // descartado e garante o grupo (ex.: contato criado pelo sync sem grupo).
                     // Sem isso, um contato descartado ficava num beco sem saída (some da lista,
                     // sem como reativar pela interface).
-                    if (existing.ReimportInto(tag))
+                    if (existing.ReimportInto(tag, ownNumber))
                     {
                         await contacts.UpdateAsync(existing, ct);
                         imported++;
@@ -100,7 +100,10 @@ public sealed class ImportGroupMembersUseCase(
                     name: member.Name,
                     groupTag: tag,
                     theme: null,
-                    optInAt: clock.UtcNow);
+                    optInAt: clock.UtcNow,
+                    // Marca o chip que importou (= o chip conectado, co-membro do grupo). O disparo só
+                    // manda pros contatos do chip conectado; assim, trocar de chip não dispara frio.
+                    importedByPhone: ownNumber);
 
                 await contacts.AddAsync(contact, ct);
                 known[phone.E164] = contact; // telefone repetido no mesmo grupo reaproveita o contato

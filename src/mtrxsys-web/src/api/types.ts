@@ -90,6 +90,11 @@ export interface Contact {
   // Consta no registro compartilhado (tratado por outro ambiente). Vem false quando o
   // recurso está desligado. Vira selo só quando não houve envio local (ver contactStatusBadge).
   sentElsewhere: boolean;
+  // Chip que importou o contato (número). Null = legado/sem marca.
+  importedByPhone: string | null;
+  // true = importado pelo chip CONECTADO agora → pode disparar. false = de outro chip/legado →
+  // FRIO pra este chip (o disparo pula, anti-463). O front mostra os false em CINZA com selo "outro chip".
+  fromCurrentChip: boolean;
 }
 
 export interface ContactNote {

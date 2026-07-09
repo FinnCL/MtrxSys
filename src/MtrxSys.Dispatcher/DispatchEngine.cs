@@ -53,8 +53,11 @@ public sealed class DispatchEngine(
         // Modo de disparo (persistido): só salvamos o contato na agenda do EMULADOR no modo Emulator.
         // Em WahaOnly (aparelho físico) o emulador NÃO é o aparelho em uso — salvar lá seria ~5 docker
         // exec INÚTEIS por envio (falham/são no-op, com latência e spam de log). Lido 1x por ciclo.
-        var saveContactsToEmulator =
-            (await systemState.GetAsync(ct)).DispatchMode == PhoneDispatchMode.Emulator;
+        var sysStateSnapshot = await systemState.GetAsync(ct);
+        var saveContactsToEmulator = sysStateSnapshot.DispatchMode == PhoneDispatchMode.Emulator;
+        // Número do chip CONECTADO agora (reconciliado logo acima). O gate-por-chip usa isto pra só
+        // disparar pros contatos que ESTE chip importou (co-membros dele). Lido 1x por ciclo.
+        var connectedPhone = sysStateSnapshot.WarmupPhone;
 
         while (!ct.IsCancellationRequested)
         {
@@ -176,6 +179,20 @@ public sealed class DispatchEngine(
             if (contact.DeletedAt is not null)
             {
                 job.MarkSkipped("descartado");
+                await uow.SaveChangesAsync(ct);
+                skipped++;
+                continue;
+            }
+            // GATE POR CHIP (anti-463): só envia pros contatos que o chip CONECTADO agora importou
+            // (co-membros dele). Contato de outro chip — ou legado (ImportedByPhone null) — é FRIO pra
+            // este chip → daria 463. Então PULA (não envia). connectedPhone null (não deu pra ler o
+            // número) → não bloqueia; o number-check é o backstop. Re-importar o grupo com o chip atual
+            // "move" o contato pra ele (ImportedByPhone atualiza) e o habilita.
+            if (dispatchOpts.Value.OnlyCurrentChipContacts
+                && connectedPhone is not null
+                && !string.Equals(contact.ImportedByPhone, connectedPhone, StringComparison.Ordinal))
+            {
+                job.MarkSkipped("contato não é do chip conectado (evita 463)");
                 await uow.SaveChangesAsync(ct);
                 skipped++;
                 continue;

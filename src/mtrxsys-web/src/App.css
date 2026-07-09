@@ -605,6 +605,13 @@ input[type="checkbox"], input[type="radio"] {
 .contacts-table th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
 /* esmaece só as colunas de info, mantendo o botão de ação legível/clicável */
 .contacts-table tr.opted-out td:not(:last-child) { opacity: 0.5; }
+/* Contato de OUTRO chip: cinza/desabilitado (o disparo pula, anti-463) — mas o botão de ação fica legível */
+.contacts-table tr.other-chip td:not(:last-child) { opacity: 0.45; }
+.other-chip-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 10px;
+  font-size: 11px; background: var(--bg-3); color: var(--muted); border: 1px solid var(--border);
+  vertical-align: middle; white-space: nowrap;
+}
 .contacts-table .mono { font-family: ui-monospace, monospace; }
 .reactivate-btn { padding: 3px 10px; font-size: 12px; background: var(--bg-3); color: var(--fg); }
 .reactivate-btn:hover { background: var(--accent); }

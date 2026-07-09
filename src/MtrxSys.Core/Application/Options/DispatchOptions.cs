@@ -51,4 +51,11 @@ public sealed class DispatchOptions
     // DDD/9º dígito corretos via libphonenumber). Números estrangeiros são ignorados. É a garantia
     // real de "contatos para brasileiros" — independe de o grupo parecer ou não brasileiro.
     public bool OnlyBrazilianContacts { get; set; } = true;
+
+    // GATE POR CHIP (anti-463): só dispara pros contatos que o chip CONECTADO agora importou (co-membros
+    // dele). Contato de outro chip — ou legado sem marca — é frio pra este chip → daria 463, então é
+    // PULADO (não envia). É a regra "a co-membria é por chip": trocar de chip não pode disparar frio a
+    // lista de outro. Re-importar o grupo com o chip atual "move" os contatos pra ele. false = desliga
+    // (volta a disparar pra qualquer contato do público, arriscando 463 em quem for frio pro chip).
+    public bool OnlyCurrentChipContacts { get; set; } = true;
 }

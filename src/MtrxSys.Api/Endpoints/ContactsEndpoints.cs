@@ -15,8 +15,12 @@ public static class ContactsEndpoints
             string? groupTag,
             IContactRepository contacts,
             ISharedPhoneLedger ledger,
+            ISystemStateRepository state,
             CancellationToken ct) =>
         {
+            // Chip conectado agora — pra marcar quais contatos são "do chip atual" (podem disparar) e
+            // quais são de outro chip (o front mostra em cinza/desabilitado). Null = desconhecido.
+            var currentChip = (await state.GetAsync(ct)).WarmupPhone;
             ContactStage? parsedStage = null;
             if (!string.IsNullOrWhiteSpace(stage))
             {
@@ -36,7 +40,7 @@ public static class ContactsEndpoints
             // Marca quem consta no registro compartilhado (tratado por outro chip). GetSuppressedAsync
             // já retorna vazio quando o recurso está desligado — então isto é no-op nesse caso.
             var suppressed = await ledger.GetSuppressedAsync(list.Select(c => c.Phone.E164).ToArray(), ct);
-            return Results.Ok(list.Select(c => ToDto(c, suppressed.Contains(c.Phone.E164))));
+            return Results.Ok(list.Select(c => ToDto(c, suppressed.Contains(c.Phone.E164), currentChip)));
         });
 
         group.MapGet("/group-tags", async (
@@ -264,7 +268,7 @@ public static class ContactsEndpoints
         return app;
     }
 
-    private static ContactDto ToDto(Contact c, bool sentElsewhere = false) => new(
+    private static ContactDto ToDto(Contact c, bool sentElsewhere = false, string? currentChip = null) => new(
         c.Id,
         c.Phone.E164,
         c.Name,
@@ -275,7 +279,11 @@ public static class ContactsEndpoints
         c.OptInAt,
         c.OptOutAt,
         c.LastSentAt,
-        sentElsewhere);
+        sentElsewhere,
+        c.ImportedByPhone,
+        // Chip conectado desconhecido (null) → true (não desabilita à toa). Conhecido → só é "do chip
+        // atual" se a marca bate com ele.
+        FromCurrentChip: currentChip is null || string.Equals(c.ImportedByPhone, currentChip, StringComparison.Ordinal));
 
     private static ContactNoteDto ToDto(ContactNote n) => new(n.Id, n.ContactId, n.Body, n.CreatedAt, n.CreatedByUserId);
 
@@ -321,7 +329,14 @@ public static class ContactsEndpoints
         // Consta no registro compartilhado (enviado/opt-out em algum ambiente). Só vira selo na UI
         // quando o LastSentAt local é nulo — i.e., foi tratado por OUTRO chip. False quando o
         // recurso está desligado.
-        bool SentElsewhere = false);
+        bool SentElsewhere = false,
+        // Chip (número) que importou o contato. Null = legado/sem marca.
+        string? ImportedByPhone = null,
+        // true = importado pelo chip CONECTADO agora (co-membro dele) → pode disparar. false = de outro
+        // chip ou legado → FRIO pra este chip, o disparo PULA (anti-463). O front mostra os false em
+        // CINZA/desabilitado com selo "outro chip". Quando o chip conectado é desconhecido, vem true
+        // (não desabilita à toa).
+        bool FromCurrentChip = true);
 
     public sealed record ContactNoteDto(Guid Id, Guid ContactId, string Body, DateTimeOffset CreatedAt, Guid CreatedByUserId);
 

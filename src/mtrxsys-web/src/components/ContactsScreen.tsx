@@ -147,11 +147,26 @@ export function ContactsScreen() {
                         </thead>
                         <tbody>
                           {list.map((c) => (
-                            <tr key={c.id} className={c.optOutAt ? "opted-out" : undefined}>
+                            <tr
+                              key={c.id}
+                              className={
+                                c.optOutAt
+                                  ? "opted-out"
+                                  : !c.fromCurrentChip
+                                    ? "other-chip"
+                                    : undefined
+                              }
+                              title={
+                                !c.fromCurrentChip
+                                  ? "Contato de OUTRO chip — o chip conectado agora não está no grupo dele, então o disparo NÃO envia (evita 463). Re-importe o grupo com este chip para habilitar."
+                                  : undefined
+                              }
+                            >
                               <td>{c.name}</td>
                               <td className="mono">{c.phoneE164}</td>
                               <td>
                                 <StatusBadge contact={c} />
+                                {!c.fromCurrentChip && <span className="other-chip-badge">outro chip</span>}
                               </td>
                               <td>
                                 {c.optOutAt ? (
