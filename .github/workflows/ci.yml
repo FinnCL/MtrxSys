@@ -1,0 +1,94 @@
+name: CI
+
+# Roda em todo PR e em push na main. O objetivo é ser o gate ANTES do deploy manual:
+# build estrito (warnings = erros, já configurado no Directory.Build.props) + testes (unit e
+# integração com Postgres real via Testcontainers) + lint/build do front.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Um push novo no mesmo ref cancela o run anterior (economiza minutos).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend · build + testes (unit + integração)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Cache do NuGet. Sem packages.lock.json no repo, então a chave é o hash dos .csproj
+      # + Directory.Build.props (muda quando um pacote/versão muda).
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore MtrxSys.slnx
+
+      - name: Build (Release · warnings = erros)
+        run: dotnet build MtrxSys.slnx -c Release --no-restore
+
+      # Os testes de integração sobem Postgres via Testcontainers, usando o Docker que já vem no
+      # runner ubuntu-latest. Ryuk (reaper do Testcontainers) é dispensável aqui: a VM do job é
+      # efêmera e some no fim — desligá-lo evita um ponto de falha conhecido no ambiente do Actions.
+      - name: Testes (unit + integração)
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
+        run: >
+          dotnet test MtrxSys.slnx -c Release --no-restore
+          --logger "trx;LogFileName=results.trx"
+          --results-directory ${{ github.workspace }}/test-results
+
+      - name: Upload resultados dos testes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ${{ github.workspace }}/test-results
+          if-no-files-found: ignore
+
+  frontend:
+    name: Frontend · lint + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/mtrxsys-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/mtrxsys-web/package-lock.json
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      # Lint é ADVISORY por ora: o repo tem dívida de lint pré-existente (regra react-hooks/refs no
+      # hook de provisionamento, entre outras). `continue-on-error` deixa o CI reportar os problemas
+      # sem bloquear. Quando a dívida for zerada, trocar por um passo que falha (remover a linha).
+      - name: Lint (eslint · advisory)
+        continue-on-error: true
+        run: npm run lint
+
+      # Gate REAL do front: typecheck (tsc -b) + bundle (vite). Erro de tipo ou de build falha o CI.
+      - name: Build (tsc -b + vite)
+        run: npm run build
