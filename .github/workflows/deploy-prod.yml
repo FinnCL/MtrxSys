@@ -1,0 +1,50 @@
+name: Deploy Prod
+
+# Deploy MANUAL e GATED dos 10 stacks de PRODUÇÃO. Número de WhatsApp ao vivo NÃO tem deploy
+# automático: este workflow só roda por botão (workflow_dispatch) e PAUSA para aprovação humana via
+# o GitHub Environment "production" (configure um "required reviewer" em Settings → Environments).
+# Roda o up-all-prod.sh (rebuild dos 10 + Caddy). Requer o secret DEPLOY_SSH_KEY.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DEPLOY_HOST: 198.27.75.37
+  DEPLOY_USER: ubuntu
+  DEPLOY_PATH: /home/ubuntu/MtrxSys
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # TRAVA: exige aprovação de um reviewer configurado no Environment "production" antes de rodar.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configura SSH (chave de deploy + host key fixo)
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          echo "198.27.75.37 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtbgCJnnpRhEEMDs7JOICIbqBFRVRyt53WhdSLYZQGg" > ~/.ssh/known_hosts
+
+      - name: Rsync do código pro servidor (sem tocar segredos/artefatos/dados)
+        run: |
+          rsync -az \
+            --exclude '.git' --exclude 'node_modules' --exclude 'bin' --exclude 'obj' \
+            --exclude 'dist' --exclude 'deploy/.env*' --exclude 'deploy/Caddyfile' \
+            --exclude 'deploy/landing' --exclude '*.tar.gz' \
+            -e "ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes" \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
+
+      - name: Deploy dos 10 stacks (up-all-prod.sh)
+        run: |
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'cd ~/MtrxSys && sed -i "s/\r$//" deploy/up-all-prod.sh deploy/gen-config.sh && bash deploy/up-all-prod.sh'
