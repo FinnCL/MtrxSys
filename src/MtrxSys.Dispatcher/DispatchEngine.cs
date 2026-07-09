@@ -190,9 +190,10 @@ public sealed class DispatchEngine(
             // "move" o contato pra ele (ImportedByPhone atualiza) e o habilita.
             if (dispatchOpts.Value.OnlyCurrentChipContacts
                 && connectedPhone is not null
+                && contact.ImportedByPhone is not null
                 && !string.Equals(contact.ImportedByPhone, connectedPhone, StringComparison.Ordinal))
             {
-                job.MarkSkipped("contato não é do chip conectado (evita 463)");
+                job.MarkSkipped("contato é de outro chip (não co-membro deste) — evita 463");
                 await uow.SaveChangesAsync(ct);
                 skipped++;
                 continue;

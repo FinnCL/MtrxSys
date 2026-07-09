@@ -127,7 +127,8 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
                 ScheduledAt: j.ScheduledAt,
                 SentAt: j.SentAt,
                 ErrorReason: j.ErrorReason,
-                AttemptCount: j.AttemptCount);
+                AttemptCount: j.AttemptCount,
+                ImportedByPhone: c?.ImportedByPhone);
         }).ToList();
     }
 }

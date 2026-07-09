@@ -261,6 +261,9 @@ export interface DispatchReportItem {
   sentAt: string | null;
   errorReason: string | null;
   attemptCount: number;
+  // false = contato de OUTRO chip (o disparo pula, anti-463). O front mostra em cinza + "outro chip".
+  // Legado (sem marca) vem true (não marca à toa).
+  fromCurrentChip: boolean;
 }
 
 export interface DispatchJob {

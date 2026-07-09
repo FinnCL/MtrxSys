@@ -36,4 +36,6 @@ public sealed record DispatchReportItem(
     DateTimeOffset ScheduledAt,
     DateTimeOffset? SentAt,
     string? ErrorReason,
-    int AttemptCount);
+    int AttemptCount,
+    // Chip que importou o contato — pra o relatório marcar "outro chip" (não sai deste chip).
+    string? ImportedByPhone = null);

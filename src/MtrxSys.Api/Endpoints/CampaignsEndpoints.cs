@@ -441,6 +441,7 @@ public static class CampaignsEndpoints
             string? status,
             int? limit,
             IDispatchJobRepository repo,
+            ISystemStateRepository state,
             CancellationToken ct) =>
         {
             DispatchStatus? parsed = null;
@@ -454,6 +455,9 @@ public static class CampaignsEndpoints
             }
             var take = Math.Clamp(limit ?? 1000, 1, 5000);
             var items = await repo.ListReportAsync(parsed, take, ct);
+            // Chip conectado agora — pra marcar no relatório quais itens são de OUTRO chip (não saem
+            // deste chip; o disparo os pula, anti-463). Null (desconhecido) → não marca ninguém.
+            var currentChip = (await state.GetAsync(ct)).WarmupPhone;
             return Results.Ok(items.Select(i => new
             {
                 phone = i.Phone,
@@ -463,6 +467,10 @@ public static class CampaignsEndpoints
                 sentAt = i.SentAt,
                 errorReason = i.ErrorReason,
                 attemptCount = i.AttemptCount,
+                // Legado (ImportedByPhone null) → tratado como do chip atual (não marca); só é "outro
+                // chip" quem tem marca EXPLÍCITA de um chip diferente.
+                fromCurrentChip = currentChip is null || i.ImportedByPhone is null
+                    || string.Equals(i.ImportedByPhone, currentChip, StringComparison.Ordinal),
             }));
         });
 

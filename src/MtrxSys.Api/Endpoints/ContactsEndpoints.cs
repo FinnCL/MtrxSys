@@ -281,9 +281,12 @@ public static class ContactsEndpoints
         c.LastSentAt,
         sentElsewhere,
         c.ImportedByPhone,
-        // Chip conectado desconhecido (null) → true (não desabilita à toa). Conhecido → só é "do chip
-        // atual" se a marca bate com ele.
-        FromCurrentChip: currentChip is null || string.Equals(c.ImportedByPhone, currentChip, StringComparison.Ordinal));
+        // "Do chip atual" (não cinza) quando: chip conectado desconhecido (null), OU o contato é LEGADO
+        // sem marca (ImportedByPhone null — importado antes do feature; não dá pra afirmar que é de
+        // outro chip), OU a marca bate com o chip conectado. Só é "outro chip" (cinza) quando tem marca
+        // EXPLÍCITA de um chip DIFERENTE. Sem isso, todo contato legado apareceria cinza à toa.
+        FromCurrentChip: currentChip is null || c.ImportedByPhone is null
+            || string.Equals(c.ImportedByPhone, currentChip, StringComparison.Ordinal));
 
     private static ContactNoteDto ToDto(ContactNote n) => new(n.Id, n.ContactId, n.Body, n.CreatedAt, n.CreatedByUserId);
 

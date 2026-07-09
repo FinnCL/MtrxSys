@@ -817,13 +817,22 @@ export function CampaignsScreen() {
             </thead>
             <tbody>
               {reportPageRows.map((i, idx) => (
-                <tr key={(reportCurrentPage - 1) * REPORT_PAGE_SIZE + idx}>
+                <tr
+                  key={(reportCurrentPage - 1) * REPORT_PAGE_SIZE + idx}
+                  className={i.fromCurrentChip ? undefined : "other-chip"}
+                  title={
+                    i.fromCurrentChip
+                      ? undefined
+                      : "Contato de OUTRO chip — o chip conectado agora não está no grupo dele, então o disparo NÃO envia (evita 463). Re-importe o grupo com este chip para habilitar."
+                  }
+                >
                   <td className="mono">{i.phone || <span className="muted">-</span>}</td>
                   <td>{i.name || <span className="muted">-</span>}</td>
                   <td>
                     <span className={`stat-chip stat-${i.status.toLowerCase()}`}>
                       {DISPATCH_STATUS_LABELS[i.status]}
                     </span>
+                    {!i.fromCurrentChip && <span className="other-chip-badge">outro chip</span>}
                     {(i.status === "Retrying" || i.status === "Failed") && i.attemptCount > 0 && (
                       <span className="muted small"> · {i.attemptCount + 1}ª tentativa</span>
                     )}
