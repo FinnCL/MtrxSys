@@ -1,14 +1,15 @@
 name: Deploy Homolog
 
-# Auto-deploy no ambiente de HOMOLOGAÇÃO quando o CI passa na main (ou disparo manual). Rsync do
-# código pro OVH + rebuild do stack ISOLADO mtrxhml (up-homolog.sh). NÃO toca nos 10 de prod.
+# Auto-deploy no ambiente de HOMOLOGAÇÃO quando o CI passa na branch STAGING (ou disparo manual).
+# Fluxo: feature → merge/push em `staging` → CI → este deploy atualiza o homolog. `main` é só prod.
+# Rsync do código pro OVH + rebuild do stack ISOLADO mtrxhml (up-homolog.sh). NÃO toca nos 10 de prod.
 # Requer o secret DEPLOY_SSH_KEY (chave privada de deploy). Host/usuário/host-key são públicos e
 # ficam aqui no arquivo (repo privado).
 on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [main]
+    branches: [staging]
   workflow_dispatch:
 
 concurrency:
@@ -29,7 +30,11 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      # workflow_run faz checkout da branch default por padrão; force o commit EXATO que passou no CI
+      # (staging). No disparo manual, github.event.workflow_run é nulo → cai no github.sha do dispatch.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Configura SSH (chave de deploy + host key fixo)
         run: |
