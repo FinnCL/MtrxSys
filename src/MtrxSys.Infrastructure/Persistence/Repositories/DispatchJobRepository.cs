@@ -15,6 +15,12 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
             .OrderBy(j => j.ScheduledAt)
             .FirstOrDefaultAsync(ct);
 
+    public async Task<DateTimeOffset?> GetEarliestPendingScheduledAtAsync(CancellationToken ct) =>
+        await db.DispatchJobs
+            .Where(j => j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)
+            .Select(j => (DateTimeOffset?)j.ScheduledAt)
+            .MinAsync(ct);
+
     public async Task AddAsync(DispatchJob job, CancellationToken ct) =>
         await db.DispatchJobs.AddAsync(job, ct);
 

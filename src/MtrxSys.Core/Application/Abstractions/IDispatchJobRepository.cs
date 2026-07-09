@@ -5,6 +5,9 @@ namespace MtrxSys.Core.Application.Abstractions;
 public interface IDispatchJobRepository
 {
     Task<DispatchJob?> DequeueNextPendingAsync(DateTimeOffset until, CancellationToken ct);
+    /// <summary>Menor ScheduledAt entre os jobs ainda na fila (Pending/Retrying), ou null se a fila
+    /// está vazia. Usado pra enfileirar novos importados NO TOPO (com ScheduledAt anterior a este).</summary>
+    Task<DateTimeOffset?> GetEarliestPendingScheduledAtAsync(CancellationToken ct);
     Task AddAsync(DispatchJob job, CancellationToken ct);
     Task UpdateAsync(DispatchJob job, CancellationToken ct);
     Task<DispatchStats> GetStatsAsync(CancellationToken ct);

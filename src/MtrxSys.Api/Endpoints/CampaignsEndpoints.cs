@@ -194,12 +194,21 @@ public static class CampaignsEndpoints
                 }
             }
             var now = clock.UtcNow;
+            // NOVOS IMPORTADOS NO TOPO DA FILA: DequeueNextPending ordena por ScheduledAt ASC, então
+            // pra os recém-adicionados saírem PRIMEIRO eles precisam de ScheduledAt anterior ao mais
+            // antigo já pendente. Cada lote novo fica antes do anterior → "a cada importação, os novos
+            // ficam no topo". A ordem de importação é preservada entre eles (idx).
+            var earliest = await jobs.GetEarliestPendingScheduledAtAsync(ct);
+            var baseTime = earliest is { } e && e < now ? e : now;
+            var idx = 0;
             foreach (var c in targets)
             {
                 // Rodízio: cada contato recebe uma mensagem sorteada do pote.
                 var tpl = pool[rng.NextInt(0, pool.Count)];
-                var job = DispatchJob.Schedule(Guid.NewGuid(), c.Id, tpl.Id, now);
+                var scheduledAt = baseTime.AddMilliseconds(-(targets.Count - idx));
+                var job = DispatchJob.Schedule(Guid.NewGuid(), c.Id, tpl.Id, scheduledAt);
                 await jobs.AddAsync(job, ct);
+                idx++;
             }
             // Prepara a fila JÁ PAUSADA, no servidor e atômico com os jobs: os jobs nascem
             // Pending, mas o motor não envia enquanto IsManuallyPaused. Garante que NADA sai sem
