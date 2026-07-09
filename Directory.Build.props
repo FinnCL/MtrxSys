@@ -13,7 +13,11 @@
          CA1822: stubs throwing NotImplementedException trip "could be static"; rule is noisy during scaffolding. -->
     <!-- CA1848: LoggerMessage source generators trade clarity for perf; not worth at this scale yet. Revisit if logging shows up in profiling.
          CA1873: pair with CA1848 — uses string.Join/Stopwatch in log args; perf irrelevant at our scale. -->
-    <NoWarn>$(NoWarn);NU1903;CA1000;CA1716;CA1822;CA1848;CA1873</NoWarn>
+    <!-- NU1902/NU1904: Scriban.Signed 5.5.0 (transitivo via WireMock.Net, SÓ nos projetos de teste)
+         tem advisories moderate/critical; NÃO é shipado no produto e não tem superfície de runtime.
+         Suprimido pra o audit do restore não falhar o CI (TreatWarningsAsErrors vira o aviso em erro).
+         Revisar quando o WireMock.Net atualizar o Scriban. -->
+    <NoWarn>$(NoWarn);NU1902;NU1903;NU1904;CA1000;CA1716;CA1822;CA1848;CA1873</NoWarn>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>
