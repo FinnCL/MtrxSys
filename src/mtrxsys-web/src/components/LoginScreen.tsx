@@ -14,10 +14,12 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
 
 export function LoginScreen() {
   const { login } = useAuth();
-  // Campos VAZIOS por padrão (segurança): não pré-preencher credenciais no formulário. O navegador
-  // ainda pode salvar/preencher via autoComplete (username/current-password) se o usuário quiser.
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  // Homolog (VITE_APP_LABEL="HML") abre com os campos VAZIOS — segurança (pedido do operador). Nos
+  // demais ambientes (dev + os 10 de prod) mantém o pré-preenchimento de conveniência; o login real
+  // de prod é pela landing (que já autentica por-chip), então o form direto é atalho de dev/admin.
+  const isHomolog = import.meta.env.VITE_APP_LABEL === "HML";
+  const [email, setEmail] = useState(isHomolog ? "" : "admin@local");
+  const [password, setPassword] = useState(isHomolog ? "" : "admin123!");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
