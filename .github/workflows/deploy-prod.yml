@@ -39,7 +39,7 @@ jobs:
           rsync -az \
             --exclude '.git' --exclude 'node_modules' --exclude 'bin' --exclude 'obj' \
             --exclude 'dist' --exclude 'deploy/.env*' --exclude 'deploy/Caddyfile' \
-            --exclude 'deploy/landing' --exclude '*.tar.gz' \
+            --exclude 'deploy/landing' --exclude 'searxng' --exclude 'tmp' --exclude '*.tar.gz' \
             -e "ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes" \
             ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
 
