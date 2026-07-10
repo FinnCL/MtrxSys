@@ -56,14 +56,16 @@ internal sealed class ConversationRepository(MtrxDbContext db) : IConversationRe
         // O que aparece no Chat:
         //  - grupos (sem contato por natureza) sempre;
         //  - conversas de contato ATIVO (não descartado);
-        //  - conversas órfãs (sem contato) só se tiverem mensagem RECEBIDA — resposta real que
-        //    o @lid não casou com contato (nunca esconder uma resposta).
-        // Some, portanto: contato descartado, e órfã só com mensagem enviada (eco de disparo).
+        //  - QUALQUER conversa com mensagem RECEBIDA — nunca esconder uma resposta, mesmo que o
+        //    contato tenha sido descartado (DeletedAt) OU que o @lid não tenha casado com contato
+        //    (órfã). Antes a exceção só valia pra órfã; um contato descartado que DEPOIS respondia
+        //    sumia da tela (bug: resposta real escondida). Agora vale pros dois casos.
+        // Some, portanto: só conversa SEM nenhuma resposta (contato descartado / eco de disparo enviado).
         q = q.Where(x =>
             x.c.IsGroup
             || (x.contact != null && x.contact.DeletedAt == null)
-            || (x.contact == null && db.ChatMessages.Any(m =>
-                    m.ConversationId == x.c.Id && m.Direction == MessageDirection.Inbound)));
+            || db.ChatMessages.Any(m =>
+                    m.ConversationId == x.c.Id && m.Direction == MessageDirection.Inbound));
 
         if (!string.IsNullOrWhiteSpace(search))
         {
