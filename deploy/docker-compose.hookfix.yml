@@ -1,0 +1,15 @@
+# Token do webhook (X-Webhook-Token) no webhook GLOBAL do WAHA.
+#
+# POR QUÊ: o WAHA tem um webhook global (WHATSAPP_HOOK_URL) que POSTa os eventos (mensagens) pra api.
+# Sem este header, ele posta SEM token e a api recusa com 401 (fail-closed em WebhookEndpoints) —
+# aí NADA aparece no Chat (inbound/ack descartados). Este override injeta o token no header.
+#
+# FORMATO: o WAHA parseia WHATSAPP_HOOK_CUSTOM_HEADERS como "Name:Value" separado por ';' (NÃO é JSON —
+# JSON faz o WAHA crashar no boot; ver GlobalWebhookConfig.getCustomHeaders no /app/dist do container).
+#
+# O token por-stack entra via ${STACK_HOOK_TOKEN}, exportado pelo up-all-prod.sh a cada ambiente
+# (stack 1 = WAHA_HOOK_TOKEN; demais = WAHA<n>_HOOK_TOKEN). Aplicado com -f junto dos composes do stack.
+services:
+  waha:
+    environment:
+      WHATSAPP_HOOK_CUSTOM_HEADERS: "X-Webhook-Token:${STACK_HOOK_TOKEN}"

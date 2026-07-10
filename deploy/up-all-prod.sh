@@ -90,7 +90,11 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   export WEB_EMULATOR_URL="https://phone-${L}.${MTRX_DOMAIN}"
   export "PHONE_VIEW_URL_${n}=https://phone-${L}.${MTRX_DOMAIN}"
   export "OPTOUT_PUBLIC_URL_${n}=https://${L}.${MTRX_DOMAIN}"
-  F=(-f "${COMPOSES[$i]}" -f "${LEDGERS[$i]}" -f deploy/docker-compose.prod.yml)
+  # Token do webhook por-stack no header X-Webhook-Token (via deploy/docker-compose.hookfix.yml). Sem
+  # ele, o webhook GLOBAL do WAHA POSTa os eventos SEM o header e a api recusa 401 (fail-closed) — nada
+  # aparece no Chat. Stack 1 = WAHA_HOOK_TOKEN; demais = WAHA<n>_HOOK_TOKEN.
+  if [ "$n" = "1" ]; then export STACK_HOOK_TOKEN=$(getenv WAHA_HOOK_TOKEN); else export STACK_HOOK_TOKEN=$(getenv "WAHA${n}_HOOK_TOKEN"); fi
+  F=(-f "${COMPOSES[$i]}" -f "${LEDGERS[$i]}" -f deploy/docker-compose.prod.yml -f deploy/docker-compose.hookfix.yml)
   # Stack A: seed + PILOTO redroid (Phone__Engine=redroid). Sem este override, o deploy padrão
   # reverteria o A pra docker-android em silêncio. Some quando o redroid virar o default dos 10.
   [ "$n" = "1" ] && F+=(-f deploy/docker-compose.seed-a.yml -f deploy/docker-compose.redroid-a.yml)
