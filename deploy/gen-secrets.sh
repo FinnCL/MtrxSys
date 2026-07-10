@@ -29,6 +29,10 @@ PHONE_HASH=$(docker run --rm caddy:2-alpine caddy hash-password --plaintext "$PH
 esc=$(printf '%s' "$PHONE_HASH" | sed -e 's/[&/\]/\\&/g')
 sed -i "s#^MTRX_PHONE_BASIC_HASH=.*#MTRX_PHONE_BASIC_HASH=${esc}#" "$OUT"
 
+# Portão de autenticação (usuário + senha + 2FA) — gera a senha, o hash PBKDF2 e o TOTP
+# e preenche as linhas GATE_* do .env.prod. Mostra a senha do portão UMA vez.
+bash gen-gate-secrets.sh "$OUT"
+
 chmod 600 "$OUT"
 echo "──────────────────────────────────────────────────────────────"
 echo "deploy/.env.prod gerado (chmod 600, fora do git)."

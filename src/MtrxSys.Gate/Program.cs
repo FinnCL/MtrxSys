@@ -27,6 +27,14 @@ builder.Services.AddDataProtection()
 
 var app = builder.Build();
 
+// Páginas de autenticação (login, /authz, enroll) NUNCA podem ser cacheadas: uma resposta em cache
+// permitiria pular o portão (ver landing/dashboard servidos do cache do navegador sem re-desafio).
+app.Use(async (ctx, next) =>
+{
+    ctx.Response.Headers.CacheControl = "no-store";
+    await next();
+});
+
 var USER        = (Environment.GetEnvironmentVariable("GATE_USER") ?? "admin").Trim();
 var PW_HASH     = Environment.GetEnvironmentVariable("GATE_PASSWORD_HASH") ?? "";  // formato: iters.b64salt.b64hash
 var TOTP_SECRET = Environment.GetEnvironmentVariable("GATE_TOTP_SECRET") ?? "";    // base32

@@ -1,0 +1,3 @@
+# Scripts de shell SEMPRE em LF: rodam em Linux (servidor de prod/homolog e runners do CI).
+# CRLF quebra o shebang e os here-docs (ex.: gen-secrets.sh, gen-gate-secrets.sh, up-all-prod.sh).
+*.sh text eol=lf

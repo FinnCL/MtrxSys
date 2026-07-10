@@ -41,6 +41,10 @@ fauth() {
   echo
   echo "# Landing (seleção de ambiente) — atrás do portão."
   echo "app.${MTRX_DOMAIN} {"
+  # no-store: a landing NÃO pode ser cacheada. Se o navegador a servir do cache (favorito), a
+  # requisição não chega no Caddy e o forward_auth é PULADO → o portão vira decorativo e um "Sair"
+  # não re-desafia. Forçando revalidação, toda abertura passa pelo /authz (deslogado → login).
+  echo "    header Cache-Control \"no-store\""
   fauth
   echo "    root * /srv/landing"
   echo "    file_server"
@@ -145,4 +149,13 @@ for i in "${!LETTERS[@]}"; do
 done
 CREDS="${CREDS}};</script>"
 sed -i "s#<!--MTRX_CREDS-->#${CREDS}#" landing/index.html
+
+# Fail-closed: nenhum placeholder %%...%% pode sobrar na landing gerada. Se o %%LOGOUT_URL%%
+# escapasse cru, o botão "Sair" faria POST pra .../%%LOGOUT_URL%% → 404 silencioso, a sessão do
+# portão NUNCA seria invalidada e o favorito passaria direto mesmo "deslogado". Aborta o deploy.
+if grep -qE '%%[A-Z_]+%%' landing/index.html; then
+  echo "ERRO: sobrou placeholder não substituído na landing gerada — o 'Sair' (logout) quebraria:"
+  grep -oE '%%[A-Z_]+%%' landing/index.html | sort -u | sed 's/^/  /'
+  exit 1
+fi
 echo "✓ deploy/landing/ gerado (URLs + credenciais pré-preenchidas + botão Sair)."

@@ -48,6 +48,14 @@ guard_secrets() {
     echo "ERRO: há segredo por-stack no VALOR DE DEV (PG=mtrx / JWT dev-only-* / WAHA mtrxsys-dev-key). Gere segredos reais."
     bad=1
   fi
+  # 4) PORTÃO de autenticação (MtrxSys.Gate): sem hash de senha OU sem segredo TOTP, o Gate sobe
+  #    fail-closed e NINGUÉM entra — e como o Caddy põe TODOS os subdomínios atrás do /authz do
+  #    Gate, o sistema ficaria inacessível (502). Recusa subir até o gen-secrets.sh / gen-gate-secrets.sh
+  #    terem preenchido. (É o que garante que "Sair" desloga de verdade: o portão precisa existir.)
+  if [ -z "$(getenv GATE_PASSWORD_HASH)" ] || [ -z "$(getenv GATE_TOTP_SECRET)" ]; then
+    echo "ERRO: GATE_PASSWORD_HASH/GATE_TOTP_SECRET vazios no $ENV_FILE — rode deploy/gen-gate-secrets.sh (gera a senha do portão)."
+    bad=1
+  fi
   [ "$bad" = "0" ] || { echo "Abortei: preencha o $ENV_FILE (deploy/gen-secrets.sh) e rode de novo."; exit 1; }
   echo "✓ segredos de produção conferidos (sem defaults de dev)."
 
@@ -72,10 +80,10 @@ LEDGERS=(docker-compose.ledger.yml docker-compose-2.ledger.yml docker-compose-3.
 export LANDING_ORIGIN="https://app.${MTRX_DOMAIN}"
 EF=(--env-file "$ENV_FILE")
 
-echo "== [1/4] banco compartilhado (ledger) =="
+echo "== [1/5] banco compartilhado (ledger) =="
 docker compose "${EF[@]}" -f docker-compose.shared.yml up -d
 
-echo "== [2/4] base dos 10 ambientes (build) =="
+echo "== [2/5] base dos 10 ambientes (build) =="
 for n in 1 2 3 4 5 6 7 8 9 10; do
   i=$((n-1)); L=${LETTERS[$i]}
   export WEB_PUBLIC_API_URL="https://${L}.${MTRX_DOMAIN}"
@@ -90,7 +98,7 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   docker compose "${EF[@]}" "${F[@]}" up -d --build
 done
 
-echo "== [3/4] Android (KVM) — provisionamento SOB DEMANDA (pela aba \"Celular\") =="
+echo "== [3/5] Android (KVM) — provisionamento SOB DEMANDA (pela aba \"Celular\") =="
 # Os aparelhos virtuais NÃO sobem aqui. Cada ambiente provisiona o SEU Android
 # (container/porta/volume próprios) quando você registra o chip, pela aba "Celular":
 # a API cria o container via docker.sock (DockerCliPhoneOrchestrator). O caminho
@@ -98,7 +106,28 @@ echo "== [3/4] Android (KVM) — provisionamento SOB DEMANDA (pela aba \"Celular
 # casa com "validar 1 chip antes de escalar" — não sobe 10 emuladores ociosos de uma vez.
 echo "   provisione cada Android na aba \"Celular\" ao registrar o chip (ver deploy/README.md)."
 
-echo "== [4/4] Caddy (HTTPS) =="
+echo "== [4/5] portão de autenticação (Gate) =="
+# TEM que subir ANTES do Caddy: o Caddyfile gerado põe app./a..j/phone-*/hml atrás do
+# forward_auth → 127.0.0.1:8099. Se o Gate não estiver no ar, o Caddy dá 502 em tudo; se
+# NÃO subíssemos o Gate aqui, o login ficaria na mão do operador (o bug que deixava a landing
+# pública, sem pedir nada). Aqui ele é parte do deploy e é verificado.
+docker compose "${EF[@]}" -f deploy/docker-compose.gate.yml up -d --build
+echo "   aguardando o Gate responder em 127.0.0.1:8099/healthz ..."
+probe() { curl -fsS "$1" >/dev/null 2>&1 || wget -q -O /dev/null "$1" 2>/dev/null; }
+gate_ok=0
+for _ in $(seq 1 30); do
+  if probe http://127.0.0.1:8099/healthz; then gate_ok=1; break; fi
+  sleep 1
+done
+[ "$gate_ok" = "1" ] || {
+  echo "ERRO: o Gate não respondeu em 127.0.0.1:8099/healthz — abortando ANTES de subir o Caddy"
+  echo "      (senão o Caddy poria os 10 ambientes atrás de um portão morto = 502 em tudo)."
+  echo "      Veja os logs: docker logs mtrx-gate"
+  exit 1
+}
+echo "   ✓ Gate no ar."
+
+echo "== [5/5] Caddy (HTTPS) =="
 bash deploy/gen-config.sh
 docker compose -f deploy/docker-compose.caddy.yml up -d
 
