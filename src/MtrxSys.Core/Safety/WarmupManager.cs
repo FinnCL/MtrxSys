@@ -20,9 +20,21 @@ public sealed class WarmupManager(
     // O índice conta DIAS COM ENVIO, não dias de calendário: dia sem disparo não consome a curva.
     // É o que deixa esta curva encaixar no cronograma sem gambiarra — os dias de conversa humana e
     // de aquecimento cruzado (que não disparam) não gastam degrau, então o 1º dia de disparo pega o
-    // índice 0 sozinho. Sobe ~20% a cada 2 dias, de 15 até o platô de 200/dia em 25 dias de envio.
+    // índice 0 sozinho. Sobe até o platô de 200/dia.
+    //
+    // OS QUATRO PRIMEIROS DEGRAUS [3,5,8,12] NÃO SÃO CHUTE — são o que a produção ensinou. Em
+    // 2026-07-15 um chip novo (+557191072835) foi RESTRINGIDO pelo WhatsApp na 4ª mensagem do 1º dia.
+    // A curva abria em 15 ali; o cronograma que a originou previa 15 só no dia 8 do chip, DEPOIS de
+    // uma semana de conversa humana e maturação cruzada. Aplicar 15 no dia 1 de um chip frio foi o
+    // erro, e ele custou o chip.
+    //
+    // A ressalva honesta, pra ninguém tratar estes números como fórmula: 4 mensagens não é volume,
+    // é PADRÃO. Conta criada no dia, ZERO mensagens recebidas, e a 1ª atividade sendo textos quase
+    // iguais pra quem nunca escreveu pra ela — isso é assinatura de bot com 4, com 3 ou com 1. Se a
+    // causa for essa (e a evidência aponta pra lá), nenhuma curva salva: o que salva é ter conversa
+    // com RESPOSTA antes de automatizar, que é o que o HumanPhaseGate faz e estava desligado.
     private static readonly int[] DefaultCurve =
-        [15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
+        [3, 5, 8, 12, 15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
 
     public async Task<bool> CanSendAsync(CancellationToken ct)
     {
