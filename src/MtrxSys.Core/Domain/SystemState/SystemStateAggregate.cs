@@ -41,6 +41,12 @@ public sealed class SystemStateAggregate : Entity<int>
     // processo de dias). NÃO confunde com o teto diário de disparo (WarmupStartedOn etc.).
     public bool WarmupEngineEnabled { get; private set; }
 
+    // Liga/desliga o ENVIO AUTOMÁTICO da Fase Humana (o robô conversando com o seu círculo pela via
+    // do Chat). Persistido porque é um processo de dias e precisa sobreviver a restart — mesmo
+    // motivo do WarmupEngineEnabled. Só tem efeito enquanto a fase se aplica e não fechou; depois
+    // disso o remetente para sozinho, sem depender deste toggle.
+    public bool HumanPhaseAutoSendEnabled { get; private set; }
+
     // Modo da aba "Celular" (toggle único da UI) — fonte da verdade do que a página renderiza.
     // Persistido pra sobreviver a restart e ao 502 do emulador (antes era derivado do container ligado).
     // Default WahaOnly: o modo mais simples/seguro (WAHA + aparelho real, sem depender do emulador).
@@ -71,6 +77,9 @@ public sealed class SystemStateAggregate : Entity<int>
 
     // Liga/desliga o motor de aquecimento de conversa (botão da UI).
     public void SetWarmupEngineEnabled(bool enabled) => WarmupEngineEnabled = enabled;
+
+    // Liga/desliga o envio automático da Fase Humana (botão do card na aba Celular).
+    public void SetHumanPhaseAutoSendEnabled(bool enabled) => HumanPhaseAutoSendEnabled = enabled;
 
     // Troca o modo da aba "Celular" (toggle único). Persistido pelo endpoint /api/phone/mode.
     public void SetDispatchMode(PhoneDispatchMode mode) => DispatchMode = mode;
@@ -134,6 +143,12 @@ public sealed class SystemStateAggregate : Entity<int>
         }
         // Número diferente → chip novo: reinicia o aquecimento e passa a acompanhar o novo.
         RestartWarmup(today);
+        // Chip NOVO não herda o robô ligado: a primeira atividade de uma conta recém-pareada ser um
+        // envio automático é o padrão que a Fase Humana existe pra evitar — ligar tem que ser uma
+        // decisão consciente, por chip. Fica AQUI, e não no RestartWarmup, porque aquele também é
+        // chamado pelo botão manual "reiniciar aquecimento" no MESMO chip: ali o operador só quer
+        // recomeçar a curva, e desligar o robô junto pararia o aquecimento sem ninguém perceber.
+        HumanPhaseAutoSendEnabled = false;
         WarmupPhone = connectedPhone;
         return true;
     }

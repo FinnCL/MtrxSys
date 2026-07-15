@@ -14,6 +14,7 @@ internal sealed class WahaClient : IWahaClient
     private readonly WahaSessionClient _session;
     private readonly WahaMessagingClient _messaging;
     private readonly WahaGroupsClient _groups;
+    private readonly WahaContactsClient _contacts;
 
     // cache é opcional (default null) pra preservar o ctor de 2 args que os testes E2E usam; no app o
     // DI injeta o IMemoryCache singleton (ActivatorUtilities resolve params opcionais registrados).
@@ -23,6 +24,7 @@ internal sealed class WahaClient : IWahaClient
         _session = new WahaSessionClient(shared);
         _messaging = new WahaMessagingClient(shared);
         _groups = new WahaGroupsClient(shared, _session, cache); // grupos usa a sessão pra saber o próprio número
+        _contacts = new WahaContactsClient(shared);
     }
 
     // Sessão
@@ -69,6 +71,10 @@ internal sealed class WahaClient : IWahaClient
         _messaging.StartTypingAsync(sessionId, phoneOrChatId, ct);
     public Task StopTypingAsync(string sessionId, string phoneOrChatId, CancellationToken ct) =>
         _messaging.StopTypingAsync(sessionId, phoneOrChatId, ct);
+
+    // Contatos
+    public Task<IReadOnlyList<WahaContact>> ListContactsAsync(string sessionId, CancellationToken ct) =>
+        _contacts.ListContactsAsync(sessionId, ct);
 
     // Grupos
     public Task<IReadOnlyList<WahaGroup>> ListGroupsAsync(string sessionId, CancellationToken ct) =>

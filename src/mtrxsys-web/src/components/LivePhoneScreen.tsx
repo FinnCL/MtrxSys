@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type ChipIdentity, type PhoneMode } from "../api/client";
 import { WhatsAppConnect } from "./WhatsAppConnect";
 import { WarmupCard } from "./WarmupCard";
+import { HumanPhaseCard } from "./HumanPhaseCard";
 
 // Aba "Celular" — RECONSTRUÍDA DO ZERO, passo a passo.
 // Baseline (passo 1): o toggle de modo (PERSISTIDO no banco) + o mundo "WAHA + aparelho real físico"
@@ -14,14 +15,18 @@ interface LivePhoneScreenProps {
   udid?: string; // idem — device adb a espelhar.
   showServerOption?: boolean; // idem — setup do Android no servidor.
   onDisconnect?: () => void; // abre a confirmação de desconectar o WhatsApp (só quando conectado).
+  onOpenConversation?: (id: string) => void; // atalho da Fase Humana: leva à conversa na aba Chat.
 }
 
-export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
+export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LivePhoneScreenProps) {
   const [ident, setIdent] = useState<ChipIdentity | null>(null);
   // Acordeão do "Conectar WhatsApp": o QR só MONTA ao abrir. Enquanto fechado, o WhatsAppConnect nem
   // existe → sem o poll de status/QR (perf). A detecção de conexão não depende dele: o refreshIdent
   // abaixo (poll leve de /api/presence/chip) vira `connected` sozinho.
   const [showConnect, setShowConnect] = useState(false);
+  // A Fase Humana está segurando o disparo? Vem do HumanPhaseCard (que já faz o poll) em vez de um
+  // fetch próprio — uma fonte só, sem segundo timer.
+  const [humanPhaseBlocking, setHumanPhaseBlocking] = useState(false);
   // Modo PERSISTIDO da aba (fonte da verdade — vem do banco via /api/phone/mode). null = carregando.
   const [mode, setMode] = useState<PhoneMode | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
@@ -164,8 +169,13 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
           <span className="phone-badge ok">conectado</span>
           <p className="phone-ident-name">{ident?.name || "WhatsApp conectado"}</p>
           <p className="phone-ident-phone">{ident?.phone ?? ""}</p>
+          {/* Durante a Fase Humana o disparo está TRAVADO — dizer "pronto para disparar" aqui faria
+              o operador ir à aba Disparo, mandar, e não ver nada sair. O card logo abaixo explica. */}
           <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>
-            {ident?.proxy ? "Proxy ativo. " : ""}Pronto para disparar. Vá para a aba <b>Disparo</b>.
+            {ident?.proxy ? "Proxy ativo. " : ""}
+            {humanPhaseBlocking
+              ? "Em fase de aquecimento humano — o disparo abre quando a fase fechar (veja abaixo)."
+              : <>Pronto para disparar. Vá para a aba <b>Disparo</b>.</>}
           </p>
           {/* Sensor de entrega: só aparece quando JÁ HOUVE entrega confirmada (delivered > 0) — assim
               não mostra "0%" enganoso numa sessão que ainda não assina message.ack (pareada antes do
@@ -202,6 +212,13 @@ export function LivePhoneScreen({ url, onDisconnect }: LivePhoneScreenProps) {
             </div>
           )}
         </div>
+      )}
+
+      {/* FASE HUMANA (dias 1-3 do chip novo). Fora do `emulatorMode` de propósito, ao contrário do
+          WarmupCard: a fase é do CHIP, não do emulador, e vale nos dois modos. Só faz sentido com
+          chip conectado — sem chip não há fase. O card some sozinho quando não se aplica. */}
+      {connected && (
+        <HumanPhaseCard onOpenConversation={onOpenConversation} onBlockingChange={setHumanPhaseBlocking} />
       )}
 
       {/* Placeholder honesto: o mundo "Com emulador" ainda não foi reconstruído neste baseline. */}

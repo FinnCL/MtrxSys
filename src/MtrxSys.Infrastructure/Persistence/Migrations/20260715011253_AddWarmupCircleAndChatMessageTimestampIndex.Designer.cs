@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MtrxSys.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MtrxSys.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(MtrxDbContext))]
-    partial class MtrxDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260715011253_AddWarmupCircleAndChatMessageTimestampIndex")]
+    partial class AddWarmupCircleAndChatMessageTimestampIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -578,12 +581,6 @@ namespace MtrxSys.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(16)")
                         .HasDefaultValue("WahaOnly")
                         .HasColumnName("phone_dispatch_mode");
-
-                    b.Property<bool>("HumanPhaseAutoSendEnabled")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false)
-                        .HasColumnName("human_phase_auto_send_enabled");
 
                     b.Property<string>("PausedReason")
                         .HasMaxLength(500)

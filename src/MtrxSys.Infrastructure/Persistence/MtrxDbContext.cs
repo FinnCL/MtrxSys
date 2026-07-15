@@ -6,6 +6,7 @@ using MtrxSys.Core.Domain.Groups;
 using MtrxSys.Core.Domain.Messages;
 using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Domain.Users;
+using MtrxSys.Core.Domain.Warmup;
 
 namespace MtrxSys.Infrastructure.Persistence;
 
@@ -24,6 +25,7 @@ public sealed class MtrxDbContext(DbContextOptions<MtrxDbContext> options) : DbC
     public DbSet<ContactTagAssignment> ContactTagAssignments => Set<ContactTagAssignment>();
     public DbSet<ContactStageChange> ContactStageChanges => Set<ContactStageChange>();
     public DbSet<GroupLink> GroupLinks => Set<GroupLink>();
+    public DbSet<WarmupCircleMember> WarmupCircle => Set<WarmupCircleMember>();
     public DbSet<User> Users => Set<User>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

@@ -32,6 +32,9 @@ public static class DependencyInjection
         services.AddOptions<CollectorOptions>().Bind(config.GetSection(CollectorOptions.SectionName));
         services.AddOptions<CircuitBreakerOptions>().Bind(config.GetSection(CircuitBreakerOptions.SectionName));
         services.AddOptions<WarmupOptions>().Bind(config.GetSection(WarmupOptions.SectionName));
+        // Fase Humana (dias 1-3 do chip novo). EffectiveFrom ausente = desligado — é o que mantém os
+        // stacks já em produção intactos.
+        services.AddOptions<HumanPhaseOptions>().Bind(config.GetSection(HumanPhaseOptions.SectionName));
         // Motor de aquecimento de CONVERSA (pool) — distinto do WarmupOptions (teto diário de envio).
         services.AddOptions<WarmupEngineOptions>().Bind(config.GetSection(WarmupEngineOptions.SectionName));
         services.AddOptions<OptOutOptions>().Bind(config.GetSection(OptOutOptions.SectionName));
@@ -122,6 +125,8 @@ public static class DependencyInjection
         services.AddScoped<IContactTagRepository, ContactTagRepository>();
         services.AddScoped<IContactStageChangeRepository, ContactStageChangeRepository>();
         services.AddScoped<IGroupLinkRepository, GroupLinkRepository>();
+        services.AddScoped<IWarmupCircleRepository, WarmupCircleRepository>();
+        services.AddScoped<IHumanPhaseProgressRepository, HumanPhaseProgressRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();
@@ -143,6 +148,7 @@ public static class DependencyInjection
         services.AddScoped<TypingSimulator>();
         services.AddScoped<CircuitBreaker>();
         services.AddScoped<WarmupManager>();
+        services.AddScoped<HumanPhaseGate>();
 
         // Aquecimento de conversa (pool): estado em memória (singleton), banco de frases, fábrica de
         // clientes WAHA por membro (named HttpClient com handler pooled) e o motor (scoped — usa o
@@ -155,6 +161,10 @@ public static class DependencyInjection
         services.AddSingleton<IWarmupContentProvider, TemplateWarmupContentProvider>();
         services.AddSingleton<IPoolWahaClientFactory, MtrxSys.Infrastructure.Warmup.PoolWahaClientFactory>();
         services.AddScoped<WarmupEngine>();
+        // Envio automático da Fase Humana. Distinto do WarmupEngine acima: aquele é o POOL (chip
+        // conversando com os SEUS outros chips, mão dupla); este manda pro círculo de pessoas reais
+        // pela via do Chat, e só existe enquanto a fase de um chip novo não fechou.
+        services.AddScoped<HumanPhaseAutoSender>();
 
         // Alerta operacional (chip offline etc.) por webhook configurável (Slack/Discord/relay). No-op
         // sem Alert:WebhookUrl. Timeout curto: um alerta lento não pode segurar o watch de sessão.

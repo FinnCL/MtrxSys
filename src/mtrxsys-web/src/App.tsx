@@ -51,6 +51,20 @@ function Shell() {
   // Na 1ª vez que detectar o WhatsApp desconectado, cai na aba "Celular" (onde fica a conexão/QR).
   const didInitViewRef = useRef(false);
 
+  // Atalho da Fase Humana (aba Celular) → conversa na aba Chat. Troca de aba PRIMEIRO, pra a
+  // resposta ser imediata; a conversa entra quando chegar. Busca com limit=1 só pra obter a
+  // Conversation (o ChatThread carrega as mensagens sozinho). Se falhar, fica na lista pra escolher
+  // à mão — um atalho que não abriu não é motivo pra quebrar a tela.
+  const openConversation = useCallback(async (id: string) => {
+    setView("chat");
+    try {
+      const { conversation } = await api.getConversationMessages(id, 1, 0);
+      setSelected(conversation);
+    } catch {
+      /* segue na lista */
+    }
+  }, []);
+
   const runSync = useCallback(async (silent = false) => {
     setSyncing(true);
     if (!silent) setSyncMsg(null);
@@ -223,7 +237,7 @@ function Shell() {
       ) : view === "campaigns" ? (
         <CampaignsScreen />
       ) : view === "phone" ? (
-        <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} onDisconnect={wahaWorking === true ? () => setConfirmDisconnect(true) : undefined} />
+        <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} onDisconnect={wahaWorking === true ? () => setConfirmDisconnect(true) : undefined} onOpenConversation={openConversation} />
       ) : (
         <main className="three-col">
           <ConversationList selectedId={selected?.id ?? null} onSelect={setSelected} />

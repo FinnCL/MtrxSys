@@ -251,6 +251,52 @@ export interface WarmupStatus {
   curve: number[];
 }
 
+// FASE HUMANA — dias 1-3 de um chip novo. O disparo fica travado enquanto o operador conversa à mão
+// pela aba Chat; abre sozinho quando bate evidência (gente que respondeu) E dias com atividade.
+// Distinto do WarmupStatus acima: aquele é QUANTO pode sair por dia, este é SE já pode sair algo.
+export interface HumanPhaseStatus {
+  // false = a fase não vale pra este chip (recurso desligado, ou chip anterior à data de corte do
+  // rollout). A UI não renderiza nada — é o caso de todo chip que já estava em produção.
+  applies: boolean;
+  startedOn?: string;
+  satisfied?: boolean;
+  activeDays?: number;   // dias COM atividade de saída (chip parado não conta)
+  minDays?: number;
+  // Conta QUALQUER conversa não-grupo com ida-e-volta, não só o círculo — é o que destrava o
+  // disparo. O círculo abaixo é lista de checagem, não a fonte do gate.
+  qualifiedPeople?: number;
+  minPeople?: number;
+  minInbound?: number;
+  minOutbound?: number;
+  // Robô conversando com o círculo pela via do Chat. Não burla a fase: ele produz saída, e o gate
+  // exige resposta — se ninguém responder, a fase não fecha. Zera na troca de chip (decisão
+  // consciente por chip).
+  autoSendEnabled?: boolean;
+  circle?: HumanPhasePerson[];
+}
+
+export interface HumanPhasePerson {
+  phone: string;
+  name: string | null;
+  conversationId: string | null;  // null = ainda não há conversa com essa pessoa
+  inbound: number;
+  outbound: number;
+  qualified: boolean;
+}
+
+// Contato da agenda do aparelho (via WAHA).
+export interface PhoneContact {
+  phone: string;
+  name: string | null;
+  isMyContact: boolean;  // salvo na agenda (vs. só apareceu num chat)
+}
+
+export interface CircleMember {
+  id: string;
+  phone: string;
+  name: string | null;
+}
+
 export type DispatchJobStatus = "Pending" | "Sent" | "Failed" | "Skipped" | "Retrying";
 
 export interface DispatchReportItem {

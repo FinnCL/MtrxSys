@@ -31,6 +31,14 @@ public interface IWahaClient
     Task<IReadOnlyList<WahaChat>> ListChatsOverviewAsync(string sessionId, int limit, CancellationToken ct);
     Task<IReadOnlyList<WahaMessage>> GetChatMessagesAsync(string sessionId, string chatId, int limit, CancellationToken ct);
 
+    /// <summary>Agenda do aparelho. Devolve TODOS os contatos com a marca IsMyContact (salvo na
+    /// agenda) — quem FILTRA é o chamador, de propósito: se o engine não preencher a marca, um
+    /// filtro aqui viraria lista vazia inexplicável, enquanto assim o dado bruto continua visível.
+    /// Exclui grupos, @lid e o próprio número. Exige o store do NOWEB, que WahaHttp.NowebConfig()
+    /// já liga sempre. Melhor-esforço: sessão fora do ar devolve lista vazia, igual ao
+    /// ListGroupsAsync.</summary>
+    Task<IReadOnlyList<WahaContact>> ListContactsAsync(string sessionId, CancellationToken ct);
+
     Task<IReadOnlyList<WahaGroup>> ListGroupsAsync(string sessionId, CancellationToken ct);
     Task<IReadOnlyList<WahaParticipant>> ListGroupParticipantsAsync(string sessionId, string groupId, CancellationToken ct);
     /// <summary>Faz o número conectado SAIR do grupo. Só 404 (já não é membro ou grupo inexistente)
@@ -76,6 +84,10 @@ public sealed record WahaNumberCheck(bool Exists, string? ChatId);
 // proxy). Opcional pra não quebrar os construtores existentes. Ver indicador de proxy na aba Celular.
 public sealed record WahaSessionSnapshot(
     WahaSessionStatus Status, WahaIdentity? Identity, string? AppliedProxyServer = null);
+
+/// <summary>Contato da agenda do aparelho. IsMyContact = está salvo na agenda (o WAHA também
+/// devolve quem só apareceu num chat, e essa gente não interessa à Fase Humana).</summary>
+public sealed record WahaContact(string PhoneE164, string? Name, bool IsMyContact);
 
 public sealed record WahaGroup(string Id, string Name, int? ParticipantsCount);
 

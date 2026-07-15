@@ -87,6 +87,52 @@ internal static class WahaParsing
         return new WahaGroup(groupNumber, name, count);
     }
 
+    // Mapeia um contato da agenda (/api/contacts/all). Retorna null pra tudo que não é uma PESSOA
+    // real com número: grupo, @lid (número oculto — viraria contato-lixo, mesmo motivo do
+    // PhoneFromParticipant) e o próprio chip (isMe). O nome tenta os três campos que a WAHA expõe,
+    // em ordem de preferência: `name` é o que o operador salvou na agenda, `pushname` é o que a
+    // pessoa escolheu, `shortName` é o resto.
+    public static WahaContact? MapContact(JsonElement c)
+    {
+        var id = c.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
+            ? idEl.GetString()
+            : null;
+        if (string.IsNullOrEmpty(id) ||
+            IsGroupChat(id) ||
+            id.Contains("@lid", StringComparison.OrdinalIgnoreCase) ||
+            IsTrue(c, "isGroup") ||
+            IsTrue(c, "isMe"))
+        {
+            return null;
+        }
+        var phone = RealPhoneOrNull(PhoneFromChatId(id));
+        if (phone is null)
+        {
+            return null;
+        }
+        var name = FirstNonEmpty(c, "name", "pushname", "shortName");
+        return new WahaContact(phone, name, IsTrue(c, "isMyContact"));
+    }
+
+    private static bool IsTrue(JsonElement el, string prop) =>
+        el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.True;
+
+    private static string? FirstNonEmpty(JsonElement el, params string[] props)
+    {
+        foreach (var p in props)
+        {
+            if (el.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String)
+            {
+                var s = v.GetString();
+                if (!string.IsNullOrWhiteSpace(s))
+                {
+                    return s.Trim();
+                }
+            }
+        }
+        return null;
+    }
+
     public static bool IsGroupChat(string? id) =>
         id is not null && WahaChatIdentifier.IsGroup(id);
 
