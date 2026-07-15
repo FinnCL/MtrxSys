@@ -197,6 +197,27 @@ public sealed class DispatchExemptionE2ETests : IAsyncLifetime
         (await owned.ListExemptPhonesAsync(CancellationToken.None)).Should().HaveCount(6);
     }
 
+    // POSSE = ISENÇÃO. Declarar "este grupo é meu" já libera o envio repetido pros membros, num ato
+    // só: o grupo é de conhecidos, é pra isso que ele existe, e pedir a mesma afirmação duas vezes
+    // era cerimônia. Este teste é o contrato — se alguém separar de novo os dois atos, ele quebra.
+    [Fact]
+    public async Task Marcar_como_meu_ja_libera_o_envio_repetido()
+    {
+        await SeedAlreadySentAsync(Friend);   // já recebeu: a trava do LastSentAt o barraria
+        await SeedAlreadySentAsync(Stranger); // idem, e este NÃO está no grupo
+        (await AudienceAsync()).Should().BeEmpty("sanidade: sem posse, os dois estão travados");
+
+        // O que o endpoint POST /claim faz: registra a posse E fotografa os membros, junto.
+        var target = OwnedGroup.Create(Guid.NewGuid(), "120363411066030182", "Amigos", Now);
+        target.EnableDispatchExemption([Friend], Guid.NewGuid);
+        _db.OwnedGroups.Add(target);
+        await _db.SaveChangesAsync();
+
+        var audience = await AudienceAsync();
+        audience.Should().Contain(Friend, "marcar como meu, sozinho, já tem que liberar");
+        audience.Should().NotContain(Stranger, "quem não está no grupo não é alcançado pela marca");
+    }
+
     [Fact]
     public async Task Desfazer_a_posse_derruba_a_isencao_junto()
     {

@@ -351,10 +351,13 @@ export function GroupsScreen() {
   async function toggleClaim(group: Group) {
     setConfirmClaim(null);
     try {
+      // Marcar JÁ liga a dispensa (o servidor fotografa os membros no mesmo ato) — dizer "é meu" e
+      // depois "posso falar de novo" era a mesma afirmação duas vezes. Desmarcar derruba as duas.
+      // O estado vem do que o SERVIDOR confirmou, não de palpite: se a leitura dos membros falhar no
+      // criar-pelo-sistema, ele devolve exempt=false, e a caixa tem que aparecer desligada mesmo.
+      const exempt = group.isMine ? false : (await api.claimGroup(group.id)).exempt;
       if (group.isMine) {
         await api.unclaimGroup(group.id);
-      } else {
-        await api.claimGroup(group.id);
       }
       setRows((prev) =>
         prev.map((r) =>
@@ -365,7 +368,7 @@ export function GroupsScreen() {
                 group: {
                   ...r.group,
                   isMine: !group.isMine,
-                  exemptFromDispatchLimits: group.isMine ? false : r.group.exemptFromDispatchLimits,
+                  exemptFromDispatchLimits: exempt,
                 },
               }
             : r,
@@ -478,13 +481,15 @@ export function GroupsScreen() {
                 grupo que <strong>você criou no seu aparelho</strong>.
                 <br />
                 <br />
-                Isso não muda nada sozinho, mas <strong>habilita</strong> a caixa que dispensa a
-                trava de "já enviei pra esse" para quem está dentro dele. Só marque um grupo de{" "}
+                Quem está dentro dele passa a <strong>poder receber disparo mais de uma vez</strong> —
+                a trava de "já enviei pra esse" deixa de valer pra eles. Só marque um grupo de{" "}
                 <strong>gente conhecida</strong>: marcar um grupo de contatos frios abriria envio
                 repetido para desconhecidos.
                 <br />
                 <br />
-                Quem responder <strong>SAIR</strong> continua fora de qualquer jeito.
+                O que <strong>continua valendo</strong>: quem responder <strong>SAIR</strong> fica
+                fora, números inexistentes seguem barrados e o teto diário do aquecimento não muda.
+                Você pode desligar a repetição na caixa da linha, sem tirar a marca.
               </>
             )
           }

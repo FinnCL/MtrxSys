@@ -38,18 +38,23 @@ public static class GroupsEndpoints
         //
         // Idempotente: declarar de novo devolve o mesmo estado em vez de estourar no índice único —
         // um clique repetido não é erro, é a mesma afirmação.
+        //
+        // JÁ LIGA A ISENÇÃO. Dizer "este grupo é meu" e depois ter que dizer "posso falar de novo com
+        // eles" era pedir a mesma afirmação duas vezes — o grupo é de conhecidos, é pra isso que ele
+        // existe. A chave continua na tela e pode ser desligada; ela só nasce ligada.
         group.MapPost("/{groupId}/claim", async (
             string groupId,
             IWahaClient waha,
             IOwnedGroupRepository owned,
             IOptions<DispatchOptions> dispatch,
+            BrazilPhoneValidator phones,
             IClock clock,
             IUnitOfWork uow,
             CancellationToken ct) =>
         {
             if (await owned.GetByWaGroupIdAsync(groupId, ct) is not null)
             {
-                return Results.Ok(new { claimed = true, alreadyClaimed = true });
+                return Results.Ok(new { claimed = true, alreadyClaimed = true, exempt = true });
             }
 
             // O grupo TEM que existir na listagem do WhatsApp. Sem esta checagem daria pra declarar
@@ -68,9 +73,20 @@ public static class GroupsEndpoints
                 });
             }
 
-            await owned.AddAsync(OwnedGroup.Create(Guid.NewGuid(), found.Id, found.Name, clock.UtcNow), ct);
+            // Posse e isenção numa transação só. Se ler os membros falhar, NADA é gravado: um grupo
+            // "meu" sem isenção seria um estado que a tela promete e o disparo não cumpre — e o
+            // operador só descobriria quando o envio pulasse a pessoa, sem erro nenhum.
+            var snapshot = await ReadMemberPhonesAsync(waha, phones, dispatch.Value.SessionId, groupId, ct);
+            if (snapshot.Problem is { } problem)
+            {
+                return problem;
+            }
+
+            var target = OwnedGroup.Create(Guid.NewGuid(), found.Id, found.Name, clock.UtcNow);
+            target.EnableDispatchExemption(snapshot.Phones, Guid.NewGuid);
+            await owned.AddAsync(target, ct);
             await uow.SaveChangesAsync(ct);
-            return Results.Ok(new { claimed = true, alreadyClaimed = false });
+            return Results.Ok(new { claimed = true, alreadyClaimed = false, exempt = true });
         });
 
         // Desfaz a declaração. O grupo continua intacto no WhatsApp — some só a marca de que é seu.
@@ -118,38 +134,12 @@ public static class GroupsEndpoints
                 return Results.Ok(new { enabled = false, members = 0 });
             }
 
-            // FOTOGRAFA os membros AGORA, do WAHA (a verdade de quem está no grupo). Se o WAHA estiver
-            // fora, a isenção NÃO liga: ligar com lista velha isentaria quem já saiu do grupo, e ligar
-            // com lista vazia acenderia a chave sem isentar ninguém — as duas mentem pro operador.
-            IReadOnlyList<WahaParticipant> members;
-            try
+            var snapshot = await ReadMemberPhonesAsync(waha, phones, dispatch.Value.SessionId, groupId, ct);
+            if (snapshot.Problem is { } problem)
             {
-                members = await waha.ListGroupParticipantsAsync(dispatch.Value.SessionId, groupId, ct);
+                return problem;
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-            {
-                return Results.Problem(
-                    "Não deu pra ler os membros do grupo no WhatsApp agora, então a isenção não foi ligada "
-                    + "(ligar sem saber quem está no grupo isentaria a pessoa errada). Tente de novo.",
-                    statusCode: StatusCodes.Status502BadGateway);
-            }
-            if (members.Count == 0)
-            {
-                return Results.Problem(
-                    "O WhatsApp não devolveu nenhum membro deste grupo, então não há quem isentar.",
-                    statusCode: StatusCodes.Status409Conflict);
-            }
-
-            // MESMA normalização da importação de grupo (ImportGroupMembersUseCase), de propósito: a
-            // isenção é casada contra `Contact.Phone.E164`, e o contato desses membros nasce lá,
-            // desta mesma string do WAHA passada por esta mesma função. Mesma entrada + mesma função
-            // = as duas formas concordam por construção. Guardar o número cru daria uma diferença
-            // silenciosa (a chave acesa e o disparo pulando a pessoa do mesmo jeito) no dia em que a
-            // lib normalizasse algo — e "hoje bate" não é garantia, é coincidência.
-            // NormalizeTrusted (e não Validate) pelo mesmo motivo de lá: número legado que a lib
-            // rejeita (9º dígito ausente em DDD antigo) é preservado como veio em vez de sumir.
-            var normalized = members.Select(m => phones.NormalizeTrusted(m.PhoneE164).E164);
-            target.EnableDispatchExemption(normalized, () => Guid.NewGuid());
+            target.EnableDispatchExemption(snapshot.Phones, Guid.NewGuid);
             await uow.SaveChangesAsync(ct);
             return Results.Ok(new { enabled = true, members = target.Members.Count });
         });
@@ -161,6 +151,7 @@ public static class GroupsEndpoints
             IWahaClient waha,
             IOwnedGroupRepository owned,
             IOptions<DispatchOptions> dispatch,
+            BrazilPhoneValidator phoneNumbers,
             IClock clock,
             IUnitOfWork uow,
             CancellationToken ct) =>
@@ -185,17 +176,40 @@ public static class GroupsEndpoints
             // com um grupo real que o sistema não reconhece como seu — some da seção e a isenção não
             // o alcança. Por isso o registro é parte da resposta, não melhor-esforço: se der erro,
             // ele VÊ, e pode registrar de novo (o POST é idempotente pelo unique do wa_group_id).
-            await owned.AddAsync(
-                OwnedGroup.Create(Guid.NewGuid(), created.Id, created.Name, clock.UtcNow), ct);
+            var target = OwnedGroup.Create(Guid.NewGuid(), created.Id, created.Name, clock.UtcNow);
+
+            // Isenta igual ao "é meu" — criar aqui também é declarar posse, e os dois caminhos têm
+            // que terminar no mesmo estado.
+            //
+            // Lê os membros do WAHA em vez de usar os telefones DIGITADOS, mesmo já os tendo em mãos:
+            // o contato desses membros vai nascer da string que o WAHA devolve, e é contra ela que a
+            // isenção casa. Quem digita "+5571 99107-2835" enquanto o WhatsApp guarda
+            // "+557191072835" criaria uma fotografia que não casa com contato nenhum — chave acesa,
+            // disparo pulando a pessoa, sem erro.
+            //
+            // Falhar aqui NÃO desfaz nada: o grupo já existe no WhatsApp (irreversível) e a posse é o
+            // que importa registrar. Sem a leitura, o grupo nasce SEM isenção e a chave aparece
+            // desligada na tela — estado honesto e que o operador conserta num clique. Melhor que
+            // perder a posse por um hiccup de rede.
+            var snapshot = await ReadMemberPhonesAsync(waha, phoneNumbers, dispatch.Value.SessionId, created.Id, ct);
+            var exempt = snapshot.Problem is null;
+            if (exempt)
+            {
+                target.EnableDispatchExemption(snapshot.Phones, Guid.NewGuid);
+            }
+
+            // O grupo JÁ existe no WhatsApp neste ponto. Se gravar o registro falhar, o operador fica
+            // com um grupo real que o sistema não reconhece como seu — some da seção e a isenção não
+            // o alcança. Por isso o registro é parte da resposta, não melhor-esforço: se der erro,
+            // ele VÊ, e pode registrar de novo (o POST é idempotente pelo unique do wa_group_id).
+            await owned.AddAsync(target, ct);
             await uow.SaveChangesAsync(ct);
 
             return Results.Created(
                 $"/api/groups/{created.Id}",
-                // Nasce SEM isenção: a dispensa das travas de disparo é um ato à parte, e um grupo
-                // não deve ganhá-la só por ter sido criado aqui.
                 new GroupDto(
                     created.Id, created.Name, created.ParticipantsCount,
-                    IsMine: true, ExemptFromDispatchLimits: false));
+                    IsMine: true, ExemptFromDispatchLimits: exempt));
         });
 
         // Telefones de quem está DENTRO do grupo. O client já resolve o número real por trás do @lid
@@ -251,6 +265,44 @@ public static class GroupsEndpoints
         });
 
         return app;
+    }
+
+    // FOTOGRAFA quem está no grupo AGORA, direto do WAHA (a verdade), já na forma em que a isenção
+    // vai ser casada. Usado pelo "é meu" e pelo religar da chave — o mesmo ato nos dois, então mora
+    // num lugar só.
+    //
+    // Se o WAHA estiver fora, NÃO isenta: com lista velha isentaria quem já saiu do grupo, e com
+    // lista vazia acenderia a chave sem isentar ninguém. As duas mentem, e em silêncio — o operador
+    // só descobriria pelo envio que não acontece.
+    //
+    // A normalização é a MESMA da importação de grupo (ImportGroupMembersUseCase), de propósito: a
+    // isenção é casada contra `Contact.Phone.E164`, e o contato desses membros nasce lá, desta mesma
+    // string do WAHA por esta mesma função. Mesma entrada + mesma função = concordam por construção.
+    // NormalizeTrusted (e não Validate) pelo mesmo motivo de lá: número legado que a lib rejeita
+    // (9º dígito ausente em DDD antigo) é preservado como veio em vez de sumir da isenção.
+    private static async Task<(IReadOnlyList<string> Phones, IResult? Problem)> ReadMemberPhonesAsync(
+        IWahaClient waha, BrazilPhoneValidator phones, string sessionId, string groupId, CancellationToken ct)
+    {
+        IReadOnlyList<WahaParticipant> members;
+        try
+        {
+            members = await waha.ListGroupParticipantsAsync(sessionId, groupId, ct);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return ([], Results.Problem(
+                "Não deu pra ler os membros do grupo no WhatsApp agora, então nada foi salvo "
+                + "(marcar sem saber quem está no grupo liberaria envio repetido pra pessoa errada). "
+                + "Tente de novo.",
+                statusCode: StatusCodes.Status502BadGateway));
+        }
+        if (members.Count == 0)
+        {
+            return ([], Results.Problem(
+                "O WhatsApp não devolveu nenhum membro deste grupo, então não há quem isentar.",
+                statusCode: StatusCodes.Status409Conflict));
+        }
+        return ([.. members.Select(m => phones.NormalizeTrusted(m.PhoneE164).E164)], null);
     }
 
     // "+" seguido de 8 a 15 dígitos (faixa do E.164). Mesma normalização mínima do círculo de

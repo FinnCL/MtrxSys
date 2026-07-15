@@ -280,7 +280,7 @@ export const api = {
   // Declara que um grupo EXISTENTE é seu — o caminho normal, já que o grupo de aquecimento nasce no
   // aparelho físico (criar por API num chip frio é sinal de bot). Idempotente.
   claimGroup: (groupId: string) =>
-    request<{ claimed: boolean; alreadyClaimed: boolean }>(
+    request<{ claimed: boolean; alreadyClaimed: boolean; exempt: boolean }>(
       `/api/groups/${encodeURIComponent(groupId)}/claim`,
       { method: "POST" },
     ),
