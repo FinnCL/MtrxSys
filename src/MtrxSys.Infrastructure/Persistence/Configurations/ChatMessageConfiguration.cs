@@ -20,6 +20,10 @@ internal sealed class ChatMessageConfiguration : IEntityTypeConfiguration<ChatMe
         b.Property(x => x.Body).HasColumnName("body").IsRequired();
         b.Property(x => x.Timestamp).HasColumnName("timestamp").IsRequired();
         b.HasIndex(x => new { x.ConversationId, x.Timestamp });
+        // Índice só por timestamp: a Fase Humana varre "tudo desde a âncora do aquecimento", SEM
+        // conversa fixada, e o composto acima não serve (timestamp é a 2ª coluna). Sem isto vira
+        // seq scan sobre o histórico dos chips anteriores do stack, que só cresce.
+        b.HasIndex(x => x.Timestamp);
         b.Property(x => x.MediaUrl).HasColumnName("media_url").HasMaxLength(500);
         b.Ignore(x => x.DomainEvents);
         b.HasOne<Conversation>()

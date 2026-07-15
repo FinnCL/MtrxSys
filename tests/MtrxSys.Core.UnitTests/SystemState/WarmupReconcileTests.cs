@@ -21,6 +21,23 @@ public sealed class WarmupReconcileTests
     }
 
     [Fact]
+    public void First_phone_on_a_fresh_stack_anchors_the_warmup()
+    {
+        // Stack NOVO: nunca houve chip, logo não há marco. Antes disto o WarmupStartedOn ficava
+        // null pra sempre — e a Fase Humana, que só vale pra chip ancorado a partir do corte,
+        // nunca se aplicaria justo ao 1º chip, que é o mais frio de todos. Ancorar aqui é seguro:
+        // sem chip não houve envio, então o índice da curva já era 0 de qualquer forma.
+        var s = SystemStateAggregate.CreateInitial();
+        s.WarmupStartedOn.Should().BeNull();
+
+        var changed = s.ReconcileWarmupPhone("+5511999999999", Today);
+
+        changed.Should().BeFalse();          // não é troca de chip: é o primeiro
+        s.WarmupStartedOn.Should().Be(Today);
+        s.WarmupPhone.Should().Be("+5511999999999");
+    }
+
+    [Fact]
     public void Same_phone_does_not_restart()
     {
         var s = SystemStateAggregate.CreateInitial();

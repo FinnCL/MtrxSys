@@ -23,6 +23,8 @@ internal sealed class SystemStateConfiguration : IEntityTypeConfiguration<System
         b.Property(x => x.WarmupPhone).HasColumnName("warmup_phone").HasMaxLength(32);
         b.Property(x => x.PhonePrimaryLastOnlineUtc).HasColumnName("phone_primary_last_online_utc");
         b.Property(x => x.WarmupEngineEnabled).HasColumnName("warmup_engine_enabled").HasDefaultValue(false);
+        b.Property(x => x.HumanPhaseAutoSendEnabled)
+            .HasColumnName("human_phase_auto_send_enabled").HasDefaultValue(false);
         // Modo da aba "Celular" gravado como TEXTO ('WahaOnly'/'Emulator') pra ficar legível no banco.
         b.Property(x => x.DispatchMode).HasColumnName("phone_dispatch_mode")
             .HasConversion<string>().HasMaxLength(16).HasDefaultValue(PhoneDispatchMode.WahaOnly);

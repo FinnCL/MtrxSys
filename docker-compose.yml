@@ -120,6 +120,12 @@ services:
       # = só loga (docker logs); preenchido = POSTa {text} (Slack/Discord/relay). Label distingue os stacks.
       Alert__WebhookUrl: ${ALERT_WEBHOOK_URL:-}
       Alert__Label: ${ALERT_LABEL:-}
+      # FASE HUMANA (dias 1-3 de um chip NOVO): trava o DISPARO enquanto o operador conversa a mao
+      # pela aba Chat; abre sozinha quando ha evidencia (gente que respondeu) + dias com atividade.
+      # VAZIO = DESLIGADO, e este e o default: sem HUMAN_PHASE_FROM no .env nada muda.
+      # Pra ligar, use uma data >= a do DEPLOY: so chips ANCORADOS a partir dela (pareados ou
+      # re-pareados depois) entram na fase. Chip que ja roda nunca para. Mesma data nos 10 stacks.
+      HumanPhase__EffectiveFrom: ${HUMAN_PHASE_FROM:-}
       Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
       # Busca de grupos por nicho (Coletor) via SearXNG (container abaixo). Vazio = usa Telegram.
       Collector__SearxngBaseUrl: ${COLLECTOR_SEARXNG_URL:-http://searxng:8080}
@@ -180,6 +186,12 @@ services:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
       Waha__BaseUrl: "http://waha:3000"
       Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+      # FASE HUMANA (dias 1-3 de um chip NOVO): trava o DISPARO enquanto o operador conversa a mao
+      # pela aba Chat; abre sozinha quando ha evidencia (gente que respondeu) + dias com atividade.
+      # VAZIO = DESLIGADO, e este e o default: sem HUMAN_PHASE_FROM no .env nada muda.
+      # Pra ligar, use uma data >= a do DEPLOY: so chips ANCORADOS a partir dela (pareados ou
+      # re-pareados depois) entram na fase. Chip que ja roda nunca para. Mesma data nos 10 stacks.
+      HumanPhase__EffectiveFrom: ${HUMAN_PHASE_FROM:-}
       # RAMPA ANTI-BAN — a conta precisa ser AQUECIDA (uso humano no celular ~10 dias) ANTES de
       # automatizar; nunca disparar logo após parear (gatilho nº1 de logout/ban). Delays entre envios:
       # NÃO sobrescrever aqui — o código já tem o default anti-ban (90-240s), uniforme nos 10 stacks.

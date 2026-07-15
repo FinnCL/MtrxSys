@@ -12,6 +12,9 @@ builder.Services.AddSerilog((sp, lc) => lc
 builder.Services.AddInfrastructure(builder.Configuration);
 // Singleton: guarda o estado do "reassentar após reconectar" ENTRE ciclos (o engine é Scoped).
 builder.Services.AddSingleton<DispatchSettleTracker>();
+// Singleton pelo mesmo motivo: latch da Fase Humana entre ciclos (evita recomputar o progresso
+// depois que ela fecha). É só cache — perder num restart apenas recomputa.
+builder.Services.AddSingleton<HumanPhaseTracker>();
 builder.Services.AddScoped<DispatchEngine>();
 builder.Services.AddHostedService<DispatchWorker>();
 

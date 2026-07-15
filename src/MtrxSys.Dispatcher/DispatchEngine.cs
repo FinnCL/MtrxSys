@@ -24,6 +24,8 @@ public sealed class DispatchEngine(
     TypingSimulator typing,
     CircuitBreaker breaker,
     WarmupManager warmup,
+    HumanPhaseGate humanPhase,
+    HumanPhaseTracker humanPhaseTracker,
     ISendAuditRepository audit,
     IConversationRepository conversations,
     IChatMessageRepository messages,
@@ -74,6 +76,18 @@ public sealed class DispatchEngine(
             {
                 metrics.RecordCircuitOpen();
                 log.LogInformation("Circuit breaker open; stopping cycle.");
+                break;
+            }
+
+            // FASE HUMANA (só chip novo, ver HumanPhaseGate): os primeiros dias do chip são de
+            // conversa À MÃO pela aba Chat, e o disparo fica travado até haver evidência (gente que
+            // de fato respondeu) e dias suficientes. Chip frio é quando o WhatsApp olha mais de
+            // perto — template automatizado como PRIMEIRA atividade da conta é assinatura de bot.
+            // Vem ANTES do teto porque é mais forte: o teto diz quanto pode sair, este diz se já
+            // pode sair alguma coisa. Chip anterior ao corte passa direto (produção intacta).
+            if (await IsHumanPhaseBlockingAsync(ct))
+            {
+                metrics.RecordWarmupBlocked();
                 break;
             }
 
@@ -567,6 +581,39 @@ public sealed class DispatchEngine(
     // StatusCode preenchido (o WAHA respondeu) e também não cai aqui.
     private static bool IsSessionDownFailure(Exception ex)
         => ex is HttpRequestException { StatusCode: null };
+
+    // Fase Humana ainda travando o disparo? Ordem pensada pra pagar o mínimo:
+    //  1) a âncora (só a linha de estado, já em cache no ciclo) diz se a fase sequer se aplica —
+    //     é por aqui que TODO chip anterior ao corte sai, sem tocar em chat_messages;
+    //  2) o latch em memória mata a query depois que a fase fechou (ela é monotônica, não reabre);
+    //  3) só então computa o progresso.
+    // Ao contrário do resto do motor, este gate NÃO escreve nada — nem quando a fase fecha. O que
+    // "fecha" é o latch em memória; persistir seria escrever system_state a partir daqui, que é
+    // exatamente o que já causou reenvio duplicado (ver o comentário do commit do envio).
+    private async Task<bool> IsHumanPhaseBlockingAsync(CancellationToken ct)
+    {
+        var anchor = await humanPhase.GetAnchorIfAppliesAsync(ct);
+        if (anchor is not { } since)
+        {
+            return false; // recurso desligado, chip sem marco, ou chip anterior ao corte
+        }
+        if (humanPhaseTracker.IsClosedFor(since))
+        {
+            return false;
+        }
+        var snap = await humanPhase.GetSnapshotAsync(ct);
+        if (snap is null || snap.Satisfied)
+        {
+            humanPhaseTracker.MarkClosedFor(since);
+            return false;
+        }
+        log.LogInformation(
+            "FASE HUMANA em curso (chip de {StartedOn}): {Days}/{MinDays} dias com atividade e "
+            + "{People}/{MinPeople} conversas com ida-e-volta. Disparo TRAVADO — converse pela aba "
+            + "Chat. Abre sozinho quando as duas metas baterem.",
+            snap.StartedOn, snap.ActiveDays, snap.MinDays, snap.QualifiedPeople, snap.MinPeople);
+        return true;
+    }
 
     // Saúde de entrega na janela: retorna os números SE a taxa entregue/enviado estiver abaixo do limiar
     // (com amostra mínima) — sinal de shadow-restriction. null = ok / sem dados suficientes / erro de

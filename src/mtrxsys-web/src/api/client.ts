@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  CircleMember,
   Contact,
   ContactDetail,
   ContactGroupTag,
@@ -14,11 +15,13 @@ import type {
   Group,
   GroupLinkPage,
   GroupLinkStatus,
+  HumanPhaseStatus,
   ImportResult,
   ManualImportResult,
   LoginResponse,
   MessageSlot,
   MessageTemplate,
+  PhoneContact,
   Stage,
   Tag,
   WahaStatus,
@@ -421,4 +424,21 @@ export const api = {
     }>("/api/warmup/status"),
   startWarmupEngine: () => request<{ running: boolean }>("/api/warmup/start", { method: "POST" }),
   stopWarmupEngine: () => request<{ running: boolean }>("/api/warmup/stop", { method: "POST" }),
+
+  // FASE HUMANA (dias 1-3 do chip novo): o disparo fica travado enquanto o operador conversa à mão
+  // pela aba Chat. applies=false quando não vale pra este chip (recurso desligado ou chip anterior
+  // ao corte) — aí a UI não mostra nada.
+  humanPhase: () => request<HumanPhaseStatus>("/api/warmup/human-phase"),
+  // Agenda do aparelho. Por padrão só os salvos (isMyContact); all=true é escape de diagnóstico
+  // caso o engine não preencha a marca.
+  phoneContacts: (all = false) =>
+    request<PhoneContact[]>(`/api/warmup/phone-contacts${all ? "?all=true" : ""}`),
+  listWarmupCircle: () => request<CircleMember[]>("/api/warmup/circle"),
+  addToWarmupCircle: (body: { phone: string; name?: string | null }) =>
+    request<CircleMember>("/api/warmup/circle", { method: "POST", body: JSON.stringify(body) }),
+  removeFromWarmupCircle: (id: string) =>
+    request<void>(`/api/warmup/circle/${id}`, { method: "DELETE" }),
+  // Liga/desliga o robô que conversa com o círculo durante a fase.
+  setHumanPhaseAutoSend: (enabled: boolean) =>
+    request<{ autoSendEnabled: boolean }>(`/api/warmup/human-phase/auto/${enabled}`, { method: "POST" }),
 };
