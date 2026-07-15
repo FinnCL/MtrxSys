@@ -155,6 +155,31 @@ public sealed class WarmupManagerTests
         (await svc.CanSendAsync(CancellationToken.None)).Should().BeFalse();
     }
 
+    // A CURVA-PADRÃO em si (a que vale quando o appsettings não traz uma). Os outros testes injetam
+    // curva própria, então ninguém olhava esta — e um erro de digitação aqui é invisível: um "55, 50"
+    // no meio REDUZIRIA o teto no meio da escalada, sem erro nenhum, e só apareceria como disparo
+    // misteriosamente parando mais cedo semanas depois.
+    [Fact]
+    public async Task Curva_padrao_so_sobe_comeca_em_15_e_estabiliza_em_200()
+    {
+        // Sem Curve configurada → cai no default do código.
+        var svc = Build(new WarmupOptions { StartedOnUtc = new DateOnly(2026, 7, 15) });
+        SetToday(new DateOnly(2026, 7, 15));
+        var curve = (await svc.GetSnapshotAsync(CancellationToken.None)).Curve;
+
+        curve.Should().NotBeEmpty("teto ausente anularia o aquecimento inteiro");
+        curve[0].Should().Be(15, "é o 1º dia de DISPARO do cronograma");
+        curve[^1].Should().Be(200, "platô alvo");
+        curve.Should().BeInAscendingOrder("uma curva que desce em algum ponto é erro de digitação, não desenho");
+        // Nenhum salto brusco: o cronograma sobe ~20% a cada 2 dias. Um degrau que mais que dobra
+        // seria pico — exatamente o que o aquecimento existe pra evitar.
+        for (var i = 1; i < curve.Length; i++)
+        {
+            curve[i].Should().BeLessThanOrEqualTo(
+                curve[i - 1] * 2, $"o degrau {i - 1}→{i} ({curve[i - 1]}→{curve[i]}) seria um pico");
+        }
+    }
+
     private static DailySendCount BuildCountWith(DateOnly date, int sent)
     {
         var entity = DailySendCount.Create(date, 0);

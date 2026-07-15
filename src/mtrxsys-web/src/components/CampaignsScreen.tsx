@@ -843,7 +843,20 @@ export function CampaignsScreen() {
                       <span className="muted small"> · {i.attemptCount + 1}ª tentativa</span>
                     )}
                   </td>
-                  <td>{new Date(i.sentAt ?? i.scheduledAt).toLocaleString()}</td>
+                  {/* SÓ sentAt. O scheduledAt NÃO é "quando vai enviar" — é a chave de ordenação da
+                      fila, e o motor a usa pra pôr lote novo no topo (data no passado = "manda o
+                      quanto antes"). Exibi-la aqui mostrava um horário no passado pra job que ainda
+                      nem saiu, como se fosse promessa. Quem ainda não foi não TEM quando: o
+                      intervalo (1,5 a 4 min) é sorteado na hora do envio, mensagem a mensagem. */}
+                  <td>
+                    {i.sentAt ? (
+                      new Date(i.sentAt).toLocaleString()
+                    ) : (
+                      <span className="muted" title="Ainda não saiu. O horário só existe depois do envio: o intervalo entre mensagens é sorteado na hora, pra não ficar regular demais.">
+                        —
+                      </span>
+                    )}
+                  </td>
                   <td className="muted small">{i.errorReason || "-"}</td>
                 </tr>
               ))}

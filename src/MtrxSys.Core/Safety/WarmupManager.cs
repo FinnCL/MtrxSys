@@ -11,9 +11,18 @@ public sealed class WarmupManager(
     IClock clock,
     IOptions<WarmupOptions> opts)
 {
-    // Curva-padrão conservadora, usada se o appsettings não trouxer uma. Nunca "ilimitado":
-    // um teto ausente anularia o aquecimento (o ponto todo é segurar o volume cedo).
-    private static readonly int[] DefaultCurve = [10, 15, 25, 40, 50, 65, 80, 100];
+    // Fallback, usado se o appsettings não trouxer curva. Nunca "ilimitado": um teto ausente
+    // anularia o aquecimento (o ponto todo é segurar o volume cedo).
+    //
+    // IGUAL à do appsettings de propósito: divergir faria quem lê o código concluir a curva errada
+    // (a que VALE é a do appsettings — Api e Dispatcher, os dois).
+    //
+    // O índice conta DIAS COM ENVIO, não dias de calendário: dia sem disparo não consome a curva.
+    // É o que deixa esta curva encaixar no cronograma sem gambiarra — os dias de conversa humana e
+    // de aquecimento cruzado (que não disparam) não gastam degrau, então o 1º dia de disparo pega o
+    // índice 0 sozinho. Sobe ~20% a cada 2 dias, de 15 até o platô de 200/dia em 25 dias de envio.
+    private static readonly int[] DefaultCurve =
+        [15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
 
     public async Task<bool> CanSendAsync(CancellationToken ct)
     {
