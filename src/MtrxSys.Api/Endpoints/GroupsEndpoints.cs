@@ -287,6 +287,12 @@ public static class GroupsEndpoints
     // string do WAHA por esta mesma função. Mesma entrada + mesma função = concordam por construção.
     // NormalizeTrusted (e não Validate) pelo mesmo motivo de lá: número legado que a lib rejeita
     // (9º dígito ausente em DDD antigo) é preservado como veio em vez de sumir da isenção.
+    //
+    // DESCARTA O PRÓPRIO CHIP, como a importação faz. Hoje isso é inerte (o chip não vira contato,
+    // então não há o que isentar), mas a assimetria era o problema: isenção é o que DISPENSA travas,
+    // e a trava que impede o chip de mandar mensagem pra si mesmo (`ExcludePhoneE164`) mora numa
+    // leitura que pode vir nula. Deixar o próprio número numa lista de "pode receber de novo" é
+    // guardar uma arma carregada esperando a outra trava falhar.
     private static async Task<(IReadOnlyList<string> Phones, IResult? Problem)> ReadMemberPhonesAsync(
         IWahaClient waha, BrazilPhoneValidator phones, string sessionId, string groupId, CancellationToken ct)
     {
@@ -316,7 +322,16 @@ public static class GroupsEndpoints
                 "O WhatsApp não devolveu nenhum membro deste grupo, então não há quem isentar.",
                 statusCode: StatusCodes.Status409Conflict));
         }
-        return ([.. members.Select(m => phones.NormalizeTrusted(m.PhoneE164).E164)], null);
+
+        // Melhor-esforço: sem o "me" a lista só fica com o próprio chip dentro — inerte hoje, e é
+        // preferível a recusar a marca por causa de um blip. Quem PRECISA do "me" é a importação, e
+        // lá ele é obrigatório.
+        var own = await waha.GetOwnPhoneE164Async(sessionId, ct);
+        var phoneList = members
+            .Select(m => phones.NormalizeTrusted(m.PhoneE164).E164)
+            .Where(p => own is null || !string.Equals(p, own, StringComparison.Ordinal))
+            .ToList();
+        return (phoneList, null);
     }
 
 

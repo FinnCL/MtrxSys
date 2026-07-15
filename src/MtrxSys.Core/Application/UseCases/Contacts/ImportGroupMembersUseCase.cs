@@ -18,8 +18,22 @@ public sealed class ImportGroupMembersUseCase(
     {
         var sessionId = opts.Value.SessionId;
         var members = await waha.ListGroupParticipantsAsync(sessionId, groupId, ct);
-        // Número conectado ("me") — não importamos o próprio número como contato/destinatário.
+        // Número conectado ("me"): serve pra NÃO importar o próprio número como destinatário e pra
+        // marcar quem importou cada contato.
         var ownNumber = await waha.GetOwnPhoneE164Async(sessionId, ct);
+        // Sem o número do chip, PARA. Não é preciosismo: `ImportedByPhone` nulo é lido pelo motor
+        // como "contato legado, de chip desconhecido", e o gate anti-463 PULA esses. Importar assim
+        // criaria contatos que o disparo nunca alcança — a tela diria "5 importados" e o envio
+        // pularia os 5, com o operador sem pista do porquê. Falhar aqui é recuperável (é só clicar
+        // de novo); o silêncio não é. Além disso, sem "me" o próprio chip entraria como contato e
+        // viraria auto-envio.
+        if (string.IsNullOrWhiteSpace(ownNumber))
+        {
+            throw new InvalidOperationException(
+                "Não deu pra ler o número do chip conectado agora, então a importação foi cancelada "
+                + "(sem ele os contatos nasceriam sem dono e o disparo os pularia em silêncio). "
+                + "Confira se o chip está conectado e tente de novo.");
+        }
 
         var imported = 0;
         var duplicated = 0;
