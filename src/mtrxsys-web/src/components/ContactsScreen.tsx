@@ -89,7 +89,7 @@ export function ContactsScreen() {
         setGroups(await api.listContactGroupTags());
       } else if (pending.kind === "delete") {
         const r = await api.deleteGroupContacts(pending.tag);
-        setActionMsg(`${r.deleted} contato(s) do grupo "${pending.tag}" excluído(s).`);
+        setActionMsg(`${r.deleted} contato(s) da lista "${pending.tag}" excluído(s).`);
         await forgetEmptiedGroup(pending.tag);
       }
     } catch (ex) {
@@ -167,7 +167,7 @@ export function ContactsScreen() {
         };
       case "delete":
         return {
-          title: "Descartar contatos do grupo?",
+          title: "Descartar contatos da lista?",
           confirmLabel: "Sim, descartar",
           danger: true,
           message: (
@@ -188,12 +188,19 @@ export function ContactsScreen() {
     <main className="contacts-screen">
       <header className="contacts-header">
         <div className="contacts-header-top">
-          <h2>Contatos por grupo</h2>
+          {/* "Lista", e não "grupo": isto é etiqueta do CRM (groupTag) pra organizar contatos —
+              não tem nada a ver com o grupo do WhatsApp da aba Grupos, que tem conversa e membros.
+              Os dois já se chamavam "grupo" e a confusão era garantida. O nome interno (groupTag)
+              fica como está: renomeá-lo em API/banco é risco sem ganho pra quem usa. */}
+          <h2>Contatos por lista</h2>
           <button type="button" onClick={() => setShowAdd(true)}>
             Adicionar números
           </button>
         </div>
-        <p className="muted">Clique num grupo para abrir os contatos salvos dele.</p>
+        <p className="muted">
+          Clique numa lista para abrir os contatos salvos dela. Lista é só uma etiqueta pra organizar
+          seus contatos aqui — não é o grupo do WhatsApp.
+        </p>
       </header>
 
       {error && <p className="error">{error}</p>}
@@ -202,7 +209,8 @@ export function ContactsScreen() {
       {loading ? (
         <p className="muted">Carregando...</p>
       ) : groups.length === 0 ? (
-        <p className="muted">Nenhum grupo com contatos ainda. Importe um grupo na aba Grupos.</p>
+        // "grupo" no fim da frase é o do WhatsApp de propósito — é de lá que vem a importação.
+        <p className="muted">Nenhuma lista com contatos ainda. Importe um grupo na aba Grupos.</p>
       ) : (
         <div className="group-containers">
           {groups.map((g) => {
@@ -330,7 +338,7 @@ export function ContactsScreen() {
                         </tbody>
                       </table>
                     ) : (
-                      <p className="muted small">Sem contatos neste grupo.</p>
+                      <p className="muted small">Sem contatos nesta lista.</p>
                     )}
                     {/* Ações de grupo só aparecem com o grupo aberto — camada extra anti-miss-click. */}
                     <div className="group-delete-row">
@@ -338,10 +346,10 @@ export function ContactsScreen() {
                         type="button"
                         className="group-delete-link"
                         disabled={busy}
-                        title="Descarta os contatos deste grupo: somem das listas, do disparo, do chat e do resultado dos envios, mas continuam no banco (opt-out preservado). Reversível."
+                        title="Descarta os contatos desta lista: somem do disparo, do chat e do resultado dos envios, mas continuam no banco (opt-out preservado). Reversível."
                         onClick={() => setPending({ kind: "delete", tag: g.groupTag })}
                       >
-                        Descartar contatos deste grupo
+                        Descartar contatos desta lista
                       </button>
                     </div>
                   </div>

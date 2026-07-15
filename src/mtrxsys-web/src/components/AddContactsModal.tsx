@@ -73,8 +73,11 @@ export function AddContactsModal({ onClose, onSaved }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Só "Avulsos" (default) e "Criar novo grupo…": os grupos importados NÃO entram aqui — a adição
-  // manual é uma origem separada. O "grupo" é apenas um rótulo pra organizar/segmentar o disparo.
+  // Só "Avulsos" (default) e "Criar nova lista…": as listas importadas NÃO entram aqui — a adição
+  // manual é uma origem separada. A "lista" é apenas um rótulo (groupTag) pra organizar/segmentar o
+  // disparo; NÃO é o grupo do WhatsApp da aba Grupos (esse tem conversa, membros e notifica todo
+  // mundo). Chamavam-se os dois de "grupo" e a confusão era garantida — só o texto mudou, o campo
+  // no banco/API segue groupTag.
   const groupOptions = [DEFAULT_GROUP];
   const finalGroup = groupChoice === NEW_GROUP ? newGroup.trim() : groupChoice;
   const numbers = useMemo(() => parseNumbers(text), [text]);
@@ -126,9 +129,9 @@ export function AddContactsModal({ onClose, onSaved }: Props) {
       <div className="modal-dialog manual-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <h3>Adicionar números</h3>
         <div className="modal-body">
-          {/* Destino: escolher um grupo existente ou criar um lote nomeado. */}
+          {/* Destino: escolher uma lista existente ou criar um lote nomeado. */}
           <div className="manual-group-row">
-            <label htmlFor="manual-group">Salvar no grupo</label>
+            <label htmlFor="manual-group">Salvar na lista</label>
             <select
               id="manual-group"
               value={groupChoice}
@@ -140,7 +143,7 @@ export function AddContactsModal({ onClose, onSaved }: Props) {
                   {g}
                 </option>
               ))}
-              <option value={NEW_GROUP}>Criar novo grupo…</option>
+              <option value={NEW_GROUP}>Criar nova lista…</option>
             </select>
             {groupChoice === NEW_GROUP && (
               <input
@@ -148,14 +151,15 @@ export function AddContactsModal({ onClose, onSaved }: Props) {
                 className="manual-group-new"
                 value={newGroup}
                 onChange={(e) => setNewGroup(e.target.value)}
-                placeholder="Nome do novo grupo"
+                placeholder="Nome da nova lista"
                 disabled={busy}
                 autoFocus
               />
             )}
           </div>
           <p className="muted tiny">
-            Só um rótulo pra organizar e poder segmentar o disparo — não cria grupo no WhatsApp.
+            Só um rótulo pra organizar e poder segmentar o disparo. Não cria grupo no WhatsApp e não
+            avisa ninguém — pra isso é a aba Grupos.
           </p>
 
           <p className="muted small">

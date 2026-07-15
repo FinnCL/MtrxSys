@@ -518,7 +518,7 @@ export function CampaignsScreen() {
     : audience === "responded"
       ? "Adicionar para disparar (quem respondeu)"
       : group.trim()
-        ? "Adicionar para disparar (grupo)"
+        ? "Adicionar para disparar (lista)"
         : "Adicionar para disparar (todos)";
 
   return (
@@ -612,9 +612,10 @@ export function CampaignsScreen() {
             </select>
           </label>
           <label>
-            <span>Grupo (opcional)</span>
+            {/* groupTag = a LISTA do CRM (aba Contatos), não o grupo do WhatsApp. */}
+            <span>Lista (opcional)</span>
             <select value={group} onChange={(e) => setGroup(e.target.value)}>
-              <option value="">Todos os grupos</option>
+              <option value="">Todas as listas</option>
               {groupTags.map((g) => (
                 <option key={g.groupTag} value={g.groupTag}>
                   {g.groupTag} ({g.count})
