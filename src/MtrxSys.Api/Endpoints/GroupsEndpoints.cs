@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
@@ -21,14 +22,16 @@ public static class GroupsEndpoints
         {
             var sessionId = dispatch.Value.SessionId;
             var groups = await waha.ListGroupsAsync(sessionId, ct);
-            // "É meu?" sai de UMA leitura em lote, não de N consultas — a lista pode ter dezenas de
-            // grupos e isto roda a cada abertura da aba.
-            var mine = await owned.ListWaGroupIdsAsync(ct);
-            var exempt = await owned.ListExemptWaGroupIdsAsync(ct);
+            // "É meu?" e "está isento?" saem de UMA leitura em lote, não de N consultas nem de duas
+            // varreduras da mesma tabela — a lista pode ter dezenas de grupos e isto roda a cada
+            // abertura da aba.
+            var marks = await owned.ListOwnershipMarksAsync(ct);
             var dtos = groups
                 .OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(g => new GroupDto(
-                    g.Id, g.Name, g.ParticipantsCount, mine.Contains(g.Id), exempt.Contains(g.Id)));
+                    g.Id, g.Name, g.ParticipantsCount,
+                    IsMine: marks.ContainsKey(g.Id),
+                    ExemptFromDispatchLimits: marks.TryGetValue(g.Id, out var exempt) && exempt));
             return Results.Ok(dtos);
         });
 
@@ -52,9 +55,17 @@ public static class GroupsEndpoints
             IUnitOfWork uow,
             CancellationToken ct) =>
         {
-            if (await owned.GetByWaGroupIdAsync(groupId, ct) is not null)
+            if (await owned.GetByWaGroupIdAsync(groupId, ct) is { } already)
             {
-                return Results.Ok(new { claimed = true, alreadyClaimed = true, exempt = true });
+                // O estado REAL, não "true" fixo: quem já marcou pode ter desligado a chave depois, e
+                // responder true faria a tela pintar a caixa ligada sobre um grupo sem isenção — a
+                // mentira de tela que o resto disto existe pra evitar.
+                return Results.Ok(new
+                {
+                    claimed = true,
+                    alreadyClaimed = true,
+                    exempt = already.DispatchExemptionEnabled,
+                });
             }
 
             // O grupo TEM que existir na listagem do WhatsApp. Sem esta checagem daria pra declarar
@@ -161,7 +172,7 @@ public static class GroupsEndpoints
                 return Results.BadRequest(new { error = "Dê um nome ao grupo." });
             }
             var phones = (req.Phones ?? [])
-                .Select(NormalizeE164)
+                .Select(BrazilPhoneValidator.NormalizeTypedE164)
                 .Where(p => p is not null)
                 .Select(p => p!)
                 .Distinct(StringComparer.Ordinal)
@@ -172,10 +183,6 @@ public static class GroupsEndpoints
             }
 
             var created = await waha.CreateGroupAsync(dispatch.Value.SessionId, req.Name.Trim(), phones, ct);
-            // O grupo JÁ existe no WhatsApp neste ponto. Se gravar o registro falhar, o operador fica
-            // com um grupo real que o sistema não reconhece como seu — some da seção e a isenção não
-            // o alcança. Por isso o registro é parte da resposta, não melhor-esforço: se der erro,
-            // ele VÊ, e pode registrar de novo (o POST é idempotente pelo unique do wa_group_id).
             var target = OwnedGroup.Create(Guid.NewGuid(), created.Id, created.Name, clock.UtcNow);
 
             // Isenta igual ao "é meu" — criar aqui também é declarar posse, e os dois caminhos têm
@@ -288,12 +295,19 @@ public static class GroupsEndpoints
         {
             members = await waha.ListGroupParticipantsAsync(sessionId, groupId, ct);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        // O chamador desistiu (aba fechada, container reiniciando): propaga. TaskCanceledException
+        // herda de OperationCanceledException, então SEM este guard o catch abaixo a engoliria e
+        // tentaria escrever um 502 numa resposta já abortada. Mesmo padrão do resto do código.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
             return ([], Results.Problem(
-                "Não deu pra ler os membros do grupo no WhatsApp agora, então nada foi salvo "
-                + "(marcar sem saber quem está no grupo liberaria envio repetido pra pessoa errada). "
-                + "Tente de novo.",
+                $"Não deu pra ler os membros do grupo no WhatsApp agora ({ex.GetType().Name}), então "
+                + "nada foi salvo (marcar sem saber quem está no grupo liberaria envio repetido pra "
+                + "pessoa errada). Tente de novo.",
                 statusCode: StatusCodes.Status502BadGateway));
         }
         if (members.Count == 0)
@@ -305,22 +319,6 @@ public static class GroupsEndpoints
         return ([.. members.Select(m => phones.NormalizeTrusted(m.PhoneE164).E164)], null);
     }
 
-    // "+" seguido de 8 a 15 dígitos (faixa do E.164). Mesma normalização mínima do círculo de
-    // aquecimento, e pelo mesmo motivo: são pessoas conhecidas suas, e o BrazilPhoneValidator
-    // rejeitaria um contato estrangeiro legítimo. Devolve null se não der — o chamador vira 400.
-    private static string? NormalizeE164(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-        var digits = new string([.. raw.Where(char.IsDigit)]);
-        if (digits.Length is < 8 or > 15 || digits.All(c => c == '0'))
-        {
-            return null;
-        }
-        return "+" + digits;
-    }
 
     public sealed record ImportGroupRequest(string? GroupTag);
 

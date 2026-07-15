@@ -96,6 +96,43 @@ public sealed partial class BrazilPhoneValidator
     private const int BrazilCountryCode = 55;
 
     /// <summary>
+    /// Normaliza entrada DIGITADA pelo operador, de gente que ele conhece (o círculo de aquecimento,
+    /// os participantes de um grupo que ele vai criar). Devolve null se não der — o chamador vira 400.
+    ///
+    /// Deliberadamente NÃO usa <see cref="Validate"/>: aqui o operador digita gente conhecida, e a
+    /// validação estrita rejeitaria um contato estrangeiro legítimo (e o celular BR legado, ver
+    /// <see cref="IsPlausibleBrazilian"/>). Não confundir com número vindo do WAHA — pra aquilo é o
+    /// <see cref="NormalizeTrusted"/>, que preserva a forma que o WhatsApp já usa.
+    ///
+    /// PARSEIA com a região BR em vez de só colar um "+" na frente dos dígitos. Isso não é
+    /// preciosismo: colar o "+" cru transformava número em formato NACIONAL no país errado, em
+    /// silêncio. "71 99107-2835" (11 dígitos, o jeito que sai de qualquer planilha) virava
+    /// "+71991072835" — e +7 é RÚSSIA, com 11 dígitos batendo o comprimento de lá. Esse número ia
+    /// direto pro `POST /groups` da WAHA como participante inexistente, que é o vetor do 463.
+    /// Parseando com região BR, "71991072835" vira "+5571991072835" e "+351912345678" segue Portugal.
+    ///
+    /// IsPossibleNumber (comprimento plausível) no lugar do "8 a 15 dígitos" na mão: recusa "+000..."
+    /// e afins sem precisar de regra própria.
+    /// </summary>
+    public static string? NormalizeTypedE164(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+        var cleaned = CleanupRegex().Replace(raw, string.Empty);
+        try
+        {
+            var parsed = Util.Parse(cleaned, DefaultRegion);
+            return Util.IsPossibleNumber(parsed) ? Util.Format(parsed, LibFormat.E164) : null;
+        }
+        catch (LibParseException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Normalização não destrutiva para números vindos da WAHA (já são IDs de roteamento
     /// do WhatsApp). Se a lib considerar válido, devolve o E.164 normalizado; caso contrário
     /// mantém o número original — não descartamos um contato real só porque a lib não

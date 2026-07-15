@@ -290,16 +290,21 @@ export function GroupsScreen() {
     );
   }, []);
 
-  async function importOne(idx: number) {
+  // Chaveado pelo ID do grupo, nunca pelo índice: a lista muda embaixo (sair de um grupo remove a
+  // linha, o refresh reordena) e o import é lento. Com índice, sair de um grupo enquanto outro
+  // importa faria o resultado cair na LINHA ERRADA — ou sumir, se a lista tivesse encolhido.
+  async function importOne(group: Group) {
+    const groupId = group.id;
     setRows((prev) =>
-      prev.map((r, i) => (i === idx ? { ...r, importing: true, result: null, error: null } : r)),
+      prev.map((r) =>
+        r.group.id === groupId ? { ...r, importing: true, result: null, error: null } : r,
+      ),
     );
     try {
-      const groupId = rows[idx].group.id;
-      const tagSuggestion = rows[idx].group.name?.trim() || groupId;
+      const tagSuggestion = group.name?.trim() || groupId;
       const result = await api.importGroup(groupId, tagSuggestion);
       setRows((prev) =>
-        prev.map((r, i) => (i === idx ? { ...r, importing: false, result } : r)),
+        prev.map((r) => (r.group.id === groupId ? { ...r, importing: false, result } : r)),
       );
       // Baixa automaticamente a planilha com os contatos salvos desse grupo.
       try {
@@ -312,8 +317,8 @@ export function GroupsScreen() {
       }
     } catch (ex) {
       setRows((prev) =>
-        prev.map((r, i) =>
-          i === idx
+        prev.map((r) =>
+          r.group.id === groupId
             ? { ...r, importing: false, error: ex instanceof Error ? ex.message : String(ex) }
             : r,
         ),
@@ -351,26 +356,23 @@ export function GroupsScreen() {
   async function toggleClaim(group: Group) {
     setConfirmClaim(null);
     try {
-      // Marcar JÁ liga a dispensa (o servidor fotografa os membros no mesmo ato) — dizer "é meu" e
-      // depois "posso falar de novo" era a mesma afirmação duas vezes. Desmarcar derruba as duas.
-      // O estado vem do que o SERVIDOR confirmou, não de palpite: se a leitura dos membros falhar no
-      // criar-pelo-sistema, ele devolve exempt=false, e a caixa tem que aparecer desligada mesmo.
-      const exempt = group.isMine ? false : (await api.claimGroup(group.id)).exempt;
+      // Marcar JÁ liga a dispensa (o servidor fotografa os membros no mesmo ato); desmarcar derruba
+      // as duas. O estado sai do que o SERVIDOR confirmou, não de palpite — o claim pode responder
+      // exempt=false (leitura dos membros falhou) e a caixa tem que aparecer desligada mesmo.
+      let mine: boolean;
+      let exempt: boolean;
       if (group.isMine) {
         await api.unclaimGroup(group.id);
+        mine = false;
+        exempt = false;
+      } else {
+        exempt = (await api.claimGroup(group.id)).exempt;
+        mine = true;
       }
       setRows((prev) =>
         prev.map((r) =>
           r.group.id === group.id
-            ? {
-                ...r,
-                error: null,
-                group: {
-                  ...r.group,
-                  isMine: !group.isMine,
-                  exemptFromDispatchLimits: exempt,
-                },
-              }
+            ? { ...r, error: null, group: { ...r.group, isMine: mine, exemptFromDispatchLimits: exempt } }
             : r,
         ),
       );
@@ -434,7 +436,7 @@ export function GroupsScreen() {
               <GroupRowView
                 key={row.group.id}
                 row={row}
-                onImport={() => void importOne(rows.indexOf(row))}
+                onImport={() => void importOne(row.group)}
                 onLeave={() => setConfirmLeave(row.group)}
                 onExemptionChanged={(enabled) => setExemption(row.group.id, enabled)}
                 onClaim={() => setConfirmClaim(row.group)}
@@ -454,7 +456,7 @@ export function GroupsScreen() {
           <GroupRowView
             key={row.group.id}
             row={row}
-            onImport={() => void importOne(rows.indexOf(row))}
+            onImport={() => void importOne(row.group)}
             onLeave={() => setConfirmLeave(row.group)}
             onExemptionChanged={(enabled) => setExemption(row.group.id, enabled)}
             onClaim={() => setConfirmClaim(row.group)}

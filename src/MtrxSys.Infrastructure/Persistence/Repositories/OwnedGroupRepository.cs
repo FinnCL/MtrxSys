@@ -6,14 +6,14 @@ namespace MtrxSys.Infrastructure.Persistence.Repositories;
 
 internal sealed class OwnedGroupRepository(MtrxDbContext db) : IOwnedGroupRepository
 {
-    public async Task<IReadOnlyList<OwnedGroup>> ListAsync(CancellationToken ct) =>
-        await db.OwnedGroups.AsNoTracking().OrderByDescending(g => g.CreatedAt).ToListAsync(ct);
-
-    public async Task<IReadOnlySet<string>> ListWaGroupIdsAsync(CancellationToken ct)
+    public async Task<IReadOnlyDictionary<string, bool>> ListOwnershipMarksAsync(CancellationToken ct)
     {
-        // Só a coluna do id: a listagem de grupos precisa apenas responder "é meu?" por linha.
-        var ids = await db.OwnedGroups.AsNoTracking().Select(g => g.WaGroupId).ToListAsync(ct);
-        return ids.ToHashSet(StringComparer.Ordinal);
+        // Duas colunas, uma ida ao banco. Só o que a listagem precisa por linha — nada de materializar
+        // a entidade (nem os membros, que a tela não usa).
+        var marks = await db.OwnedGroups.AsNoTracking()
+            .Select(g => new { g.WaGroupId, g.DispatchExemptionEnabled })
+            .ToListAsync(ct);
+        return marks.ToDictionary(m => m.WaGroupId, m => m.DispatchExemptionEnabled, StringComparer.Ordinal);
     }
 
     public Task<OwnedGroup?> GetByWaGroupIdAsync(string waGroupId, CancellationToken ct) =>
@@ -22,15 +22,6 @@ internal sealed class OwnedGroupRepository(MtrxDbContext db) : IOwnedGroupReposi
     // RASTREADO de propósito (sem AsNoTracking) e com os membros: quem chama isto vai MUTAR o grupo.
     public Task<OwnedGroup?> GetForUpdateAsync(string waGroupId, CancellationToken ct) =>
         db.OwnedGroups.Include(g => g.Members).FirstOrDefaultAsync(g => g.WaGroupId == waGroupId, ct);
-
-    public async Task<IReadOnlySet<string>> ListExemptWaGroupIdsAsync(CancellationToken ct)
-    {
-        var ids = await db.OwnedGroups.AsNoTracking()
-            .Where(g => g.DispatchExemptionEnabled)
-            .Select(g => g.WaGroupId)
-            .ToListAsync(ct);
-        return ids.ToHashSet(StringComparer.Ordinal);
-    }
 
     public async Task<IReadOnlySet<string>> ListExemptPhonesAsync(CancellationToken ct)
     {

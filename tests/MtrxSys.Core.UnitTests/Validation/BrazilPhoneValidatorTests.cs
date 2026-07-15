@@ -92,4 +92,31 @@ public sealed class BrazilPhoneValidatorTests
     [InlineData("abc")]
     public void IsPlausibleBrazilian_recusa_lixo(string junk) =>
         _validator.IsPlausibleBrazilian(junk).Should().BeFalse();
+
+    // O bug que este teste guarda: colar os dígitos atrás de um "+" mandava número em formato
+    // NACIONAL pro país errado, EM SILÊNCIO. "71991072835" (o jeito que sai de qualquer planilha)
+    // virava "+71991072835" — e +7 é RÚSSIA, com 11 dígitos batendo o comprimento de lá. Esse número
+    // ia direto pro POST /groups da WAHA como participante inexistente, que é o vetor do 463.
+    [Theory]
+    [InlineData("71991072835", "+5571991072835")]
+    [InlineData("(71) 99107-2835", "+5571991072835")]
+    [InlineData("71 99107 2835", "+5571991072835")]
+    public void NormalizeTypedE164_assume_BR_quando_vem_em_formato_nacional(string typed, string expected) =>
+        BrazilPhoneValidator.NormalizeTypedE164(typed).Should().Be(expected);
+
+    [Theory]
+    [InlineData("+5571991072835", "+5571991072835")]
+    [InlineData("+55 71 99107-2835", "+5571991072835")]
+    [InlineData("+351912345678", "+351912345678")]  // estrangeiro legítimo: preservado
+    public void NormalizeTypedE164_respeita_o_pais_quando_vem_com_mais(string typed, string expected) =>
+        BrazilPhoneValidator.NormalizeTypedE164(typed).Should().Be(expected);
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("abc")]
+    [InlineData("+000000000")]
+    [InlineData("1")]
+    public void NormalizeTypedE164_recusa_lixo(string junk) =>
+        BrazilPhoneValidator.NormalizeTypedE164(junk).Should().BeNull();
 }

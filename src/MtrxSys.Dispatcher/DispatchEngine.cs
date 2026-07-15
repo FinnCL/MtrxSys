@@ -61,11 +61,6 @@ public sealed class DispatchEngine(
         // Número do chip CONECTADO agora (reconciliado logo acima). O gate-por-chip usa isto pra só
         // disparar pros contatos que ESTE chip importou (co-membros dele). Lido 1x por ciclo.
         var connectedPhone = sysStateSnapshot.WarmupPhone;
-        // ISENTOS: telefones dos grupos que o operador criou aqui e ligou a isenção (ver OwnedGroup).
-        // Pra eles a trava de "já falei com esse" não vale — mas opt-out, checagem de número, teto
-        // diário e fase humana continuam valendo. Lido 1x por ciclo (não por job); com a isenção
-        // desligada (o default, e o estado da produção hoje) vem VAZIO e nada abaixo muda.
-        var exemptPhones = await ownedGroups.ListExemptPhonesAsync(ct);
 
         while (!ct.IsCancellationRequested)
         {
@@ -217,6 +212,21 @@ public sealed class DispatchEngine(
                 skipped++;
                 continue;
             }
+            // ISENTOS: telefones dos grupos que o operador marcou como seus (ver OwnedGroup). Pra eles
+            // a trava de "já falei com esse" não vale — mas opt-out, checagem de número, teto diário e
+            // fase humana continuam valendo.
+            //
+            // Lido FRESCO a cada job, e só aqui (nunca no topo do ciclo). Os dois motivos são opostos
+            // e ambos importam:
+            //   • Não no topo: a esmagadora maioria dos ciclos sai no `break` da fila vazia sem
+            //     enviar nada, e o ciclo roda a cada 5s — ler lá custaria ~17 mil consultas por dia
+            //     por stack (×10) pra uma feature que devolve zero linhas quando ninguém marcou nada.
+            //   • Fresco, e não 1x por ciclo: UM ciclo drena a fila INTEIRA, e com 1,5 a 4 min entre
+            //     mensagens isso são horas. Quem percebe que marcou o grupo errado e desmarca precisa
+            //     que pare AGORA — congelar no início do ciclo faria o motor seguir isentando pelo
+            //     resto dele, como o freio de mão que é relido fresco logo acima, e pelo mesmo motivo.
+            // O custo real é 1 consulta indexada a cada 1,5-4 min de envio ativo: nada.
+            var exemptPhones = await ownedGroups.ListExemptPhonesAsync(ct);
             var isExempt = exemptPhones.Contains(contact.Phone.E164);
             if (ledger.IsEnabled)
             {
@@ -401,15 +411,17 @@ public sealed class DispatchEngine(
                 // Livro-razão compartilhado (dedup cross-ambiente): fail-open, só após o commit pra
                 // não registrar "enviado" globalmente algo que não persistiu localmente.
                 //
-                // ISENTO NÃO ENTRA NO LIVRO. O registro é compartilhado pelos 10 stacks e marcar é
-                // PERMANENTE: uma única mensagem de aquecimento queimaria o conhecido em todos os
-                // ambientes, para sempre — e são justamente as pessoas de quem se precisa pra aquecer
-                // o PRÓXIMO chip. Também é o que o livro quer dizer: ele registra "essa pessoa já
-                // recebeu nossa abordagem", e conversa de aquecimento com um amigo não é abordagem.
-                if (!isExempt)
-                {
-                    await ledger.MarkSentAsync(contact.Phone.E164, ct);
-                }
+                // ISENTO ENTRA NO LIVRO IGUAL. Já teve aqui um `if (!isExempt)` com o argumento de
+                // que marcar "queimaria o conhecido nos 10 stacks pra sempre". Era FALSO: quem tem o
+                // grupo marcado ignora o status Sent (ver o gate acima e o resgate no
+                // enfileiramento), então a marca não o alcança. Ela só vale pros stacks que NÃO têm o
+                // grupo marcado — e ali ela é exatamente o que se quer.
+                //
+                // Sem esta linha, um telefone que é ao mesmo tempo membro do grupo e lead no CRM
+                // some do dedup: os 10 chips não veem marca nenhuma e mandam a MESMA campanha pra
+                // ele, de 10 números diferentes. Isso é denúncia de spam. A isenção é por TELEFONE e
+                // vale pra qualquer job, não só pros de aquecimento — é o que torna o furo possível.
+                await ledger.MarkSentAsync(contact.Phone.E164, ct);
 
                 metrics.RecordSendSuccess((int)delayBefore.TotalMilliseconds, typingMs);
                 sent++;

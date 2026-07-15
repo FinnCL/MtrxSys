@@ -39,7 +39,7 @@ public sealed class ImportGroupMembersUseCase(
                 // CÓDIGO DO PAÍS, não pela validade. Antes isto usava Validate, que REJEITA celular
                 // BR no formato antigo (sem o 9º dígito): um grupo de conhecidos com números legados
                 // importava ZERO contatos, todos rotulados "não brasileiro" — mentira, e apontando
-                // pra causa errada. Ver BrazilPhoneValidator.IsBrazilian.
+                // pra causa errada. Ver BrazilPhoneValidator.IsPlausibleBrazilian.
                 if (onlyBrazilian && !phones.IsPlausibleBrazilian(member.PhoneE164))
                 {
                     failures.Add(new ImportFailure(member.Id, member.PhoneE164, "Número não brasileiro (ignorado)."));

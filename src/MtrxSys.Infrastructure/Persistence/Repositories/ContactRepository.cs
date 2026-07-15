@@ -99,13 +99,15 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
             // do LastSentAt — é literalmente a razão da isenção existir: conversa recorrente com
             // conhecido. Mas NÃO escapam da trava de já estar na fila: aquilo não é a regra de "uma
             // vez só", é a proteção contra o mesmo clique enfileirar a pessoa duas vezes.
-            var exempt = filter.ExemptPhonesE164 as IReadOnlyList<string> ?? filter.ExemptPhonesE164?.ToList();
-            q = exempt is { Count: > 0 }
-                ? q.Where(c => (c.LastSentAt == null || exempt.Contains(c.Phone.E164))
-                    && !db.DispatchJobs.Any(j =>
-                        j.ContactId == c.Id
-                        && (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)))
-                : q.Where(c => c.LastSentAt == null && !db.DispatchJobs.Any(j =>
+            // Lista vazia (o caso normal) traduz pra `= ANY('{}')`, que o Postgres resolve na hora e
+            // deixa a cláusula equivalente ao `LastSentAt == null` de sempre. Um único Where em vez
+            // de dois ramos quase idênticos: a trava da FILA (a parte sensível, que vale pra todos)
+            // aparece uma vez só — escrita duas vezes, um dia alguém corrige uma e esquece a outra.
+            var exempt = filter.ExemptPhonesE164 as IReadOnlyList<string>
+                ?? filter.ExemptPhonesE164?.ToList()
+                ?? [];
+            q = q.Where(c => (c.LastSentAt == null || exempt.Contains(c.Phone.E164))
+                && !db.DispatchJobs.Any(j =>
                     j.ContactId == c.Id
                     && (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)));
         }

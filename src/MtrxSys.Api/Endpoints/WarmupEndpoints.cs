@@ -5,6 +5,7 @@ using MtrxSys.Core.Application.Warmup;
 using MtrxSys.Core.Domain.Conversations;
 using MtrxSys.Core.Domain.Warmup;
 using MtrxSys.Core.Safety;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Api.Endpoints;
 
@@ -191,7 +192,7 @@ public static class WarmupEndpoints
             // do próprio aparelho, já em E.164, e a validação de celular BR rejeitaria um contato
             // estrangeiro legítimo. Aqui não há risco a cobrir — o círculo é só um marcador, nunca
             // entra no disparo (ver WarmupCircleMember). O disparo tem os próprios gates.
-            if (NormalizeE164(req.Phone) is not { } e164)
+            if (BrazilPhoneValidator.NormalizeTypedE164(req.Phone) is not { } e164)
             {
                 return Results.BadRequest(new { error = "Número inválido: informe em E.164 (ex.: +5571999998888)." });
             }
@@ -222,21 +223,6 @@ public static class WarmupEndpoints
         });
 
         return app;
-    }
-
-    // "+" seguido de 8 a 15 dígitos (faixa do E.164). Devolve null se não der — o chamador vira 400.
-    private static string? NormalizeE164(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-        var digits = new string([.. raw.Where(char.IsDigit)]);
-        if (digits.Length is < 8 or > 15 || digits.All(c => c == '0'))
-        {
-            return null;
-        }
-        return "+" + digits;
     }
 
     private sealed record WarmupStatusDto(
