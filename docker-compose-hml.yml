@@ -1,4 +1,4 @@
-﻿# Ambiente de HOMOLOGAÇÃO (staging) — 1 stack isolado que replica prod no software.
+# Ambiente de HOMOLOGAÇÃO (staging) — 1 stack isolado que replica prod no software.
 # WAHA REAL (pareia um chip DESCARTÁVEL e envia de verdade), DB/Redis próprios, LEDGER DESLIGADO
 # (nunca toca o registro compartilhado dos 10 → sem risco anti-ban). Servido em
 # https://hml.mtrxsys.com pelo Caddy (bloco gerado por deploy/gen-config.sh).

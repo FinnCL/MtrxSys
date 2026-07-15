@@ -13,14 +13,41 @@ internal sealed class WahaContactsClient(WahaHttp http)
         // contatos (`/api/contacts/all?session=X`) e destoa de todo o resto do cliente, que usa
         // `/api/{session}/...`. Não "consertar" pra ficar igual aos outros — dá 404.
         using var req = http.NewRequest(HttpMethod.Get, $"api/contacts/all?session={WahaHttp.Esc(sessionId)}");
-        using var resp = await http.SendAsync(req, ct);
-        // Mesma degradação do ListGroupsAsync: sessão fora do ar dá 422, e o NOWEB sem store dá 400.
-        // Lista vazia (a UI mostra "nenhum contato") em vez de 500 — que no browser ainda apareceria
-        // como erro de CORS, porque o header some na resposta de erro.
-        if (!resp.IsSuccessStatusCode)
+
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await http.SendAsync(req, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        // WAHA INALCANÇÁVEL (conexão recusada/DNS/reset) ou lento: SendAsync LANÇA, não devolve
+        // status — o !IsSuccessStatusCode abaixo nunca veria isso. Sem este catch a agenda dava 500
+        // e o operador levava um erro cru ao clicar "Adicionar da agenda", em vez do texto que
+        // manda digitar o número. É uma LISTA pra escolher, não um envio: WAHA fora = "não sei
+        // quem está na agenda" = lista vazia, e a UI segue utilizável.
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             return [];
         }
+
+        using (resp)
+        {
+            // Sessão fora do ar dá 422; o NOWEB sem store dá 400. Mesma degradação do ListGroupsAsync:
+            // lista vazia em vez de 500 — que no browser ainda apareceria como erro de CORS, porque o
+            // header some na resposta de erro.
+            if (!resp.IsSuccessStatusCode)
+            {
+                return [];
+            }
+            return await ParseAsync(resp, ct);
+        }
+    }
+
+    private static async Task<IReadOnlyList<WahaContact>> ParseAsync(HttpResponseMessage resp, CancellationToken ct)
+    {
         using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
         var root = doc.RootElement;

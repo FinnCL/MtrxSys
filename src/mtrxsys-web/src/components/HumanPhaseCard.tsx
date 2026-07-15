@@ -24,6 +24,7 @@ export function HumanPhaseCard({
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [busyPhone, setBusyPhone] = useState<string | null>(null);
   const [busyToggle, setBusyToggle] = useState(false);
+  const [manual, setManual] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -72,6 +73,22 @@ export function HumanPhaseCard({
     },
     [load],
   );
+
+  const addManual = useCallback(async () => {
+    const phone = manual.trim();
+    if (!phone) return;
+    setBusyPhone(phone);
+    setError(null);
+    try {
+      await api.addToWarmupCircle({ phone });
+      setManual("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Falha ao adicionar");
+    } finally {
+      setBusyPhone(null);
+    }
+  }, [manual, load]);
 
   const toggleAutoSend = useCallback(async () => {
     if (!status) return;
@@ -201,6 +218,30 @@ export function HumanPhaseCard({
         </div>
       )}
 
+      {/* DOIS caminhos pra montar o círculo, de propósito. A agenda é o cômodo; digitar o número é
+          o que impede o beco sem saída — sem chip pareado (dev) ou se o engine não marcar
+          isMyContact, a agenda vem VAZIA e, sem esta entrada, não haveria como adicionar ninguém,
+          o robô ficaria travado e o recurso seria inutilizável. */}
+      <div className="phone-footer" style={{ gap: 4 }}>
+        <input
+          type="tel"
+          value={manual}
+          onChange={(e) => setManual(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") void addManual(); }}
+          placeholder="+55 71 99999-8888"
+          aria-label="Telefone para incluir no círculo"
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <button
+          type="button"
+          className="phone-reload"
+          onClick={() => void addManual()}
+          disabled={!manual.trim() || busyPhone === manual.trim()}
+        >
+          {busyPhone === manual.trim() ? "…" : "incluir"}
+        </button>
+      </div>
+
       <div className="phone-footer">
         <button type="button" className="phone-reload" onClick={() => (picking ? setPicking(false) : void openPicker())}>
           {picking ? "Fechar agenda" : "+ Adicionar da agenda"}
@@ -213,8 +254,10 @@ export function HumanPhaseCard({
           {!contacts && !contactsError && <p className="phone-off-hint">Lendo a agenda do aparelho…</p>}
           {contacts?.length === 0 && (
             <p className="phone-off-hint">
-              Nenhum contato salvo na agenda deste chip. Salve as pessoas no aparelho primeiro — só
-              aparecem aqui os contatos <strong>salvos</strong>, não quem só apareceu num chat.
+              Nenhum contato salvo na agenda deste chip. Salve as pessoas no aparelho — só aparecem
+              aqui os contatos <strong>salvos</strong>, não quem só apareceu num chat. Se você tem
+              certeza de que salvou e mesmo assim a lista vem vazia, use o campo acima pra digitar o
+              número: dá no mesmo.
             </p>
           )}
           {contacts && contacts.length > 0 && (

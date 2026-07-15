@@ -117,6 +117,42 @@ public sealed class ListContactsE2ETests
     }
 
     [Fact]
+    public async Task Waha_inalcancavel_degrada_para_lista_vazia()
+    {
+        // REGRESSÃO — pego rodando de verdade. Conexão recusada/DNS/reset faz o SendAsync LANÇAR,
+        // não devolver status: o !IsSuccessStatusCode nunca vê isso e a agenda dava 500. Na prática
+        // é o caso do dev (sem container do WAHA) e de qualquer blip de rede — e o operador levava
+        // um erro cru ao clicar "Adicionar da agenda", em vez do texto que manda digitar o número.
+        var http = new HttpClient(new ThrowingHandler(new HttpRequestException("connection refused")))
+        {
+            BaseAddress = new Uri("http://waha.test/"),
+        };
+        var client = new WahaClient(http, Options.Create(new WahaOptions()));
+
+        (await client.ListContactsAsync("default", CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Timeout_degrada_para_lista_vazia()
+    {
+        // Mesma lógica: é uma LISTA pra escolher, não um envio. WAHA lento = "não sei quem está na
+        // agenda" = lista vazia, e a UI segue utilizável pelo campo de digitar o número.
+        var http = new HttpClient(new ThrowingHandler(new TaskCanceledException("timeout")))
+        {
+            BaseAddress = new Uri("http://waha.test/"),
+        };
+        var client = new WahaClient(http, Options.Create(new WahaOptions()));
+
+        (await client.ListContactsAsync("default", CancellationToken.None)).Should().BeEmpty();
+    }
+
+    private sealed class ThrowingHandler(Exception ex) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw ex;
+    }
+
+    [Fact]
     public async Task Aceita_objeto_indexado_por_jid()
     {
         // A NOWEB devolve os GRUPOS assim; barato tolerar a mesma forma nos contatos.
