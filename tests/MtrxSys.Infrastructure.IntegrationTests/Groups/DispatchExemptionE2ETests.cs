@@ -168,6 +168,35 @@ public sealed class DispatchExemptionE2ETests : IAsyncLifetime
             "contato e isenção saem da mesma string do WAHA pela mesma função — têm que casar");
     }
 
+    // Reproduz o caminho EXATO do endpoint PATCH /exemption, que os outros testes não cobriam: o
+    // grupo JÁ existe (foi declarado antes), é carregado RASTREADO com os membros, e só então a
+    // isenção é ligada. Os outros testes ligavam a isenção num grupo NOVO (insert) — caminho
+    // diferente no EF. Números reais de um grupo de produção: BR no formato ANTIGO, sem o 9º dígito,
+    // que é como o WhatsApp de fato os devolve.
+    [Fact]
+    public async Task Ligar_a_isencao_num_grupo_ja_declarado_persiste_os_membros()
+    {
+        var real = new[]
+        {
+            "+557182368724", "+557184731714", "+557185211291",
+            "+557186576422", "+557191072835", "+557193836443",
+        };
+        // 1) o operador clica "Este grupo é meu" → grava só o grupo, sem membros.
+        _db.OwnedGroups.Add(OwnedGroup.Create(Guid.NewGuid(), "120363411066030182", "Grupo teste Finn aqui!", Now));
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear(); // requisição nova: nada rastreado, como no endpoint
+
+        // 2) o operador marca a caixa → o endpoint faz exatamente isto.
+        var owned = new OwnedGroupRepository(_db);
+        var target = await owned.GetForUpdateAsync("120363411066030182", CancellationToken.None);
+        target.Should().NotBeNull();
+        var normalized = real.Select(p => _phones.NormalizeTrusted(p).E164);
+        target!.EnableDispatchExemption(normalized, Guid.NewGuid);
+        await _db.SaveChangesAsync();
+
+        (await owned.ListExemptPhonesAsync(CancellationToken.None)).Should().HaveCount(6);
+    }
+
     [Fact]
     public async Task Desfazer_a_posse_derruba_a_isencao_junto()
     {

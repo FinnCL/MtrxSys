@@ -36,7 +36,13 @@ internal sealed class OwnedGroupMemberConfiguration : IEntityTypeConfiguration<O
     {
         b.ToTable("owned_group_members");
         b.HasKey(x => x.Id);
-        b.Property(x => x.Id).HasColumnName("id");
+        // ValueGeneratedNever é OBRIGATÓRIO aqui, não estilo. Estes membros entram pela COLEÇÃO de um
+        // OwnedGroup já rastreado (nunca por um DbSet.Add), e já chegam com Id preenchido. Por
+        // convenção o EF trata chave Guid como gerada pelo banco — então, ao encontrar um filho novo
+        // com a chave PREENCHIDA, ele conclui "já existe" e marca Modified: emite UPDATE em linha
+        // inexistente, 0 linhas afetadas, DbUpdateConcurrencyException, 500 na cara do operador.
+        // Dizer que a chave é nossa faz o EF marcar Added e emitir INSERT.
+        b.Property(x => x.Id).HasColumnName("id").ValueGeneratedNever();
         b.Property(x => x.OwnedGroupId).HasColumnName("owned_group_id").IsRequired();
         b.Property(x => x.PhoneE164).HasColumnName("phone_e164").IsRequired().HasMaxLength(20);
         // A pergunta do disparo é sempre "este telefone está isento?" — o índice é por telefone.

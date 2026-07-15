@@ -35,22 +35,20 @@ public sealed class ImportGroupMembersUseCase(
             ct.ThrowIfCancellationRequested();
             try
             {
-                PhoneNumber phone;
-                if (onlyBrazilian)
+                // Estrangeiro é ignorado (não vira contato). A pergunta é "é brasileiro?" — pelo
+                // CÓDIGO DO PAÍS, não pela validade. Antes isto usava Validate, que REJEITA celular
+                // BR no formato antigo (sem o 9º dígito): um grupo de conhecidos com números legados
+                // importava ZERO contatos, todos rotulados "não brasileiro" — mentira, e apontando
+                // pra causa errada. Ver BrazilPhoneValidator.IsBrazilian.
+                if (onlyBrazilian && !phones.IsPlausibleBrazilian(member.PhoneE164))
                 {
-                    // Só números válidos para o BR; estrangeiros são ignorados (não viram contato).
-                    var validated = phones.Validate(member.PhoneE164);
-                    if (!validated.IsSuccess || validated.Value is null)
-                    {
-                        failures.Add(new ImportFailure(member.Id, member.PhoneE164, "Número não brasileiro (ignorado)."));
-                        continue;
-                    }
-                    phone = validated.Value;
+                    failures.Add(new ImportFailure(member.Id, member.PhoneE164, "Número não brasileiro (ignorado)."));
+                    continue;
                 }
-                else
-                {
-                    phone = phones.NormalizeTrusted(member.PhoneE164);
-                }
+                // NormalizeTrusted (e não Validate): o número veio do WhatsApp, então é um id de
+                // roteamento REAL. Preserva a forma que ele nos deu — inserir o 9º dígito "corrigiria"
+                // pra um número que o WhatsApp não conhece, e isso é 463, que é gatilho de ban.
+                var phone = phones.NormalizeTrusted(member.PhoneE164);
                 if (ownNumber is not null && phone.E164 == ownNumber)
                 {
                     continue; // pula o próprio número do remetente
