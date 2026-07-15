@@ -86,7 +86,7 @@ services:
       WHATSAPP_API_KEY: ${WAHA2_API_KEY:-mtrxsys-dev-key-stack2}
       # Webhook aponta pro nome interno do serviço (resolvido pela rede do projeto mtrx2)
       WHATSAPP_HOOK_URL: ${WAHA2_HOOK_URL:-http://api:8080/webhooks/waha}
-      WHATSAPP_HOOK_EVENTS: ${WAHA2_HOOK_EVENTS:-message,message.any}
+      WHATSAPP_HOOK_EVENTS: ${WAHA2_HOOK_EVENTS:-message,message.any,message.ack}
       WHATSAPP_SWAGGER_USERNAME: ${WAHA2_SWAGGER_USER:-admin}
       WHATSAPP_SWAGGER_PASSWORD: ${WAHA2_SWAGGER_PASS:-admin}
     volumes:

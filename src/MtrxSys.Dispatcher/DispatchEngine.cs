@@ -374,6 +374,20 @@ public sealed class DispatchEngine(
                 // simples e estável. (O texto composto preserva spintax, placeholders e o "SAIR".)
                 var waMessageId = await waha.SendTextAsync(sessionId, sendTarget, text, ct);
 
+                // Id vazio NÃO invalida o envio (a mensagem saiu; ver ReadSentMessageIdAsync), mas
+                // CEGA o sensor de entrega: sem id a auditoria fica órfã, o message.ack nunca acha o
+                // que casar, e o guard de shadow-restriction perde a única evidência que ele tem.
+                // Era exatamente o estado da produção em 2026-07-15 — 100% dos envios sem id, e nada
+                // no log. Aviso alto: se isto aparecer, o guard está cego e alguém precisa saber.
+                if (string.IsNullOrWhiteSpace(waMessageId))
+                {
+                    log.LogWarning(
+                        "Envio para {Phone} não devolveu id de mensagem. A mensagem SAIU, mas o sensor "
+                        + "de entrega fica cego pra ela (o ack não terá o que casar) — e com isso o "
+                        + "guard de shadow-restriction perde amostra. Formato de resposta novo do WAHA?",
+                        contact.Phone.E164);
+                }
+
                 var now = clock.UtcNow;
                 job.MarkSent(waMessageId, now);
                 contact.RegisterSend(now);

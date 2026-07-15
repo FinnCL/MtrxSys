@@ -303,36 +303,28 @@ internal static class WahaParsing
     }
 
     // O sucesso do ENVIO já foi decidido pelo status HTTP (EnsureSuccessStatusCode no chamador); extrair
-    // o id da mensagem é best-effort e NÃO pode lançar. A forma da resposta varia entre engines
-    // (NOWEB devolve `id` como string ou objeto {id, _serialized}; WEBJS, objeto) — um formato
-    // inesperado retorna id vazio, jamais exceção: a mensagem já saiu (irreversível) e lançar aqui
-    // a marcaria como falha, gerando reenvio duplicado no retry.
+    // o id da mensagem é best-effort e NÃO pode lançar: a mensagem já saiu (irreversível), e lançar
+    // aqui a marcaria como falha, gerando reenvio duplicado no retry.
+    //
+    // ⚠️ ESTE ID NÃO É DECORAÇÃO. Ele é a chave que liga o envio ao `message.ack`, e o ack é a ÚNICA
+    // evidência de ENTREGA que temos — o que alimenta o guard de shadow-restriction (o 463 em que o
+    // WhatsApp aceita e não entrega, sem erro nenhum). Id vazio = auditoria órfã = ack nunca casa =
+    // guard cego.
+    //
+    // Em 2026-07-15 isso estava acontecendo com 100% dos envios: o engine NOWEB (Baileys) devolve
+    // `key: { id, remoteJid, fromMe }`, e este parser só olhava `id`. Não achava, devolvia vazio EM
+    // SILÊNCIO, e a coluna `ack` ficava 0 pra sempre — parecendo "nada foi entregue" enquanto o
+    // operador via as mensagens chegando no aparelho.
+    //
+    // Formas conhecidas: NOWEB → `key.id`; WEBJS → `id` objeto {id, _serialized}; alguns → `id` string.
     public static async Task<string> ReadSentMessageIdAsync(HttpResponseMessage resp, CancellationToken ct)
     {
         try
         {
             using var stream = await resp.Content.ReadAsStreamAsync(ct);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-            if (!doc.RootElement.TryGetProperty("id", out var id))
-            {
-                return string.Empty;
-            }
-            if (id.ValueKind == JsonValueKind.String)
-            {
-                return id.GetString() ?? string.Empty;
-            }
-            if (id.ValueKind == JsonValueKind.Object)
-            {
-                if (id.TryGetProperty("_serialized", out var ser) && ser.ValueKind == JsonValueKind.String)
-                {
-                    return ser.GetString() ?? string.Empty;
-                }
-                if (id.TryGetProperty("id", out var inner) && inner.ValueKind == JsonValueKind.String)
-                {
-                    return inner.GetString() ?? string.Empty;
-                }
-            }
-            return string.Empty;
+            var root = doc.RootElement;
+            return ReadIdFrom(root, "id") ?? ReadIdFrom(root, "key") ?? string.Empty;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -341,9 +333,39 @@ internal static class WahaParsing
 #pragma warning disable CA1031
         catch (Exception)
         {
-            // Corpo ausente/ilegível ou formato inesperado: id vazio, sem comprometer o envio.
+            // Corpo ausente/ilegível: id vazio, sem comprometer o envio.
             return string.Empty;
         }
 #pragma warning restore CA1031
     }
+
+    // Lê o id da mensagem de `root[prop]`, tolerando as três formas conhecidas: string crua,
+    // objeto com `_serialized` (WEBJS) e objeto com `id` (NOWEB/Baileys, dentro de `key`).
+    // Null = esta propriedade não tem id utilizável — o chamador tenta a próxima.
+    private static string? ReadIdFrom(JsonElement root, string prop)
+    {
+        if (!root.TryGetProperty(prop, out var el))
+        {
+            return null;
+        }
+        if (el.ValueKind == JsonValueKind.String)
+        {
+            return NullIfBlank(el.GetString());
+        }
+        if (el.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+        if (el.TryGetProperty("_serialized", out var ser) && ser.ValueKind == JsonValueKind.String)
+        {
+            return NullIfBlank(ser.GetString());
+        }
+        if (el.TryGetProperty("id", out var inner) && inner.ValueKind == JsonValueKind.String)
+        {
+            return NullIfBlank(inner.GetString());
+        }
+        return null;
+    }
+
+    private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
 }

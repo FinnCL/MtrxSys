@@ -69,7 +69,7 @@ services:
       WHATSAPP_API_KEY: ${WAHA7_API_KEY:-mtrxsys-dev-key-stack7}
       # Webhook aponta pro nome interno do serviço (resolvido pela rede do projeto mtrx7)
       WHATSAPP_HOOK_URL: ${WAHA7_HOOK_URL:-http://api:8080/webhooks/waha}
-      WHATSAPP_HOOK_EVENTS: ${WAHA7_HOOK_EVENTS:-message,message.any}
+      WHATSAPP_HOOK_EVENTS: ${WAHA7_HOOK_EVENTS:-message,message.any,message.ack}
       WHATSAPP_SWAGGER_USERNAME: ${WAHA7_SWAGGER_USER:-admin}
       WHATSAPP_SWAGGER_PASSWORD: ${WAHA7_SWAGGER_PASS:-admin}
     volumes:

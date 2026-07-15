@@ -3,6 +3,7 @@ using System.Text;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Domain.Conversations;
 using MtrxSys.Infrastructure.Waha;
 
 namespace MtrxSys.Infrastructure.IntegrationTests.Waha;
@@ -67,7 +68,10 @@ public sealed class SendMessageE2ETests
     [InlineData("""{"id":"true_5511_ABC"}""", "true_5511_ABC")]                 // string
     [InlineData("""{"id":{"_serialized":"SER_123"}}""", "SER_123")]            // objeto _serialized
     [InlineData("""{"id":{"id":"INNER_9"}}""", "INNER_9")]                     // objeto id aninhado
-    public async Task SendText_extrai_o_id_das_tres_formas(string body, string expectedId)
+    // NOWEB (Baileys) — a forma REAL da produção, e a que faltava. O engine devolve `key`, não `id`.
+    [InlineData("""{"key":{"remoteJid":"5571@s.whatsapp.net","fromMe":true,"id":"3EB0C767"},"message":{}}""", "3EB0C767")]
+    [InlineData("""{"key":{"_serialized":"true_5571@c.us_3EB0C767"}}""", "true_5571@c.us_3EB0C767")]
+    public async Task SendText_extrai_o_id_de_todas_as_formas_conhecidas(string body, string expectedId)
     {
         var (client, stub) = Build();
         stub.Body = body;
@@ -75,6 +79,32 @@ public sealed class SendMessageE2ETests
         var id = await client.SendTextAsync("default", "+5511999998888", "x", CancellationToken.None);
 
         id.Should().Be(expectedId);
+    }
+
+    // O bug que este teste guarda, e por que ele não foi pego antes: os casos acima cobriam as três
+    // formas que ALGUÉM IMAGINOU, todas com `id`. A produção roda NOWEB, que devolve `key` — então
+    // 100% dos envios reais gravavam id VAZIO, em silêncio. Consequência: a auditoria ficava órfã, o
+    // message.ack nunca achava o que casar, a coluna `ack` ficava 0 pra sempre, e o guard de
+    // shadow-restriction (a ÚNICA defesa contra o 463 que não dá erro) ficava cego. Descoberto em
+    // 2026-07-15 com 17 envios, de vários chips e dias, TODOS com ack=0 — enquanto o operador via as
+    // mensagens chegando no aparelho.
+    [Fact]
+    public async Task Id_do_NOWEB_casa_com_o_id_que_o_ack_traz()
+    {
+        var (client, stub) = Build();
+        stub.Body = """{"key":{"remoteJid":"557182368724@s.whatsapp.net","fromMe":true,"id":"3EB0C767D097"}}""";
+
+        var sent = await client.SendTextAsync("default", "+557182368724", "x", CancellationToken.None);
+
+        // O que o webhook faz com o id do message.ack (WebhookIngestionService.HandleAckAsync).
+        var fromAck = WahaChatIdentifier.ExtractMessageCore("true_557182368724@c.us_3EB0C767D097");
+        // E o que o disparo grava na auditoria (DispatchEngine).
+        var stored = WahaChatIdentifier.ExtractMessageCore(sent);
+
+        stored.Should().Be(fromAck,
+            "é este casamento que liga o envio à prova de ENTREGA; sem ele o guard de "
+            + "shadow-restriction não tem amostra nenhuma");
+        stored.Should().NotBeEmpty();
     }
 
     [Fact]

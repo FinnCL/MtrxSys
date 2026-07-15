@@ -77,7 +77,7 @@ services:
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASH_PASS:-admin}
       WHATSAPP_API_KEY: ${WAHA_API_KEY:-mtrxsys-dev-key}
       WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://api:8080/webhooks/waha}
-      WHATSAPP_HOOK_EVENTS: ${WAHA_HOOK_EVENTS:-message,message.any}
+      WHATSAPP_HOOK_EVENTS: ${WAHA_HOOK_EVENTS:-message,message.any,message.ack}
       WHATSAPP_SWAGGER_USERNAME: ${WAHA_SWAGGER_USER:-admin}
       WHATSAPP_SWAGGER_PASSWORD: ${WAHA_SWAGGER_PASS:-admin}
     volumes:

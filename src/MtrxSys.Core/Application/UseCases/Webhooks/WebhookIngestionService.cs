@@ -234,24 +234,46 @@ public sealed class WebhookIngestionService(
     // monotônico): ack de mensagem que não é de disparo (resposta manual, ou já purgada) não acha e sai.
     private async Task HandleAckAsync(WahaWebhookEvent evt, CancellationToken ct)
     {
+        // CADA saída daqui LOGA. Não é zelo: este método alimenta o guard de saúde de entrega, que é
+        // a ÚNICA defesa contra shadow-restriction (o 463 em que o WhatsApp aceita e não entrega —
+        // não dá erro, o breaker não vê). Se o ack some, o guard fica cego e ninguém percebe: a
+        // coluna `ack` fica 0 e parece "nada foi entregue".
+        //
+        // Aconteceu de verdade em 2026-07-15: 17 envios, de vários chips e dias, TODOS com ack=0 —
+        // enquanto o operador via as mensagens chegando no aparelho. Com as saídas mudas, não deu
+        // pra saber se o evento não chegava, se o payload não casava ou se a auditoria não achava.
+        // A investigação levou uma hora e não concluiu. Nunca mais em silêncio.
         if (!string.Equals(evt.Session, dispatchOpts.Value.SessionId, StringComparison.Ordinal))
         {
+            log.LogDebug("ACK ignorado: sessão {Session} não é a do disparo ({Ours}).",
+                evt.Session, dispatchOpts.Value.SessionId);
             return;
         }
         var p = evt.Payload;
         if (p?.Ack is null || p.FromMe != true || string.IsNullOrWhiteSpace(p.Id))
         {
+            // Nível WARNING de propósito: um payload de ack que não bate com o que esperamos é
+            // exatamente o cenário de sensor cego. Melhor barulho no log que teto de entrega falso.
+            log.LogWarning(
+                "ACK DESCARTADO (payload inesperado): ack={Ack} fromMe={FromMe} id={Id}. "
+                + "O sensor de entrega depende deste evento — se isto repetir, o guard de "
+                + "shadow-restriction está cego.",
+                p?.Ack, p?.FromMe, p?.Id);
             return;
         }
         var coreId = WahaChatIdentifier.ExtractMessageCore(p.Id);
         var entry = await audit.GetByWaMessageIdAsync(coreId, ct);
         if (entry is null)
         {
+            // Esperado e inofensivo pra mensagem que NÃO é de disparo (resposta digitada no celular,
+            // envio pelo Chat, auditoria purgada). Só vira sintoma se acontecer com TODO envio.
+            log.LogDebug("ACK {Ack} sem auditoria correspondente (core {Core}) — provavelmente não é "
+                + "mensagem de disparo.", p.Ack, coreId);
             return;
         }
         entry.MarkAck(p.Ack.Value, clock.UtcNow);
         await uow.SaveChangesAsync(ct);
-        log.LogDebug("ACK {Ack} ({AckName}) para envio {Core}", p.Ack, p.AckName, coreId);
+        log.LogInformation("ACK {Ack} ({AckName}) para envio {Core}", p.Ack, p.AckName, coreId);
     }
 
     private const string OptOutConfirmationMessage =
