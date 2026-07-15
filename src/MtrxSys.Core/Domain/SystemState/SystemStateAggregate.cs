@@ -118,7 +118,13 @@ public sealed class SystemStateAggregate : Entity<int>
         if (WarmupPhone is null)
         {
             // Primeira vez que registramos o número: NÃO reinicia (preserva o início já
-            // configurado/em andamento); só passa a acompanhar este chip.
+            // configurado/em andamento); só passa a acompanhar este chip. Mas ANCORA o marco se
+            // ainda não houver: sem isso o 1º chip de um stack novo ficava com WarmupStartedOn
+            // null pra sempre — e a fase humana, que só vale pra chip ancorado a partir do corte,
+            // nunca se aplicaria justo a ele. Só preenche o vazio (??=): quem já tem marco
+            // preserva o seu. Chegar aqui implica que nenhum chip foi visto ainda, logo não há
+            // histórico de envio — então ancorar hoje não mexe no índice da curva (já era 0).
+            WarmupStartedOn ??= today;
             WarmupPhone = connectedPhone;
             return false;
         }
