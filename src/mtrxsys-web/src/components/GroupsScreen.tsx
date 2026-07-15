@@ -18,16 +18,37 @@ function GroupRowView({
   row,
   onImport,
   onLeave,
+  onExemptionChanged,
   leaving,
 }: {
   row: GroupRow;
   onImport: () => void;
   onLeave: () => void;
+  onExemptionChanged: (enabled: boolean) => void;
   leaving: boolean;
 }) {
   const [members, setMembers] = useState<GroupMember[] | null>(null);
   const [membersError, setMembersError] = useState<string | null>(null);
   const [showMembers, setShowMembers] = useState(false);
+  const [exemptionBusy, setExemptionBusy] = useState(false);
+  const [exemptionError, setExemptionError] = useState<string | null>(null);
+
+  // A chave só reflete o servidor DEPOIS que ele confirma. Nada de pintar o estado otimista aqui:
+  // ligar pode falhar (WhatsApp fora → o backend recusa em vez de isentar com lista velha), e uma
+  // chave que parece ligada sem estar diria que o disparo vai repetir quando não vai.
+  async function toggleExemption() {
+    const next = !row.group.exemptFromDispatchLimits;
+    setExemptionBusy(true);
+    setExemptionError(null);
+    try {
+      const res = await api.setGroupExemption(row.group.id, next);
+      onExemptionChanged(res.enabled);
+    } catch (ex) {
+      setExemptionError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setExemptionBusy(false);
+    }
+  }
 
   async function toggleMembers() {
     if (showMembers) {
@@ -58,6 +79,28 @@ function GroupRowView({
           </span>
         )}
         {row.error && <span className="error small">{row.error}</span>}
+        {/* O input só existe em grupo SEU: em grupo de terceiro não há isenção pra ligar. */}
+        {row.group.isMine && (
+          <label className="group-exemption">
+            <input
+              type="checkbox"
+              checked={row.group.exemptFromDispatchLimits}
+              disabled={exemptionBusy}
+              onChange={() => void toggleExemption()}
+            />
+            <span>
+              Posso enviar mais de uma vez pra quem está neste grupo
+              {exemptionBusy && " — salvando..."}
+            </span>
+          </label>
+        )}
+        {row.group.isMine && row.group.exemptFromDispatchLimits && (
+          <span className="muted small">
+            Vale pra quem estava no grupo quando você ligou a chave. Entrou gente depois? Desligue e
+            ligue de novo. Quem responder <strong>SAIR</strong> continua fora — isso a chave não muda.
+          </span>
+        )}
+        {exemptionError && <span className="error small">{exemptionError}</span>}
         {showMembers && (
           <div className="group-members">
             {membersError && <span className="error small">{membersError}</span>}
@@ -210,6 +253,18 @@ export function GroupsScreen() {
     setReloadKey((k) => k + 1);
   }, []);
 
+  // Atualiza só a linha tocada, com o valor que o SERVIDOR confirmou. Um refresh inteiro aqui
+  // fecharia os "Ver membros" abertos e re-bateria no WhatsApp à toa.
+  const setExemption = useCallback((groupId: string, enabled: boolean) => {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.group.id === groupId
+          ? { ...r, group: { ...r.group, exemptFromDispatchLimits: enabled } }
+          : r,
+      ),
+    );
+  }, []);
+
   async function importOne(idx: number) {
     setRows((prev) =>
       prev.map((r, i) => (i === idx ? { ...r, importing: true, result: null, error: null } : r)),
@@ -316,6 +371,7 @@ export function GroupsScreen() {
                 row={row}
                 onImport={() => void importOne(rows.indexOf(row))}
                 onLeave={() => setConfirmLeave(row.group)}
+                onExemptionChanged={(enabled) => setExemption(row.group.id, enabled)}
                 leaving={leavingId === row.group.id}
               />
             ))}
@@ -334,6 +390,7 @@ export function GroupsScreen() {
             row={row}
             onImport={() => void importOne(rows.indexOf(row))}
             onLeave={() => setConfirmLeave(row.group)}
+            onExemptionChanged={(enabled) => setExemption(row.group.id, enabled)}
             leaving={leavingId === row.group.id}
           />
         ))}

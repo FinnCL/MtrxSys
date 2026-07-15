@@ -3,6 +3,7 @@ using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Domain.Groups;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Api.Endpoints;
 
@@ -23,10 +24,75 @@ public static class GroupsEndpoints
             // "É meu?" sai de UMA leitura em lote, não de N consultas — a lista pode ter dezenas de
             // grupos e isto roda a cada abertura da aba.
             var mine = await owned.ListWaGroupIdsAsync(ct);
+            var exempt = await owned.ListExemptWaGroupIdsAsync(ct);
             var dtos = groups
                 .OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(g => new GroupDto(g.Id, g.Name, g.ParticipantsCount, mine.Contains(g.Id)));
+                .Select(g => new GroupDto(
+                    g.Id, g.Name, g.ParticipantsCount, mine.Contains(g.Id), exempt.Contains(g.Id)));
             return Results.Ok(dtos);
+        });
+
+        // Liga/desliga a dispensa da trava de "já enviei pra esse" pros membros DESTE grupo.
+        // Só alcança grupo criado aqui — grupo que não está em owned_groups nem tem o que ligar.
+        group.MapPatch("/{groupId}/exemption", async (
+            string groupId,
+            SetExemptionRequest req,
+            IWahaClient waha,
+            IOwnedGroupRepository owned,
+            IOptions<DispatchOptions> dispatch,
+            BrazilPhoneValidator phones,
+            IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            var target = await owned.GetForUpdateAsync(groupId, ct);
+            if (target is null)
+            {
+                // 404 e não 400: a isenção é uma propriedade de grupo SEU. Num grupo que você entrou
+                // por convite ela não existe pra ser ligada — não é um valor inválido, é ausência.
+                return Results.NotFound(new { error = "Este grupo não foi criado aqui, então não tem isenção." });
+            }
+
+            if (!req.Enabled)
+            {
+                target.DisableDispatchExemption();
+                await uow.SaveChangesAsync(ct);
+                return Results.Ok(new { enabled = false, members = 0 });
+            }
+
+            // FOTOGRAFA os membros AGORA, do WAHA (a verdade de quem está no grupo). Se o WAHA estiver
+            // fora, a isenção NÃO liga: ligar com lista velha isentaria quem já saiu do grupo, e ligar
+            // com lista vazia acenderia a chave sem isentar ninguém — as duas mentem pro operador.
+            IReadOnlyList<WahaParticipant> members;
+            try
+            {
+                members = await waha.ListGroupParticipantsAsync(dispatch.Value.SessionId, groupId, ct);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                return Results.Problem(
+                    "Não deu pra ler os membros do grupo no WhatsApp agora, então a isenção não foi ligada "
+                    + "(ligar sem saber quem está no grupo isentaria a pessoa errada). Tente de novo.",
+                    statusCode: StatusCodes.Status502BadGateway);
+            }
+            if (members.Count == 0)
+            {
+                return Results.Problem(
+                    "O WhatsApp não devolveu nenhum membro deste grupo, então não há quem isentar.",
+                    statusCode: StatusCodes.Status409Conflict);
+            }
+
+            // MESMA normalização da importação de grupo (ImportGroupMembersUseCase), de propósito: a
+            // isenção é casada contra `Contact.Phone.E164`, e o contato desses membros nasce lá,
+            // desta mesma string do WAHA passada por esta mesma função. Mesma entrada + mesma função
+            // = as duas formas concordam por construção. Guardar o número cru daria uma diferença
+            // silenciosa (a chave acesa e o disparo pulando a pessoa do mesmo jeito) no dia em que a
+            // lib normalizasse algo — e "hoje bate" não é garantia, é coincidência.
+            // NormalizeTrusted (e não Validate) pelo mesmo motivo de lá: número legado que a lib
+            // rejeita (9º dígito ausente em DDD antigo) é preservado como veio em vez de sumir.
+            var normalized = members.Select(m => phones.NormalizeTrusted(m.PhoneE164).E164);
+            target.EnableDispatchExemption(normalized, () => Guid.NewGuid());
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(new { enabled = true, members = target.Members.Count });
         });
 
         // Cria um grupo COM o sistema — é isto que torna "esse grupo é meu" um FATO e não um palpite:
@@ -66,7 +132,11 @@ public static class GroupsEndpoints
 
             return Results.Created(
                 $"/api/groups/{created.Id}",
-                new GroupDto(created.Id, created.Name, created.ParticipantsCount, IsMine: true));
+                // Nasce SEM isenção: a dispensa das travas de disparo é um ato à parte, e um grupo
+                // não deve ganhá-la só por ter sido criado aqui.
+                new GroupDto(
+                    created.Id, created.Name, created.ParticipantsCount,
+                    IsMine: true, ExemptFromDispatchLimits: false));
         });
 
         // Telefones de quem está DENTRO do grupo. O client já resolve o número real por trás do @lid
@@ -145,9 +215,14 @@ public static class GroupsEndpoints
 
     public sealed record CreateGroupRequest(string? Name, IReadOnlyList<string>? Phones);
 
+    public sealed record SetExemptionRequest(bool Enabled);
+
     // IsMine = criado por ESTE sistema (consta em owned_groups). Não é palpite: o WAHA não diz quem
     // criou, então a verdade é o registro do ato.
-    public sealed record GroupDto(string Id, string Name, int? ParticipantsCount, bool IsMine);
+    // ExemptFromDispatchLimits = os membros deste grupo dispensam a trava de "já enviei pra esse".
+    // Só pode ser true quando IsMine é true.
+    public sealed record GroupDto(
+        string Id, string Name, int? ParticipantsCount, bool IsMine, bool ExemptFromDispatchLimits);
 
     public sealed record GroupMemberDto(string Phone, string? Name, bool IsAdmin);
 }

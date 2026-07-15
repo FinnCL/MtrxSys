@@ -32,6 +32,7 @@ public sealed class DispatchEngine(
     IDispatchMetrics metrics,
     ISystemStateRepository systemState,
     ISharedPhoneLedger ledger,
+    IOwnedGroupRepository ownedGroups,
     DispatchSettleTracker settle,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
@@ -60,6 +61,11 @@ public sealed class DispatchEngine(
         // Número do chip CONECTADO agora (reconciliado logo acima). O gate-por-chip usa isto pra só
         // disparar pros contatos que ESTE chip importou (co-membros dele). Lido 1x por ciclo.
         var connectedPhone = sysStateSnapshot.WarmupPhone;
+        // ISENTOS: telefones dos grupos que o operador criou aqui e ligou a isenção (ver OwnedGroup).
+        // Pra eles a trava de "já falei com esse" não vale — mas opt-out, checagem de número, teto
+        // diário e fase humana continuam valendo. Lido 1x por ciclo (não por job); com a isenção
+        // desligada (o default, e o estado da produção hoje) vem VAZIO e nada abaixo muda.
+        var exemptPhones = await ownedGroups.ListExemptPhonesAsync(ct);
 
         while (!ct.IsCancellationRequested)
         {
@@ -211,6 +217,7 @@ public sealed class DispatchEngine(
                 skipped++;
                 continue;
             }
+            var isExempt = exemptPhones.Contains(contact.Phone.E164);
             if (ledger.IsEnabled)
             {
                 // Uma única consulta cobre dedup (Sent) e opt-out (OptedOut). Em Enforce o opt-out é
@@ -227,7 +234,12 @@ public sealed class DispatchEngine(
                             + "Job {JobId} volta para Pending.", job.Id);
                         break;
                     }
-                    if (ledgerStatus is SharedLedgerStatus.OptedOut or SharedLedgerStatus.Sent)
+                    // ISENTO: "já enviado em outro ambiente" não bloqueia — é conversa recorrente com
+                    // um conhecido, e é exatamente a trava que a isenção existe pra dispensar.
+                    // OPT-OUT continua bloqueando, isento ou não: quem pediu pra sair, saiu — e num
+                    // grupo de conhecidos isso importa MAIS, não menos.
+                    if (ledgerStatus == SharedLedgerStatus.OptedOut
+                        || (ledgerStatus == SharedLedgerStatus.Sent && !isExempt))
                     {
                         var reason = ledgerStatus == SharedLedgerStatus.OptedOut
                             ? "opt-out em outro ambiente"
@@ -388,7 +400,16 @@ public sealed class DispatchEngine(
 
                 // Livro-razão compartilhado (dedup cross-ambiente): fail-open, só após o commit pra
                 // não registrar "enviado" globalmente algo que não persistiu localmente.
-                await ledger.MarkSentAsync(contact.Phone.E164, ct);
+                //
+                // ISENTO NÃO ENTRA NO LIVRO. O registro é compartilhado pelos 10 stacks e marcar é
+                // PERMANENTE: uma única mensagem de aquecimento queimaria o conhecido em todos os
+                // ambientes, para sempre — e são justamente as pessoas de quem se precisa pra aquecer
+                // o PRÓXIMO chip. Também é o que o livro quer dizer: ele registra "essa pessoa já
+                // recebeu nossa abordagem", e conversa de aquecimento com um amigo não é abordagem.
+                if (!isExempt)
+                {
+                    await ledger.MarkSentAsync(contact.Phone.E164, ct);
+                }
 
                 metrics.RecordSendSuccess((int)delayBefore.TotalMilliseconds, typingMs);
                 sent++;

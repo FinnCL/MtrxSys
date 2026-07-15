@@ -37,6 +37,12 @@ public sealed record ContactFilter(
     string? ExcludePhoneE164 = null,
     // Exclui quem já tem job Pending ou Sent — evita re-enviar pra quem já recebeu e
     // duplicar quem já está na fila. Usado no disparo e na prévia de público.
-    bool ExcludeAlreadyDispatched = false);
+    bool ExcludeAlreadyDispatched = false,
+    // Telefones isentos da trava "já recebeu" do ExcludeAlreadyDispatched (membros de grupo criado
+    // pelo operador com a isenção ligada — ver OwnedGroup). Isenta SÓ o LastSentAt: a trava de quem
+    // já está na FILA (Pending/Retrying) continua valendo pra eles também, senão clicar "disparar"
+    // duas vezes enfileiraria a mesma pessoa duas vezes — isso é proteção contra clique repetido,
+    // não a regra de "conversa uma vez só". Vazio/null = nada isento (o default).
+    IReadOnlyCollection<string>? ExemptPhonesE164 = null);
 
 public sealed record ContactGroupTag(string GroupTag, int Count);

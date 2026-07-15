@@ -17,6 +17,30 @@ internal sealed class OwnedGroupConfiguration : IEntityTypeConfiguration<OwnedGr
         b.HasIndex(x => x.WaGroupId).IsUnique();
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(120);
         b.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        b.Property(x => x.DispatchExemptionEnabled)
+            .HasColumnName("dispatch_exemption_enabled").IsRequired().HasDefaultValue(false);
+        // Coleção via campo: OwnedGroup expõe Members só pra leitura (a lista só muda pelos métodos
+        // do agregado, que ligam a chave e a fotografia juntas).
+        b.HasMany(x => x.Members)
+            .WithOne()
+            .HasForeignKey(m => m.OwnedGroupId)
+            .OnDelete(DeleteBehavior.Cascade); // esquecer o grupo esquece a isenção junto
+        b.Navigation(x => x.Members).HasField("members").UsePropertyAccessMode(PropertyAccessMode.Field);
+        b.Ignore(x => x.DomainEvents);
+    }
+}
+
+internal sealed class OwnedGroupMemberConfiguration : IEntityTypeConfiguration<OwnedGroupMember>
+{
+    public void Configure(EntityTypeBuilder<OwnedGroupMember> b)
+    {
+        b.ToTable("owned_group_members");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id");
+        b.Property(x => x.OwnedGroupId).HasColumnName("owned_group_id").IsRequired();
+        b.Property(x => x.PhoneE164).HasColumnName("phone_e164").IsRequired().HasMaxLength(20);
+        // A pergunta do disparo é sempre "este telefone está isento?" — o índice é por telefone.
+        b.HasIndex(x => x.PhoneE164);
         b.Ignore(x => x.DomainEvents);
     }
 }

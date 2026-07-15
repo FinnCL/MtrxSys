@@ -27,6 +27,23 @@ public sealed class OwnedGroup : Entity<Guid>
 
     public DateTimeOffset CreatedAt { get; private set; }
 
+    /// <summary>Ligado: quem está em <see cref="Members"/> pode receber disparo MAIS DE UMA VEZ — a
+    /// trava de "já enviei pra esse" não vale pra eles. Nasce DESLIGADO, e é por grupo: a isenção
+    /// nunca alcança contato fora de um grupo criado aqui.
+    ///
+    /// O que a isenção NÃO afeta, por decisão: o OPT-OUT (quem deu SAIR fica fora, sempre — inclusive
+    /// o opt-out registrado em outro ambiente), a checagem de número existente (protege o chip do
+    /// 463), o teto diário e a fase humana. Ela dispensa a trava de "conversa só uma vez", não as
+    /// travas que existem pra não queimar o chip nem para respeitar quem pediu pra sair.</summary>
+    public bool DispatchExemptionEnabled { get; private set; }
+
+    /// <summary>Telefones isentos: FOTOGRAFIA dos membros tirada quando a isenção foi ligada, não
+    /// leitura viva do WAHA. É de propósito — o disparo consultaria o WAHA a cada envio, e um hiccup
+    /// decidiria em silêncio quem é isento (fail-open = manda de novo pra quem não devia; fail-closed
+    /// = a isenção some sem aviso). Entrou gente no grupo depois? Desligar e religar re-fotografa.</summary>
+    public IReadOnlyCollection<OwnedGroupMember> Members => members;
+    private readonly List<OwnedGroupMember> members = [];
+
     private OwnedGroup() { }
 
     public static OwnedGroup Create(Guid id, string waGroupId, string name, DateTimeOffset createdAt)
@@ -39,5 +56,26 @@ public sealed class OwnedGroup : Entity<Guid>
             Name = name,
             CreatedAt = createdAt,
         };
+    }
+
+    /// <summary>Liga a isenção JUNTO com a fotografia dos membros — de propósito, num método só: uma
+    /// chave ligada sobre lista vazia (ou velha) diria "isento" sem isentar ninguém, ou isentaria
+    /// quem já saiu do grupo.</summary>
+    public void EnableDispatchExemption(IEnumerable<string> memberPhonesE164, Func<Guid> newId)
+    {
+        members.Clear();
+        foreach (var phone in memberPhonesE164.Distinct(StringComparer.Ordinal))
+        {
+            members.Add(OwnedGroupMember.Create(newId(), Id, phone));
+        }
+        DispatchExemptionEnabled = true;
+    }
+
+    /// <summary>Desliga e ESQUECE a fotografia: guardá-la deixaria uma lista velha pronta pra voltar
+    /// a valer no religar sem ninguém ter conferido quem está no grupo hoje.</summary>
+    public void DisableDispatchExemption()
+    {
+        members.Clear();
+        DispatchExemptionEnabled = false;
     }
 }

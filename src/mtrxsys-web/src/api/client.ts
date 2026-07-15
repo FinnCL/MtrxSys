@@ -277,6 +277,13 @@ export const api = {
   // Telefones de quem está dentro do grupo.
   listGroupMembers: (groupId: string) =>
     request<GroupMember[]>(`/api/groups/${encodeURIComponent(groupId)}/participants`),
+  // Liga/desliga a dispensa da trava de "já enviei pra esse" pros membros deste grupo. Ao LIGAR, o
+  // backend re-lê os membros no WhatsApp e fotografa — se o WhatsApp estiver fora, falha e NÃO liga.
+  setGroupExemption: (groupId: string, enabled: boolean) =>
+    request<{ enabled: boolean; members: number }>(
+      `/api/groups/${encodeURIComponent(groupId)}/exemption`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    ),
   importGroup: (groupId: string, groupTag?: string) =>
     request<ImportResult>(`/api/groups/${encodeURIComponent(groupId)}/import`, {
       method: "POST",

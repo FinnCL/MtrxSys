@@ -147,6 +147,9 @@ export interface Group {
   // criou um grupo, então a verdade é o registro do ato de criar. Grupo que você entrou por convite
   // ou em que te adicionaram sempre vem false.
   isMine: boolean;
+  // Os membros deste grupo dispensam a trava de "já enviei pra esse" no disparo. Só pode ser true
+  // quando isMine é true. NÃO dispensa opt-out, checagem de número, teto diário nem fase humana.
+  exemptFromDispatchLimits: boolean;
 }
 
 // Quem está DENTRO de um grupo. O backend já resolve o número real por trás do @lid.
