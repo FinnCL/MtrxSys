@@ -187,6 +187,36 @@ internal sealed class WahaGroupsClient(WahaHttp http, WahaSessionClient session,
         return result;
     }
 
+    public async Task<WahaGroup> CreateGroupAsync(
+        string sessionId, string name, IReadOnlyCollection<string> participantsE164, CancellationToken ct)
+    {
+        // Contrato da WAHA pra criar: sessão como SEGMENTO (`/api/{session}/groups`) — ao contrário
+        // dos CONTATOS, que a mesma API expõe com a sessão em query param. Não uniformizar: dá 404.
+        // Participantes vão como objetos {id}, com o id no formato <dígitos>@c.us.
+        using var req = http.NewRequest(HttpMethod.Post, $"api/{WahaHttp.Esc(sessionId)}/groups");
+        var participants = participantsE164
+            .Select(p => new { id = WahaParsing.ToChatId(p) })
+            .ToArray();
+        req.Content = JsonContent.Create(new { name, participants }, options: WahaHttp.Json);
+        using var resp = await http.SendAsync(req, ct);
+        // SEM tolerância aqui, ao contrário do listar: criar é uma AÇÃO. Se falhou, o operador tem
+        // que saber — engolir viraria um "grupo criado" que não existe, e o registro local ficaria
+        // apontando pro vazio.
+        resp.EnsureSuccessStatusCode();
+
+        using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        var id = WahaParsing.ReadCreatedGroupId(doc.RootElement);
+        if (string.IsNullOrEmpty(id))
+        {
+            // Sem id não dá pra registrar como "meu" nem importar membros depois — e o grupo JÁ foi
+            // criado no WhatsApp. Falhar alto é melhor que devolver um id vazio que vira grupo órfão.
+            throw new InvalidOperationException(
+                "A WAHA criou o grupo mas não devolveu o id. Veja em Grupos e registre manualmente.");
+        }
+        return new WahaGroup(id, name, participantsE164.Count + 1); // +1 = o próprio chip
+    }
+
     public async Task LeaveGroupAsync(string sessionId, string groupId, CancellationToken ct)
     {
         var groupJid = WahaParsing.EnsureGroupJid(groupId);

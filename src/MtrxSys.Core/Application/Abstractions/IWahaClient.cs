@@ -39,6 +39,14 @@ public interface IWahaClient
     /// ListGroupsAsync.</summary>
     Task<IReadOnlyList<WahaContact>> ListContactsAsync(string sessionId, CancellationToken ct);
 
+    /// <summary>Cria um grupo com os participantes indicados (E.164) e devolve o grupo criado.
+    ///
+    /// Existe pra o sistema SABER que o grupo é do operador: o WAHA não expõe "quem criou" (não há
+    /// campo owner; só o `role` do participante, que nem o NOWEB garante). Quem cria, sabe — então
+    /// criar por aqui é o que permite separar/destacar o grupo depois, sem heurística.</summary>
+    Task<WahaGroup> CreateGroupAsync(
+        string sessionId, string name, IReadOnlyCollection<string> participantsE164, CancellationToken ct);
+
     Task<IReadOnlyList<WahaGroup>> ListGroupsAsync(string sessionId, CancellationToken ct);
     Task<IReadOnlyList<WahaParticipant>> ListGroupParticipantsAsync(string sessionId, string groupId, CancellationToken ct);
     /// <summary>Faz o número conectado SAIR do grupo. Só 404 (já não é membro ou grupo inexistente)

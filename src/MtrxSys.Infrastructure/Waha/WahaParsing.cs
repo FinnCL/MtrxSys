@@ -133,6 +133,35 @@ internal static class WahaParsing
         return null;
     }
 
+    // Lê o id do grupo recém-criado (POST /groups) e o devolve na MESMA forma que o ListGroups usa:
+    // o número ANTES do '@' (ver MapNowebGroup). Isso não é detalhe: o registro local de "grupo meu"
+    // é casado contra a listagem, e guardar "120@g.us" enquanto a lista diz "120" faria o grupo
+    // nunca ser reconhecido como seu — o destaque simplesmente não apareceria, sem erro nenhum.
+    // Tolerante à forma: `id` string, ou objeto {_serialized}/{id} conforme o engine.
+    public static string ReadCreatedGroupId(JsonElement root)
+    {
+        if (!root.TryGetProperty("id", out var id))
+        {
+            return string.Empty;
+        }
+        var raw = id.ValueKind switch
+        {
+            JsonValueKind.String => id.GetString(),
+            JsonValueKind.Object => id.TryGetProperty("_serialized", out var ser) && ser.ValueKind == JsonValueKind.String
+                ? ser.GetString()
+                : id.TryGetProperty("id", out var inner) && inner.ValueKind == JsonValueKind.String
+                    ? inner.GetString()
+                    : null,
+            _ => null,
+        };
+        if (string.IsNullOrEmpty(raw))
+        {
+            return string.Empty;
+        }
+        var at = raw.IndexOf('@', StringComparison.Ordinal);
+        return at > 0 ? raw[..at] : raw;
+    }
+
     public static bool IsGroupChat(string? id) =>
         id is not null && WahaChatIdentifier.IsGroup(id);
 
