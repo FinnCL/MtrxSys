@@ -15,6 +15,7 @@ import type {
   Group,
   GroupLinkPage,
   GroupLinkStatus,
+  GroupMember,
   HumanPhaseStatus,
   ImportResult,
   ManualImportResult,
@@ -269,6 +270,20 @@ export const api = {
       body: JSON.stringify({ name, color }),
     }),
   listGroups: () => request<Group[]>("/api/groups"),
+  // Cria o grupo PELO sistema — é o que faz "esse grupo é meu" ser fato e não palpite (o WAHA não
+  // diz quem criou). O grupo criado volta com isMine=true.
+  createGroup: (body: { name: string; phones: string[] }) =>
+    request<Group>("/api/groups", { method: "POST", body: JSON.stringify(body) }),
+  // Telefones de quem está dentro do grupo.
+  listGroupMembers: (groupId: string) =>
+    request<GroupMember[]>(`/api/groups/${encodeURIComponent(groupId)}/participants`),
+  // Liga/desliga a dispensa da trava de "já enviei pra esse" pros membros deste grupo. Ao LIGAR, o
+  // backend re-lê os membros no WhatsApp e fotografa — se o WhatsApp estiver fora, falha e NÃO liga.
+  setGroupExemption: (groupId: string, enabled: boolean) =>
+    request<{ enabled: boolean; members: number }>(
+      `/api/groups/${encodeURIComponent(groupId)}/exemption`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    ),
   importGroup: (groupId: string, groupTag?: string) =>
     request<ImportResult>(`/api/groups/${encodeURIComponent(groupId)}/import`, {
       method: "POST",

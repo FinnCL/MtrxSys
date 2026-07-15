@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { Group, ImportResult } from "../api/types";
+import type { Group, GroupMember, ImportResult } from "../api/types";
 import { downloadContactsXlsx } from "../utils/exportContacts";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -9,6 +9,211 @@ interface GroupRow {
   importing: boolean;
   result: ImportResult | null;
   error: string | null;
+}
+
+// Uma linha de grupo. Igual nas duas seções — o que muda é só o destaque (o CSS da seção "mine").
+// Ver os membros é sob demanda: a lista pode ter dezenas de grupos, e buscar participantes de todos
+// seria uma chamada ao WAHA por linha, em toda abertura da aba.
+function GroupRowView({
+  row,
+  onImport,
+  onLeave,
+  onExemptionChanged,
+  leaving,
+}: {
+  row: GroupRow;
+  onImport: () => void;
+  onLeave: () => void;
+  onExemptionChanged: (enabled: boolean) => void;
+  leaving: boolean;
+}) {
+  const [members, setMembers] = useState<GroupMember[] | null>(null);
+  const [membersError, setMembersError] = useState<string | null>(null);
+  const [showMembers, setShowMembers] = useState(false);
+  const [exemptionBusy, setExemptionBusy] = useState(false);
+  const [exemptionError, setExemptionError] = useState<string | null>(null);
+
+  // A chave só reflete o servidor DEPOIS que ele confirma. Nada de pintar o estado otimista aqui:
+  // ligar pode falhar (WhatsApp fora → o backend recusa em vez de isentar com lista velha), e uma
+  // chave que parece ligada sem estar diria que o disparo vai repetir quando não vai.
+  async function toggleExemption() {
+    const next = !row.group.exemptFromDispatchLimits;
+    setExemptionBusy(true);
+    setExemptionError(null);
+    try {
+      const res = await api.setGroupExemption(row.group.id, next);
+      onExemptionChanged(res.enabled);
+    } catch (ex) {
+      setExemptionError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setExemptionBusy(false);
+    }
+  }
+
+  async function toggleMembers() {
+    if (showMembers) {
+      setShowMembers(false);
+      return;
+    }
+    setShowMembers(true);
+    if (members) return; // já buscou; não re-busca a cada abrir/fechar
+    setMembersError(null);
+    try {
+      setMembers(await api.listGroupMembers(row.group.id));
+    } catch (ex) {
+      setMembersError(ex instanceof Error ? ex.message : String(ex));
+    }
+  }
+
+  return (
+    <li className={`group-row${row.group.isMine ? " group-row-mine" : ""}`}>
+      <div className="group-info">
+        <span className="group-name">{row.group.name || "(sem nome)"}</span>
+        {row.group.participantsCount !== null && (
+          <span className="muted small">{row.group.participantsCount} participantes</span>
+        )}
+        {row.result && (
+          <span className="import-summary">
+            {row.result.imported} importados · {row.result.duplicated} duplicados
+            {row.result.failed > 0 && ` · ${row.result.failed} falharam`}
+          </span>
+        )}
+        {row.error && <span className="error small">{row.error}</span>}
+        {/* O input só existe em grupo SEU: em grupo de terceiro não há isenção pra ligar. */}
+        {row.group.isMine && (
+          <label className="group-exemption">
+            <input
+              type="checkbox"
+              checked={row.group.exemptFromDispatchLimits}
+              disabled={exemptionBusy}
+              onChange={() => void toggleExemption()}
+            />
+            <span>
+              Posso enviar mais de uma vez pra quem está neste grupo
+              {exemptionBusy && " — salvando..."}
+            </span>
+          </label>
+        )}
+        {row.group.isMine && row.group.exemptFromDispatchLimits && (
+          <span className="muted small">
+            Vale pra quem estava no grupo quando você ligou a chave. Entrou gente depois? Desligue e
+            ligue de novo. Quem responder <strong>SAIR</strong> continua fora — isso a chave não muda.
+          </span>
+        )}
+        {exemptionError && <span className="error small">{exemptionError}</span>}
+        {showMembers && (
+          <div className="group-members">
+            {membersError && <span className="error small">{membersError}</span>}
+            {!members && !membersError && <span className="muted small">Carregando membros…</span>}
+            {members?.length === 0 && <span className="muted small">Nenhum membro com número visível.</span>}
+            {members?.map((m) => (
+              <span key={m.phone} className="muted small">
+                {m.name ? `${m.name} — ` : ""}{m.phone}{m.isAdmin ? " (admin)" : ""}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="group-actions">
+        <button type="button" onClick={() => void toggleMembers()} className="import-btn"
+          title="Mostra o telefone de quem está dentro do grupo">
+          {showMembers ? "Ocultar membros" : "Ver membros"}
+        </button>
+        <button
+          type="button"
+          onClick={onImport}
+          disabled={row.importing}
+          className="import-btn"
+          title="Importa os participantes como contatos. Entrou gente nova no grupo depois? Clique de novo — só os novos são adicionados; os já cadastrados são pulados (duplicados)."
+        >
+          {row.importing ? "Importando..." : row.result ? "Importar novos" : "Importar contatos"}
+        </button>
+        <button
+          type="button"
+          onClick={onLeave}
+          disabled={leaving}
+          className="leave-btn"
+          title="Faz o número conectado sair deste grupo"
+        >
+          {leaving ? "Saindo..." : "Sair"}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+// Criar o grupo AQUI é o que torna "esse grupo é meu" um fato: o WAHA não expõe quem criou, então
+// o ato de criar pelo sistema é a única fonte da verdade (ver OwnedGroup no backend).
+function CreateGroupForm({ onCreated }: { onCreated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [phones, setPhones] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    const list = phones
+      .split(/[\n,;]+/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    if (!name.trim() || list.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createGroup({ name: name.trim(), phones: list });
+      setName("");
+      setPhones("");
+      setOpen(false);
+      onCreated();
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="groups-create">
+        <button type="button" className="import-btn" onClick={() => setOpen(true)}>
+          + Criar grupo
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="groups-create groups-create-open">
+      <label htmlFor="new-group-name">Nome do grupo</label>
+      <input
+        id="new-group-name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Amigos — aquecimento"
+      />
+      <label htmlFor="new-group-phones">Participantes (um por linha, ou separados por vírgula)</label>
+      <textarea
+        id="new-group-phones"
+        value={phones}
+        onChange={(e) => setPhones(e.target.value)}
+        rows={5}
+        placeholder={"+55 71 99999-8888\n+55 71 98888-7777"}
+      />
+      <p className="muted small">
+        O grupo é criado no WhatsApp de verdade, pelo número conectado. Ele fica registrado como
+        <strong> seu</strong> — só grupos criados por aqui podem receber tratamento especial depois.
+      </p>
+      {error && <p className="error small">{error}</p>}
+      <div className="group-actions">
+        <button type="button" className="import-btn" onClick={() => void submit()} disabled={busy || !name.trim() || !phones.trim()}>
+          {busy ? "Criando..." : "Criar grupo"}
+        </button>
+        <button type="button" className="leave-btn" onClick={() => setOpen(false)} disabled={busy}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function GroupsScreen() {
@@ -46,6 +251,18 @@ export function GroupsScreen() {
 
   const refresh = useCallback(() => {
     setReloadKey((k) => k + 1);
+  }, []);
+
+  // Atualiza só a linha tocada, com o valor que o SERVIDOR confirmou. Um refresh inteiro aqui
+  // fecharia os "Ver membros" abertos e re-bateria no WhatsApp à toa.
+  const setExemption = useCallback((groupId: string, enabled: boolean) => {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.group.id === groupId
+          ? { ...r, group: { ...r.group, exemptFromDispatchLimits: enabled } }
+          : r,
+      ),
+    );
   }, []);
 
   async function importOne(idx: number) {
@@ -107,6 +324,11 @@ export function GroupsScreen() {
   // antiga visível com o botão em "Atualizando..." pra não dar flash de tela em branco.
   if (loading && rows.length === 0) return <div className="loading">Carregando grupos...</div>;
 
+  // A separação vem do backend (isMine), que a lê de owned_groups — não de heurística sobre o
+  // nome ou sobre ser admin.
+  const mine = rows.filter((r) => r.group.isMine);
+  const others = rows.filter((r) => !r.group.isMine);
+
   return (
     <main className="groups-screen">
       <header className="groups-header">
@@ -129,44 +351,48 @@ export function GroupsScreen() {
         </p>
       </header>
       {loadError && <p className="error">{loadError}</p>}
+
+      <CreateGroupForm onCreated={refresh} />
+
+      {/* MEUS GRUPOS em seção própria, no topo e em verde. O que sustenta a separação não é
+          aparência: é o registro de que ESTE sistema criou o grupo (owned_groups). O WAHA não expõe
+          quem criou — sem o registro, isto seria adivinhação. */}
+      {mine.length > 0 && (
+        <section className="groups-section groups-section-mine">
+          <h3 className="groups-section-title">Meus grupos</h3>
+          <p className="muted small">
+            Criados por você aqui pelo sistema. São os únicos que podem receber tratamento especial
+            no disparo — grupo em que você entrou por convite nunca entra nesta lista.
+          </p>
+          <ul className="groups-list">
+            {mine.map((row) => (
+              <GroupRowView
+                key={row.group.id}
+                row={row}
+                onImport={() => void importOne(rows.indexOf(row))}
+                onLeave={() => setConfirmLeave(row.group)}
+                onExemptionChanged={(enabled) => setExemption(row.group.id, enabled)}
+                leaving={leavingId === row.group.id}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* "Outros" só faz sentido em contraste com a seção acima. Sem grupo meu (o caso de todo mundo
+          hoje), a lista fica como sempre foi — sem um título solto por cima. */}
+      {mine.length > 0 && others.length > 0 && <h3 className="groups-section-title">Outros grupos</h3>}
       {rows.length === 0 && !loadError && <p className="muted">Você não participa de nenhum grupo.</p>}
       <ul className="groups-list">
-        {rows.map((row, i) => (
-          <li key={row.group.id} className="group-row">
-            <div className="group-info">
-              <span className="group-name">{row.group.name || "(sem nome)"}</span>
-              {row.group.participantsCount !== null && (
-                <span className="muted small">{row.group.participantsCount} participantes</span>
-              )}
-              {row.result && (
-                <span className="import-summary">
-                  {row.result.imported} importados · {row.result.duplicated} duplicados
-                  {row.result.failed > 0 && ` · ${row.result.failed} falharam`}
-                </span>
-              )}
-              {row.error && <span className="error small">{row.error}</span>}
-            </div>
-            <div className="group-actions">
-              <button
-                type="button"
-                onClick={() => void importOne(i)}
-                disabled={row.importing}
-                className="import-btn"
-                title="Importa os participantes como contatos. Entrou gente nova no grupo depois? Clique de novo — só os novos são adicionados; os já cadastrados são pulados (duplicados)."
-              >
-                {row.importing ? "Importando..." : row.result ? "Importar novos" : "Importar contatos"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmLeave(row.group)}
-                disabled={leavingId === row.group.id}
-                className="leave-btn"
-                title="Faz o número conectado sair deste grupo"
-              >
-                {leavingId === row.group.id ? "Saindo..." : "Sair"}
-              </button>
-            </div>
-          </li>
+        {others.map((row) => (
+          <GroupRowView
+            key={row.group.id}
+            row={row}
+            onImport={() => void importOne(rows.indexOf(row))}
+            onLeave={() => setConfirmLeave(row.group)}
+            onExemptionChanged={(enabled) => setExemption(row.group.id, enabled)}
+            leaving={leavingId === row.group.id}
+          />
         ))}
       </ul>
 

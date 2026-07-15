@@ -77,6 +77,9 @@ internal sealed class WahaClient : IWahaClient
         _contacts.ListContactsAsync(sessionId, ct);
 
     // Grupos
+    public Task<WahaGroup> CreateGroupAsync(
+        string sessionId, string name, IReadOnlyCollection<string> participantsE164, CancellationToken ct) =>
+        _groups.CreateGroupAsync(sessionId, name, participantsE164, ct);
     public Task<IReadOnlyList<WahaGroup>> ListGroupsAsync(string sessionId, CancellationToken ct) =>
         _groups.ListGroupsAsync(sessionId, ct);
     public Task<IReadOnlyList<WahaParticipant>> ListGroupParticipantsAsync(string sessionId, string groupId, CancellationToken ct) =>

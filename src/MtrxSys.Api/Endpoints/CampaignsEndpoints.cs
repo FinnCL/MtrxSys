@@ -122,6 +122,7 @@ public static class CampaignsEndpoints
             IOptions<DispatchOptions> dispatchOpts,
             ISystemStateRepository state,
             ISharedPhoneLedger ledger,
+            IOwnedGroupRepository ownedGroups,
             ILoggerFactory logFactory,
             CancellationToken ct) =>
         {
@@ -173,14 +174,18 @@ public static class CampaignsEndpoints
             // pra reusar na pausa lá embaixo (sem segundo hit no banco).
             var sysState = await state.GetAsync(ct);
             var ownPhone = sysState.WarmupPhone;
+            // Isentos: membros dos grupos criados aqui com a isenção ligada. Vazio no default (e em
+            // toda a produção hoje) → o filtro abaixo é idêntico ao de sempre.
+            var exempt = await ownedGroups.ListExemptPhonesAsync(ct);
             var filter = new ContactFilter(
                 Stage: stage,
                 TagName: req.Filter?.TagName,
                 GroupTag: req.Filter?.GroupTag,
-                ExcludeOptedOut: true,
+                ExcludeOptedOut: true, // opt-out LOCAL: a isenção não alcança, nem aqui nem no motor
                 EngagedOnly: req.Filter?.EngagedOnly ?? false,
                 ExcludePhoneE164: ownPhone,
-                ExcludeAlreadyDispatched: true); // não re-enfileira quem já recebeu/está na fila
+                ExcludeAlreadyDispatched: true, // não re-enfileira quem já recebeu/está na fila
+                ExemptPhonesE164: exempt);
             var targets = await contacts.ListByFilterAsync(filter, ct);
             // Dedup entre ambientes: em Enforce, tira do público quem já consta no registro
             // compartilhado (já enviado/opt-out em outro chip) — evita enfileirar jobs que o motor
@@ -190,7 +195,10 @@ public static class CampaignsEndpoints
                 var suppressed = await ledger.GetSuppressedAsync(targets.Select(c => c.Phone.E164).ToArray(), ct);
                 if (suppressed.Count > 0)
                 {
-                    targets = targets.Where(c => !suppressed.Contains(c.Phone.E164)).ToList();
+                    var rescued = await RescueExemptFromLedgerAsync(ledger, suppressed, exempt, ct);
+                    targets = targets
+                        .Where(c => !suppressed.Contains(c.Phone.E164) || rescued.Contains(c.Phone.E164))
+                        .ToList();
                 }
             }
             var now = clock.UtcNow;
@@ -413,10 +421,14 @@ public static class CampaignsEndpoints
             IContactRepository contacts,
             ISystemStateRepository state,
             ISharedPhoneLedger ledger,
+            IOwnedGroupRepository ownedGroups,
             CancellationToken ct) =>
         {
-            // Mesma exclusão do disparo real (próprio número + já enviados), pra a prévia bater com a fila.
+            // Mesma exclusão do disparo real (próprio número + já enviados), pra a prévia bater com a
+            // fila. A ISENÇÃO entra aqui pelo mesmo motivo: sem ela a prévia diria "3" e a fila sairia
+            // com 8 — uma contagem que mente sobre o que vai sair é pior que não ter contagem.
             var ownPhone = (await state.GetAsync(ct)).WarmupPhone;
+            var exempt = await ownedGroups.ListExemptPhonesAsync(ct);
             var filter = new ContactFilter(
                 Stage: null,
                 TagName: null,
@@ -424,14 +436,20 @@ public static class CampaignsEndpoints
                 ExcludeOptedOut: true,
                 EngagedOnly: engagedOnly ?? false,
                 ExcludePhoneE164: ownPhone,
-                ExcludeAlreadyDispatched: true);
+                ExcludeAlreadyDispatched: true,
+                ExemptPhonesE164: exempt);
             // Em Enforce, a prévia também desconta quem o registro compartilhado vai suprimir —
             // assim a contagem bate com o que o disparo realmente enfileira (mesma lógica do POST).
             if (ledger.IsEnforcing)
             {
                 var targets = await contacts.ListByFilterAsync(filter, ct);
                 var suppressed = await ledger.GetSuppressedAsync(targets.Select(c => c.Phone.E164).ToArray(), ct);
-                return Results.Ok(new { count = targets.Count(c => !suppressed.Contains(c.Phone.E164)) });
+                var rescued = await RescueExemptFromLedgerAsync(ledger, suppressed, exempt, ct);
+                return Results.Ok(new
+                {
+                    count = targets.Count(c =>
+                        !suppressed.Contains(c.Phone.E164) || rescued.Contains(c.Phone.E164)),
+                });
             }
             var count = await contacts.CountByFilterAsync(filter, ct);
             return Results.Ok(new { count });
@@ -492,6 +510,41 @@ public static class CampaignsEndpoints
         });
 
         return app;
+    }
+
+    // Devolve, dentre os telefones que o registro compartilhado suprimiu, quais voltam ao público por
+    // serem ISENTOS (membros de grupo criado pelo operador — ver OwnedGroup).
+    //
+    // Por que consulta um a um em vez de simplesmente tirar os isentos do conjunto suprimido: o lote
+    // (GetSuppressedAsync) devolve "os que constam" e NÃO distingue "já enviado" de "OPT-OUT" — os
+    // dois chegam misturados. Resgatar pelo lote isentaria do opt-out junto, e mandaria disparo pra
+    // quem pediu pra sair em outro ambiente. Então cada isento suprimido é reconsultado pra saber a
+    // CAUSA, e só "já enviado" é resgatado.
+    //
+    // O laço é limitado pela interseção (isentos ∩ suprimidos), não pelo público: são os conhecidos
+    // de um grupo, e só num enfileiramento (ação rara e deliberada).
+    //
+    // Unavailable (registro fora do ar) NÃO resgata: sem saber a causa, o telefone continua suprimido.
+    // Fail-closed, igual ao motor — postergar um envio é barato, furar um opt-out não.
+    private static async Task<IReadOnlySet<string>> RescueExemptFromLedgerAsync(
+        ISharedPhoneLedger ledger,
+        IReadOnlySet<string> suppressed,
+        IReadOnlySet<string> exempt,
+        CancellationToken ct)
+    {
+        var rescued = new HashSet<string>(StringComparer.Ordinal);
+        if (exempt.Count == 0)
+        {
+            return rescued;
+        }
+        foreach (var phone in suppressed.Where(exempt.Contains))
+        {
+            if (await ledger.GetStatusAsync(phone, ct) == SharedLedgerStatus.Sent)
+            {
+                rescued.Add(phone);
+            }
+        }
+        return rescued;
     }
 
     // Reconcilia o aquecimento com o número conectado e persiste. Retorna se detectou troca

@@ -25,6 +25,7 @@ public sealed class MtrxDbContext(DbContextOptions<MtrxDbContext> options) : DbC
     public DbSet<ContactTagAssignment> ContactTagAssignments => Set<ContactTagAssignment>();
     public DbSet<ContactStageChange> ContactStageChanges => Set<ContactStageChange>();
     public DbSet<GroupLink> GroupLinks => Set<GroupLink>();
+    public DbSet<OwnedGroup> OwnedGroups => Set<OwnedGroup>();
     public DbSet<WarmupCircleMember> WarmupCircle => Set<WarmupCircleMember>();
     public DbSet<User> Users => Set<User>();
 

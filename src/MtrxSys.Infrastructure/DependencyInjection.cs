@@ -125,6 +125,7 @@ public static class DependencyInjection
         services.AddScoped<IContactTagRepository, ContactTagRepository>();
         services.AddScoped<IContactStageChangeRepository, ContactStageChangeRepository>();
         services.AddScoped<IGroupLinkRepository, GroupLinkRepository>();
+        services.AddScoped<IOwnedGroupRepository, OwnedGroupRepository>();
         services.AddScoped<IWarmupCircleRepository, WarmupCircleRepository>();
         services.AddScoped<IHumanPhaseProgressRepository, HumanPhaseProgressRepository>();
         services.AddScoped<IUserRepository, UserRepository>();

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MtrxSys.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MtrxSys.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(MtrxDbContext))]
-    partial class MtrxDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260715124229_AddOwnedGroups")]
+    partial class AddOwnedGroups
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -457,12 +460,6 @@ namespace MtrxSys.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
-                    b.Property<bool>("DispatchExemptionEnabled")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false)
-                        .HasColumnName("dispatch_exemption_enabled");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(120)
@@ -481,32 +478,6 @@ namespace MtrxSys.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("owned_groups", (string)null);
-                });
-
-            modelBuilder.Entity("MtrxSys.Core.Domain.Groups.OwnedGroupMember", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<Guid>("OwnedGroupId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("owned_group_id");
-
-                    b.Property<string>("PhoneE164")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("phone_e164");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OwnedGroupId");
-
-                    b.HasIndex("PhoneE164");
-
-                    b.ToTable("owned_group_members", (string)null);
                 });
 
             modelBuilder.Entity("MtrxSys.Core.Domain.Messages.MessageTemplate", b =>
@@ -840,15 +811,6 @@ namespace MtrxSys.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("MtrxSys.Core.Domain.Groups.OwnedGroupMember", b =>
-                {
-                    b.HasOne("MtrxSys.Core.Domain.Groups.OwnedGroup", null)
-                        .WithMany("Members")
-                        .HasForeignKey("OwnedGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("MtrxSys.Core.Domain.SystemState.SystemStateAggregate", b =>
                 {
                     b.OwnsOne("MtrxSys.Core.Domain.SystemState.CircuitBreakerState", "Circuit", b1 =>
@@ -876,11 +838,6 @@ namespace MtrxSys.Infrastructure.Persistence.Migrations
 
                     b.Navigation("Circuit")
                         .IsRequired();
-                });
-
-            modelBuilder.Entity("MtrxSys.Core.Domain.Groups.OwnedGroup", b =>
-                {
-                    b.Navigation("Members");
                 });
 #pragma warning restore 612, 618
         }

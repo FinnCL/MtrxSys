@@ -95,9 +95,19 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         // fica de fora de propósito (re-adicionável manualmente). "Renovar lista" zera tudo.
         if (filter.ExcludeAlreadyDispatched)
         {
-            q = q.Where(c => c.LastSentAt == null && !db.DispatchJobs.Any(j =>
-                j.ContactId == c.Id
-                && (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)));
+            // ISENTOS (membros de grupo criado pelo operador, com a isenção ligada) escapam da trava
+            // do LastSentAt — é literalmente a razão da isenção existir: conversa recorrente com
+            // conhecido. Mas NÃO escapam da trava de já estar na fila: aquilo não é a regra de "uma
+            // vez só", é a proteção contra o mesmo clique enfileirar a pessoa duas vezes.
+            var exempt = filter.ExemptPhonesE164 as IReadOnlyList<string> ?? filter.ExemptPhonesE164?.ToList();
+            q = exempt is { Count: > 0 }
+                ? q.Where(c => (c.LastSentAt == null || exempt.Contains(c.Phone.E164))
+                    && !db.DispatchJobs.Any(j =>
+                        j.ContactId == c.Id
+                        && (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)))
+                : q.Where(c => c.LastSentAt == null && !db.DispatchJobs.Any(j =>
+                    j.ContactId == c.Id
+                    && (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)));
         }
         // Nunca dispara pro próprio número conectado (evita auto-envio).
         if (!string.IsNullOrWhiteSpace(filter.ExcludePhoneE164))

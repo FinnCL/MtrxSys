@@ -317,6 +317,27 @@ input[type="checkbox"], input[type="radio"] {
   border-radius: 6px;
   gap: 16px;
 }
+/* MEUS GRUPOS — os criados por aqui (owned_groups). O verde reusa o #22c55e que a tela já usa no
+   resumo de importação, em vez de inventar um segundo verde. A borda esquerda grossa é o que
+   diferencia à distância: é o único sinal que sobrevive a uma lista longa e rolada. */
+.groups-section-mine { border-left: 3px solid #22c55e; padding-left: 12px; margin-bottom: 20px; }
+.groups-section-title { margin: 18px 0 6px; font-size: 13px; font-weight: 700; letter-spacing: .02em;
+  text-transform: uppercase; color: var(--muted); }
+.groups-section-mine .groups-section-title { color: #22c55e; margin-top: 0; }
+.group-row-mine { border-color: #22c55e; }
+.group-members { display: flex; flex-direction: column; gap: 1px; margin-top: 6px;
+  font-family: ui-monospace, monospace; }
+/* A chave de isenção: fica na linha do grupo, não escondida atrás de um "avançado" — ela muda o que
+   o disparo faz, então tem que ser visível junto do grupo que ela afeta. */
+.group-exemption { display: flex; align-items: center; gap: 8px; margin-top: 6px;
+  font-size: 12px; color: var(--fg); cursor: pointer; }
+.group-exemption input { cursor: pointer; accent-color: #22c55e; }
+/* Criar grupo: fechado é só um botão; aberto vira o formulário. */
+.groups-create { margin: 12px 0; max-width: 800px; }
+.groups-create-open { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; }
+.groups-create-open label { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.groups-create-open textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 12px; }
 .group-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .group-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .small { font-size: 12px; }
