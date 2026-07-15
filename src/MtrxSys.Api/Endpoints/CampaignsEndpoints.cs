@@ -221,13 +221,31 @@ public static class CampaignsEndpoints
             // Prepara a fila JÁ PAUSADA, no servidor e atômico com os jobs: os jobs nascem
             // Pending, mas o motor não envia enquanto IsManuallyPaused. Garante que NADA sai sem
             // o operador clicar "Iniciar envios" (resume) — sem depender de o front pausar antes.
-            if (targets.Count > 0)
+            //
+            // MAS NÃO PAUSA FILA QUE JÁ ESTÁ RODANDO. Este mesmo endpoint atende dois botões: o
+            // "Adicionar para disparar" (fila vazia → prepara) e o "+ Adicionar N novo(s) à fila",
+            // que a tela oferece DURANTE o envio. Pausar no segundo caso derrubava o envio em curso:
+            // o operador clicava pra somar contatos e o motor parava calado (o banner seguia dizendo
+            // "Enviando"). O próprio comentário do botão promete "não interfere na fila atual".
+            //
+            // A garantia continua intacta: ela é "nada sai sem o operador mandar", e numa fila que já
+            // está rodando ele JÁ mandou. Pausar de novo não protege nada — só sabota.
+            //
+            // `earliest` (lido acima, sem consulta extra) é null quando não há job pendente.
+            if (targets.Count > 0 && !sysState.IsSendingNow(queueHasPendingJobs: earliest is not null))
             {
                 sysState.Pause(SystemStateAggregate.ManualPauseReason);
                 await state.UpdateAsync(sysState, ct);
             }
             await uow.SaveChangesAsync(ct);
-            return Results.Ok(new { scheduled = targets.Count, templatesUsed = pool.Count });
+            // `paused` é o estado REAL depois desta chamada — a tela precisa dele pra saber se mostra
+            // "Iniciar envios" ou "Enviando". Antes ela adivinhava, e adivinhava errado no somar.
+            return Results.Ok(new
+            {
+                scheduled = targets.Count,
+                templatesUsed = pool.Count,
+                paused = sysState.IsManuallyPaused,
+            });
         });
 
         dispatch.MapGet("/stats", async (IDispatchJobRepository repo, CancellationToken ct) =>

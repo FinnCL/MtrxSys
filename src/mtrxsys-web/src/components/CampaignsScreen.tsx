@@ -347,7 +347,8 @@ export function CampaignsScreen() {
         engagedOnly: audience === "responded" ? true : undefined,
         groupTag: group.trim() || undefined,
       });
-      setPaused(true);
+      // O estado vem do SERVIDOR, não de palpite: é ele que decide se pausa (ver POST /api/dispatch).
+      setPaused(result.paused);
       setDispatchMsg(
         `${result.scheduled} contato(s) na fila. Revise em "Resultado dos envios" e clique "Iniciar envios".`,
       );
@@ -361,9 +362,12 @@ export function CampaignsScreen() {
 
   // Adiciona à fila APENAS os contatos novos importados depois do disparo já preparado/em
   // andamento. O endpoint /api/dispatch tem ExcludeAlreadyDispatched: true, então contatos
-  // que já têm job (Pending/Sent/Failed/Skipped) são ignorados — só entra na fila quem ainda
-  // não recebeu/está pra receber. Usa a mensagem atualmente selecionada (radio) e o mesmo
-  // filtro de público/grupo. Não interfere na fila atual; só soma os novos como Pending.
+  // que já têm job (Pending/Retrying) são ignorados — só entra na fila quem ainda não está pra
+  // receber. Usa a mensagem atualmente selecionada (radio) e o mesmo filtro de público/grupo.
+  //
+  // Não interfere na fila atual: com o envio em curso o servidor NÃO pausa (ver POST /api/dispatch).
+  // Isto já foi falso — o endpoint pausava sempre, então clicar aqui no meio de um envio derrubava
+  // o envio, e a tela seguia dizendo "Enviando" porque não olhava a resposta.
   async function onAddNew() {
     if (selectedIds.length === 0) {
       setDispatchMsg("Escolha uma mensagem antes de adicionar.");
@@ -381,7 +385,14 @@ export function CampaignsScreen() {
         engagedOnly: audience === "responded" ? true : undefined,
         groupTag: group.trim() || undefined,
       });
-      setDispatchMsg(`+${result.scheduled} contato(s) novo(s) adicionado(s) à fila.`);
+      // Reflete o que o servidor decidiu. Se por algum motivo ele pausou (fila já estava parada),
+      // a tela tem que mostrar "Iniciar envios" em vez de seguir dizendo "Enviando".
+      setPaused(result.paused);
+      setDispatchMsg(
+        result.paused
+          ? `+${result.scheduled} contato(s) na fila. Clique "Iniciar envios".`
+          : `+${result.scheduled} contato(s) novo(s) adicionado(s) à fila — o envio segue.`,
+      );
       await Promise.all([loadLive(), loadAudienceCount()]);
     } catch (ex) {
       setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);

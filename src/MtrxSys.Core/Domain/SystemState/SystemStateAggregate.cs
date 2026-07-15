@@ -54,6 +54,17 @@ public sealed class SystemStateAggregate : Entity<int>
 
     public bool IsManuallyPaused => PausedReason == ManualPauseReason;
 
+    /// <summary>O motor está enviando AGORA? = há job na fila e ninguém pausou.
+    ///
+    /// Existe pra responder uma pergunta que <see cref="IsManuallyPaused"/> sozinho NÃO responde:
+    /// "não pausado" é o mesmo valor num sistema recém-subido (que nunca enviou nada) e num que
+    /// está no meio de um envio. Quem distingue é a fila ter job pendente.
+    ///
+    /// Serve pra decidir se enfileirar deve pausar. Preparar uma fila nova PRECISA pausar (nada sai
+    /// sem o operador mandar); somar contatos a uma fila que já está enviando NÃO pode pausar — ele
+    /// já mandou, e pausar ali derrubava o envio em curso em silêncio.</summary>
+    public bool IsSendingNow(bool queueHasPendingJobs) => queueHasPendingJobs && !IsManuallyPaused;
+
     private SystemStateAggregate() { }
 
     public static SystemStateAggregate CreateInitial()

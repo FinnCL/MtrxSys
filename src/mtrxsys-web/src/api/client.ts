@@ -390,8 +390,11 @@ export const api = {
   },
   deleteTemplate: (id: string) =>
     request<void>(`/api/templates/${id}`, { method: "DELETE" }),
+  // `paused` = o estado REAL da fila depois da chamada. Preparar uma fila nova pausa (nada sai sem
+  // "Iniciar envios"); somar contatos numa fila que JÁ está enviando não pausa. Use este valor —
+  // não presuma, porque o mesmo endpoint atende os dois casos.
   dispatch: (templateIds: string[], filter: DispatchFilter) =>
-    request<{ scheduled: number; templatesUsed: number }>("/api/dispatch", {
+    request<{ scheduled: number; templatesUsed: number; paused: boolean }>("/api/dispatch", {
       method: "POST",
       body: JSON.stringify({ templateIds, filter }),
     }),
