@@ -169,6 +169,24 @@ public sealed class DispatchExemptionE2ETests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Desfazer_a_posse_derruba_a_isencao_junto()
+    {
+        // Desmarcar "é meu" tem que levar a isenção embora. Um grupo que não é seu não pode ter
+        // dispensa, e ela sumiria da tela (a caixa só aparece em grupo seu) — ficaria uma dispensa
+        // órfã, ativa no disparo e invisível pra desligar. Quem garante isso é o cascade da FK.
+        await SeedAlreadySentAsync(Friend);
+        await SeedExemptGroupAsync(Friend);
+        var owned = new OwnedGroupRepository(_db);
+        (await AudienceAsync()).Should().Contain(Friend, "sanidade: a isenção está valendo antes");
+
+        (await owned.RemoveAsync("120363410949918818", CancellationToken.None)).Should().BeTrue();
+        await _db.SaveChangesAsync();
+
+        (await _db.Set<OwnedGroupMember>().CountAsync()).Should().Be(0, "cascade apaga a fotografia");
+        (await AudienceAsync()).Should().NotContain(Friend, "sem posse não há isenção");
+    }
+
+    [Fact]
     public async Task Desligar_esquece_a_fotografia_dos_membros()
     {
         await SeedAlreadySentAsync(Friend);

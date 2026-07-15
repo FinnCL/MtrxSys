@@ -32,8 +32,64 @@ public static class GroupsEndpoints
             return Results.Ok(dtos);
         });
 
+        // DECLARA que um grupo existente é do operador. É o caminho PRINCIPAL de posse, não um atalho
+        // do "criar pelo sistema": o grupo de aquecimento nasce no APARELHO FÍSICO, na mão, porque
+        // num chip novo criar grupo por API é assinatura de bot (ver OwnedGroup).
+        //
+        // Idempotente: declarar de novo devolve o mesmo estado em vez de estourar no índice único —
+        // um clique repetido não é erro, é a mesma afirmação.
+        group.MapPost("/{groupId}/claim", async (
+            string groupId,
+            IWahaClient waha,
+            IOwnedGroupRepository owned,
+            IOptions<DispatchOptions> dispatch,
+            IClock clock,
+            IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            if (await owned.GetByWaGroupIdAsync(groupId, ct) is not null)
+            {
+                return Results.Ok(new { claimed = true, alreadyClaimed = true });
+            }
+
+            // O grupo TEM que existir na listagem do WhatsApp. Sem esta checagem daria pra declarar
+            // um id inventado (ou já saído do grupo), e a linha órfã em owned_groups nunca casaria
+            // com a listagem: a posse não apareceria, e o operador não saberia por quê. Além disso, a
+            // listagem é a mesma fonte do `isMine` — validar contra ela garante o MESMO formato de id
+            // dos dois lados (o número antes do '@', ver WahaParsing).
+            var groups = await waha.ListGroupsAsync(dispatch.Value.SessionId, ct);
+            var found = groups.FirstOrDefault(g => string.Equals(g.Id, groupId, StringComparison.Ordinal));
+            if (found is null)
+            {
+                return Results.NotFound(new
+                {
+                    error = "Este grupo não aparece na lista do WhatsApp conectado. "
+                        + "Confira se o chip está pareado e se ele ainda participa do grupo.",
+                });
+            }
+
+            await owned.AddAsync(OwnedGroup.Create(Guid.NewGuid(), found.Id, found.Name, clock.UtcNow), ct);
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(new { claimed = true, alreadyClaimed = false });
+        });
+
+        // Desfaz a declaração. O grupo continua intacto no WhatsApp — some só a marca de que é seu.
+        // A isenção cai junto (a fotografia dos membros é apagada em cascata), de propósito: um grupo
+        // que não é seu não pode ter isenção, e deixá-la ligada seria uma dispensa órfã que ninguém
+        // mais vê na tela pra desligar.
+        group.MapDelete("/{groupId}/claim", async (
+            string groupId,
+            IOwnedGroupRepository owned,
+            IUnitOfWork uow,
+            CancellationToken ct) =>
+        {
+            var removed = await owned.RemoveAsync(groupId, ct);
+            await uow.SaveChangesAsync(ct);
+            return Results.Ok(new { claimed = false, wasClaimed = removed });
+        });
+
         // Liga/desliga a dispensa da trava de "já enviei pra esse" pros membros DESTE grupo.
-        // Só alcança grupo criado aqui — grupo que não está em owned_groups nem tem o que ligar.
+        // Só alcança grupo declarado seu — grupo sem registro em owned_groups nem tem o que ligar.
         group.MapPatch("/{groupId}/exemption", async (
             string groupId,
             SetExemptionRequest req,
@@ -47,9 +103,12 @@ public static class GroupsEndpoints
             var target = await owned.GetForUpdateAsync(groupId, ct);
             if (target is null)
             {
-                // 404 e não 400: a isenção é uma propriedade de grupo SEU. Num grupo que você entrou
-                // por convite ela não existe pra ser ligada — não é um valor inválido, é ausência.
-                return Results.NotFound(new { error = "Este grupo não foi criado aqui, então não tem isenção." });
+                // 404 e não 400: a isenção é uma propriedade de grupo SEU. Num grupo sem posse
+                // declarada ela não existe pra ser ligada — não é valor inválido, é ausência.
+                return Results.NotFound(new
+                {
+                    error = "Este grupo não está marcado como seu. Clique em \"Este grupo é meu\" antes.",
+                });
             }
 
             if (!req.Enabled)

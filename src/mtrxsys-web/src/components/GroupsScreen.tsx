@@ -19,12 +19,14 @@ function GroupRowView({
   onImport,
   onLeave,
   onExemptionChanged,
+  onClaim,
   leaving,
 }: {
   row: GroupRow;
   onImport: () => void;
   onLeave: () => void;
   onExemptionChanged: (enabled: boolean) => void;
+  onClaim: () => void;
   leaving: boolean;
 }) {
   const [members, setMembers] = useState<GroupMember[] | null>(null);
@@ -115,6 +117,19 @@ function GroupRowView({
         )}
       </div>
       <div className="group-actions">
+        {/* Declarar posse: o grupo de aquecimento é criado por VOCÊ no aparelho físico, então o
+            sistema não tem como saber que é seu — o WAHA não expõe quem criou. Marcar é o que
+            habilita a seção verde e, depois, a isenção. */}
+        <button
+          type="button"
+          onClick={onClaim}
+          className="import-btn"
+          title={row.group.isMine
+            ? "Tira a marca de que este grupo é seu (o grupo continua no WhatsApp)"
+            : "Marca este grupo como seu — habilita a isenção de disparo pros membros dele"}
+        >
+          {row.group.isMine ? "Não é meu" : "Este grupo é meu"}
+        </button>
         <button type="button" onClick={() => void toggleMembers()} className="import-btn"
           title="Mostra o telefone de quem está dentro do grupo">
           {showMembers ? "Ocultar membros" : "Ver membros"}
@@ -142,8 +157,10 @@ function GroupRowView({
   );
 }
 
-// Criar o grupo AQUI é o que torna "esse grupo é meu" um fato: o WAHA não expõe quem criou, então
-// o ato de criar pelo sistema é a única fonte da verdade (ver OwnedGroup no backend).
+// Criar pelo sistema é a via SECUNDÁRIA, e de propósito: num chip novo e frio, "criar grupo com 5
+// participantes" por API como primeira atividade da conta é assinatura de bot. O caminho normal é
+// criar no aparelho, na mão, e marcar aqui com "Este grupo é meu". Isto serve pra chip já quente,
+// ou pra quem quer montar o grupo sem pegar no celular.
 function CreateGroupForm({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -200,8 +217,13 @@ function CreateGroupForm({ onCreated }: { onCreated: () => void }) {
         placeholder={"+55 71 99999-8888\n+55 71 98888-7777"}
       />
       <p className="muted small">
-        O grupo é criado no WhatsApp de verdade, pelo número conectado. Ele fica registrado como
-        <strong> seu</strong> — só grupos criados por aqui podem receber tratamento especial depois.
+        O grupo é criado no WhatsApp de verdade, pelo número conectado, e já fica marcado como
+        <strong> seu</strong>.
+      </p>
+      <p className="muted small">
+        <strong>Chip novo?</strong> Prefira criar o grupo <strong>no seu aparelho</strong> e marcar
+        aqui com "Este grupo é meu". Criar por aqui é o sistema agindo pela conta, e numa conta
+        recém-criada isso parece robô — que é justamente o que o aquecimento evita.
       </p>
       {error && <p className="error small">{error}</p>}
       <div className="group-actions">
@@ -223,6 +245,9 @@ export function GroupsScreen() {
   // Grupo aguardando confirmação de saída (abre o modal); e o id em processo de saída (trava o botão).
   const [confirmLeave, setConfirmLeave] = useState<Group | null>(null);
   const [leavingId, setLeavingId] = useState<string | null>(null);
+  // Grupo aguardando confirmação de "é meu" / "não é meu". Marcar habilita a isenção, então passa
+  // por confirmação — é o clique que decide quem pode receber disparo repetido.
+  const [confirmClaim, setConfirmClaim] = useState<Group | null>(null);
   // Bumpar a chave dispara o useEffect (re-busca da WAHA) preservando a proteção
   // 'cancelled' contra setState pós-unmount.
   const [reloadKey, setReloadKey] = useState(0);
@@ -320,6 +345,43 @@ export function GroupsScreen() {
     }
   }
 
+  // Marca/desmarca a posse. Em sucesso atualiza só a linha tocada; desmarcar derruba a isenção
+  // JUNTO (o backend apaga a fotografia em cascata), e a tela tem que refletir isso, senão a caixa
+  // continuaria marcada mentindo que a dispensa ainda vale.
+  async function toggleClaim(group: Group) {
+    setConfirmClaim(null);
+    try {
+      if (group.isMine) {
+        await api.unclaimGroup(group.id);
+      } else {
+        await api.claimGroup(group.id);
+      }
+      setRows((prev) =>
+        prev.map((r) =>
+          r.group.id === group.id
+            ? {
+                ...r,
+                error: null,
+                group: {
+                  ...r.group,
+                  isMine: !group.isMine,
+                  exemptFromDispatchLimits: group.isMine ? false : r.group.exemptFromDispatchLimits,
+                },
+              }
+            : r,
+        ),
+      );
+    } catch (ex) {
+      setRows((prev) =>
+        prev.map((r) =>
+          r.group.id === group.id
+            ? { ...r, error: ex instanceof Error ? ex.message : String(ex) }
+            : r,
+        ),
+      );
+    }
+  }
+
   // No primeiro load (rows vazia) mostra "Carregando..." cheio. Em refresh, mantém a lista
   // antiga visível com o botão em "Atualizando..." pra não dar flash de tela em branco.
   if (loading && rows.length === 0) return <div className="loading">Carregando grupos...</div>;
@@ -361,8 +423,8 @@ export function GroupsScreen() {
         <section className="groups-section groups-section-mine">
           <h3 className="groups-section-title">Meus grupos</h3>
           <p className="muted small">
-            Criados por você aqui pelo sistema. São os únicos que podem receber tratamento especial
-            no disparo — grupo em que você entrou por convite nunca entra nesta lista.
+            Grupos que você marcou como seus. São os únicos que podem dispensar a trava de envio
+            repetido. Marque só os de gente conhecida.
           </p>
           <ul className="groups-list">
             {mine.map((row) => (
@@ -372,6 +434,7 @@ export function GroupsScreen() {
                 onImport={() => void importOne(rows.indexOf(row))}
                 onLeave={() => setConfirmLeave(row.group)}
                 onExemptionChanged={(enabled) => setExemption(row.group.id, enabled)}
+                onClaim={() => setConfirmClaim(row.group)}
                 leaving={leavingId === row.group.id}
               />
             ))}
@@ -391,10 +454,46 @@ export function GroupsScreen() {
             onImport={() => void importOne(rows.indexOf(row))}
             onLeave={() => setConfirmLeave(row.group)}
             onExemptionChanged={(enabled) => setExemption(row.group.id, enabled)}
+            onClaim={() => setConfirmClaim(row.group)}
             leaving={leavingId === row.group.id}
           />
         ))}
       </ul>
+
+      {confirmClaim && (
+        <ConfirmDialog
+          title={confirmClaim.isMine ? "Tirar a marca deste grupo?" : "Marcar este grupo como seu?"}
+          message={
+            confirmClaim.isMine ? (
+              <>
+                <strong>"{confirmClaim.name || "(sem nome)"}"</strong> sai da sua lista de grupos.
+                <br />
+                <br />
+                O grupo <strong>continua no WhatsApp</strong> — some só a marca. Se a dispensa de
+                envio repetido estava ligada, ela é <strong>desligada junto</strong>.
+              </>
+            ) : (
+              <>
+                Marca <strong>"{confirmClaim.name || "(sem nome)"}"</strong> como seu. Use isto no
+                grupo que <strong>você criou no seu aparelho</strong>.
+                <br />
+                <br />
+                Isso não muda nada sozinho, mas <strong>habilita</strong> a caixa que dispensa a
+                trava de "já enviei pra esse" para quem está dentro dele. Só marque um grupo de{" "}
+                <strong>gente conhecida</strong>: marcar um grupo de contatos frios abriria envio
+                repetido para desconhecidos.
+                <br />
+                <br />
+                Quem responder <strong>SAIR</strong> continua fora de qualquer jeito.
+              </>
+            )
+          }
+          confirmLabel={confirmClaim.isMine ? "Tirar a marca" : "Sim, o grupo é meu"}
+          cancelLabel="Cancelar"
+          onConfirm={() => void toggleClaim(confirmClaim)}
+          onCancel={() => setConfirmClaim(null)}
+        />
+      )}
 
       {confirmLeave && (
         <ConfirmDialog
