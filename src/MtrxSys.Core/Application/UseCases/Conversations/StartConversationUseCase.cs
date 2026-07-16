@@ -4,6 +4,7 @@ using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
+using MtrxSys.Core.Safety;
 using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Core.Application.UseCases.Conversations;
@@ -25,6 +26,7 @@ public sealed class StartConversationUseCase(
     IConversationRepository conversations,
     IChatMessageRepository messages,
     ISharedPhoneLedger ledger,
+    SessionReadinessTracker readiness,
     IOptions<DispatchOptions> dispatchOpts,
     IClock clock,
     IUnitOfWork uow,
@@ -72,6 +74,24 @@ public sealed class StartConversationUseCase(
             return StartConversationResult.Fail(
                 StartConversationOutcome.SessionNotWorking,
                 $"WhatsApp não está conectado (status={status}); tente quando reconectar.");
+        }
+
+        // Reassentamento: não envia nos primeiros minutos após a sessão (re)conectar. Enviar logo após
+        // parear um companion recém-linkado é o que fez o WhatsApp REMOVER o device + aplicar reachout
+        // timelock (prod 2026-07-16: "oi" 22s após parear → 7 dias de restrição). Mesma janela do
+        // disparo (SettleAfterReconnectSeconds). workingFor null = a saúde ainda não confirmou WORKING
+        // contínuo (ex.: logo após restart) → trata como não-assentado (fail-safe).
+        var settleWindow = TimeSpan.FromSeconds(Math.Max(0, dispatchOpts.Value.SettleAfterReconnectSeconds));
+        if (settleWindow > TimeSpan.Zero)
+        {
+            var workingFor = readiness.WorkingFor(clock.UtcNow);
+            if (workingFor is null || workingFor < settleWindow)
+            {
+                return StartConversationResult.Fail(
+                    StartConversationOutcome.SessionNotSettled,
+                    $"A sessão reconectou há pouco — espere ~{Math.Ceiling(settleWindow.TotalMinutes):0} min "
+                    + "antes de enviar (evita restrição de companion recém-linkado).");
+            }
         }
 
         // Número precisa existir no WhatsApp (anti-463). FAIL-CLOSED no indisponível: num 1º contato de
@@ -229,6 +249,7 @@ public enum StartConversationOutcome
     InvalidPhone,
     OptedOut,
     SessionNotWorking,
+    SessionNotSettled,
     NumberNotOnWhatsApp,
     NumberCheckUnavailable,
     SendFailed,

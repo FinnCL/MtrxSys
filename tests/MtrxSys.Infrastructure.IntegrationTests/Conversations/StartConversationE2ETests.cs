@@ -7,6 +7,7 @@ using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Conversations;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
+using MtrxSys.Core.Safety;
 using MtrxSys.Core.Validation;
 using MtrxSys.Infrastructure.Persistence;
 using MtrxSys.Infrastructure.Persistence.Repositories;
@@ -56,16 +57,25 @@ public sealed class StartConversationE2ETests : IAsyncLifetime
         public DateTimeOffset UtcNow => new(2026, 7, 16, 12, 0, 0, TimeSpan.Zero);
     }
 
-    private StartConversationUseCase Build(ISharedPhoneLedger? ledger = null) =>
+    private StartConversationUseCase Build(ISharedPhoneLedger? ledger = null, SessionReadinessTracker? readiness = null) =>
         new(_waha,
             new ContactRepository(_db),
             new ConversationRepository(_db),
             new ChatMessageRepository(_db),
             ledger ?? new NoOpSharedPhoneLedger(),
+            readiness ?? SettledTracker(),
             Options.Create(new DispatchOptions { SessionId = "default" }),
             new FixedClock(),
             new UnitOfWork(_db),
             NullLogger<StartConversationUseCase>.Instance);
+
+    // Sessão assentada há muito (WORKING desde 1h antes do FixedClock) → passa a janela de settle (120s).
+    private static SessionReadinessTracker SettledTracker()
+    {
+        var t = new SessionReadinessTracker();
+        t.MarkWorking(new DateTimeOffset(2026, 7, 16, 11, 0, 0, TimeSpan.Zero));
+        return t;
+    }
 
     [Fact]
     public async Task Numero_sem_whatsapp_e_barrado_e_nada_e_criado()
@@ -143,6 +153,26 @@ public sealed class StartConversationE2ETests : IAsyncLifetime
         _db.ChangeTracker.Clear();
         (await _db.ChatMessages.CountAsync()).Should().Be(0);
         (await _db.Contacts.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Sessao_recem_conectada_barra_o_envio()
+    {
+        _waha.GetSessionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(WahaSessionStatus.Working);
+        // Assentou AGORA (WORKING = FixedClock) → dentro da janela de 120s → deve barrar.
+        var fresh = new SessionReadinessTracker();
+        fresh.MarkWorking(new FixedClock().UtcNow);
+
+        var result = await Build(readiness: fresh).RunAsync("11999998888", null, "oi", CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Outcome.Should().Be(StartConversationOutcome.SessionNotSettled);
+        await _waha.DidNotReceive().SendTextAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+
+        _db.ChangeTracker.Clear();
+        (await _db.ChatMessages.CountAsync()).Should().Be(0, "sessão recém-conectada não envia");
     }
 
     [Fact]

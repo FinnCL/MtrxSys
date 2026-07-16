@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Safety;
 
 namespace MtrxSys.Api.BackgroundServices;
 
@@ -13,6 +14,7 @@ namespace MtrxSys.Api.BackgroundServices;
 public sealed class SessionHealthWatchService(
     IServiceProvider services,
     IOptions<AlertOptions> alertOpts,
+    SessionReadinessTracker readiness,
     ILogger<SessionHealthWatchService> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -38,6 +40,17 @@ public sealed class SessionHealthWatchService(
                     var alerts = scope.ServiceProvider.GetRequiredService<IAlertNotifier>();
                     var status = await waha.GetSessionStatusAsync(dispatch.SessionId, stoppingToken);
                     var working = status == WahaSessionStatus.Working;
+
+                    // Alimenta a janela de settle do envio manual: marca desde quando está WORKING
+                    // contínuo (ou zera na queda). Ver SessionReadinessTracker.
+                    if (working)
+                    {
+                        readiness.MarkWorking(DateTimeOffset.UtcNow);
+                    }
+                    else
+                    {
+                        readiness.MarkNotWorking();
+                    }
 
                     if (lastWorking is null)
                     {

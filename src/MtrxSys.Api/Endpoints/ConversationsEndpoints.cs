@@ -3,6 +3,7 @@ using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Conversations;
 using MtrxSys.Core.Domain.Conversations;
+using MtrxSys.Core.Safety;
 
 namespace MtrxSys.Api.Endpoints;
 
@@ -52,6 +53,7 @@ public static class ConversationsEndpoints
                     StartConversationOutcome.EmptyText or StartConversationOutcome.InvalidPhone => 400,
                     StartConversationOutcome.OptedOut => 409,
                     StartConversationOutcome.SessionNotWorking => 409,
+                    StartConversationOutcome.SessionNotSettled => 409,
                     StartConversationOutcome.NumberCheckUnavailable => 409,
                     StartConversationOutcome.NumberNotOnWhatsApp => 422,
                     StartConversationOutcome.SendFailed => 502,
@@ -107,6 +109,7 @@ public static class ConversationsEndpoints
             IChatMessageRepository msgs,
             IContactRepository contacts,
             IWahaClient waha,
+            SessionReadinessTracker readiness,
             IOptions<DispatchOptions> dispatch,
             IClock clock,
             IUnitOfWork uow,
@@ -144,6 +147,21 @@ public static class ConversationsEndpoints
                 return Results.Problem(
                     $"WhatsApp não está conectado (status={status}); tente de novo quando reconectar.",
                     statusCode: 409);
+            }
+            // Reassentamento: não envia nos primeiros minutos após (re)conectar. Companion recém-linkado
+            // que já sai enviando é o que faz o WhatsApp remover o device + restringir reachout (prod
+            // 2026-07-16). Mesma janela do disparo (ver SessionReadinessTracker / DispatchSettleTracker).
+            var settleWindow = TimeSpan.FromSeconds(Math.Max(0, dispatch.Value.SettleAfterReconnectSeconds));
+            if (settleWindow > TimeSpan.Zero)
+            {
+                var workingFor = readiness.WorkingFor(clock.UtcNow);
+                if (workingFor is null || workingFor < settleWindow)
+                {
+                    return Results.Problem(
+                        $"A sessão reconectou há pouco — espere ~{Math.Ceiling(settleWindow.TotalMinutes):0} min "
+                        + "antes de enviar (evita restrição de companion recém-linkado).",
+                        statusCode: 409);
+                }
             }
             var waMessageId = await waha.SendTextAsync(sessionId, conversation.WaChatId, req.Text, ct);
             if (string.IsNullOrEmpty(waMessageId))

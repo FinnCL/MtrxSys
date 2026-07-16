@@ -131,6 +131,9 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();
         services.AddSingleton<OptOutLinkSigner>();
+        // Janela de reassentamento do envio manual (settle após reconectar). Singleton: o
+        // SessionHealthWatch escreve, os caminhos de envio leem. Ver SessionReadinessTracker.
+        services.AddSingleton<MtrxSys.Core.Safety.SessionReadinessTracker>();
 
         services.AddScoped<ImportGroupMembersUseCase>();
         services.AddScoped<AddManualContactsUseCase>();
