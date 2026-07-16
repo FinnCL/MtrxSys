@@ -160,7 +160,7 @@ public sealed class WarmupManagerTests
     // no meio REDUZIRIA o teto no meio da escalada, sem erro nenhum, e só apareceria como disparo
     // misteriosamente parando mais cedo semanas depois.
     [Fact]
-    public async Task Curva_padrao_so_sobe_comeca_em_3_e_estabiliza_em_200()
+    public async Task Curva_padrao_so_sobe_comeca_em_5_e_estabiliza_em_200()
     {
         // Sem Curve configurada → cai no default do código.
         var svc = Build(new WarmupOptions { StartedOnUtc = new DateOnly(2026, 7, 15) });
@@ -168,9 +168,11 @@ public sealed class WarmupManagerTests
         var curve = (await svc.GetSnapshotAsync(CancellationToken.None)).Curve;
 
         curve.Should().NotBeEmpty("teto ausente anularia o aquecimento inteiro");
-        curve[0].Should().Be(3,
-            "produção ensinou: com 15 no 1º dia, um chip novo foi RESTRINGIDO na 4ª mensagem "
-            + "(2026-07-15, +557191072835). Subir este número de novo custa um chip");
+        curve[0].Should().Be(5,
+            "abre em 5 (não em 3) porque a estratégia aquece o chip 3 dias na mão no aparelho ANTES "
+            + "do 1º disparo do sistema — o índice 0 não cai mais num chip gelado. NÃO subir daqui sem "
+            + "esse aquecimento: com 15 no 1º dia um chip novo foi RESTRINGIDO na 4ª mensagem "
+            + "(2026-07-15, +557191072835)");
         curve[^1].Should().Be(200, "platô alvo");
         curve.Should().BeInAscendingOrder("uma curva que desce em algum ponto é erro de digitação, não desenho");
         // Nenhum salto brusco: o cronograma sobe ~20% a cada 2 dias. Um degrau que mais que dobra

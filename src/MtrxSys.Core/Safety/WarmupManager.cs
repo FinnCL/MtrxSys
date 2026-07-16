@@ -22,11 +22,20 @@ public sealed class WarmupManager(
     // de aquecimento cruzado (que não disparam) não gastam degrau, então o 1º dia de disparo pega o
     // índice 0 sozinho. Sobe até o platô de 200/dia.
     //
-    // OS QUATRO PRIMEIROS DEGRAUS [3,5,8,12] NÃO SÃO CHUTE — são o que a produção ensinou. Em
-    // 2026-07-15 um chip novo (+557191072835) foi RESTRINGIDO pelo WhatsApp na 4ª mensagem do 1º dia.
-    // A curva abria em 15 ali; o cronograma que a originou previa 15 só no dia 8 do chip, DEPOIS de
-    // uma semana de conversa humana e maturação cruzada. Aplicar 15 no dia 1 de um chip frio foi o
-    // erro, e ele custou o chip.
+    // A CURVA ABRE EM 5, E ISSO TEM HISTÓRIA — não é chute. Em 2026-07-15 um chip novo
+    // (+557191072835) foi RESTRINGIDO pelo WhatsApp na 4ª mensagem do 1º dia. A curva abria em 15 ali;
+    // o cronograma que a originou previa 15 só no dia 8 do chip, DEPOIS de uma semana de conversa
+    // humana e maturação cruzada. Aplicar 15 no dia 1 de um chip frio foi o erro, e ele custou o chip.
+    // Baixou pra 3 (fallback de chip frio) e depois pra este 5: a estratégia agora é AQUECER O CHIP 3
+    // DIAS NA MÃO, no aparelho físico, ANTES do 1º disparo do sistema — então o índice 0 não cai mais
+    // num chip gelado, e o 5 reconhece isso SEM apostar a conta (3 dias na mão não compram o salto pra
+    // 15, que supunha 8 dias + maturação cruzada).
+    //
+    // O QUE O 5 ASSUME, e a curva NÃO consegue verificar: que o aquecimento manual de fato aconteceu.
+    // Ela indexa por dias COM ENVIO PELO SISTEMA, então "dia 1 de chip frio que dispara" e "dia 4 de
+    // chip aquecido na mão" são o MESMO índice 0 pra ela. Se o aquecimento for pulado, o 5 vira número
+    // alto num chip morno-pra-frio — o mesmo erro que custou o chip, menor. Não subir daqui sem o
+    // aquecimento garantido.
     //
     // A ressalva honesta, pra ninguém tratar estes números como fórmula: 4 mensagens não é volume,
     // é PADRÃO. Conta criada no dia, ZERO mensagens recebidas, e a 1ª atividade sendo textos quase
@@ -34,7 +43,7 @@ public sealed class WarmupManager(
     // causa for essa (e a evidência aponta pra lá), nenhuma curva salva: o que salva é ter conversa
     // com RESPOSTA antes de automatizar, que é o que o HumanPhaseGate faz e estava desligado.
     private static readonly int[] DefaultCurve =
-        [3, 5, 8, 12, 15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
+        [5, 8, 12, 15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
 
     public async Task<bool> CanSendAsync(CancellationToken ct)
     {
