@@ -125,7 +125,6 @@ public static class DependencyInjection
         services.AddScoped<IContactTagRepository, ContactTagRepository>();
         services.AddScoped<IContactStageChangeRepository, ContactStageChangeRepository>();
         services.AddScoped<IGroupLinkRepository, GroupLinkRepository>();
-        services.AddScoped<IOwnedGroupRepository, OwnedGroupRepository>();
         services.AddScoped<IWarmupCircleRepository, WarmupCircleRepository>();
         services.AddScoped<IHumanPhaseProgressRepository, HumanPhaseProgressRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
@@ -138,6 +137,7 @@ public static class DependencyInjection
         services.AddScoped<MarkContactOptOutUseCase>();
         services.AddScoped<MtrxSys.Core.Application.UseCases.Groups.CollectGroupLinksUseCase>();
         services.AddScoped<MtrxSys.Core.Application.UseCases.Conversations.RelinkOrphanConversationsUseCase>();
+        services.AddScoped<MtrxSys.Core.Application.UseCases.Conversations.StartConversationUseCase>();
         services.AddScoped<IWebhookIngestionService, WebhookIngestionService>();
         services.AddScoped<WhatsAppSyncService>();
         services.AddScoped<MtrxSys.Core.Application.UseCases.Webhooks.OptOutReconciler>();

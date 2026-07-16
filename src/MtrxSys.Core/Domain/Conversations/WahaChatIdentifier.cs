@@ -96,6 +96,16 @@ public static class WahaChatIdentifier
         return waMessageId; // sem segmento serializado: já é o core (id retornado pelo envio).
     }
 
+    /// <summary>Chave de de-dupe estável de uma mensagem NOSSA (outbound): o "core" do id
+    /// (<see cref="ExtractMessageCore"/>, o MESMO que o webhook grava pro eco fromMe), ou um id gerado
+    /// com o prefixo dado quando o WAHA não devolve id. Centraliza a convenção usada pelo disparo, pelo
+    /// aquecimento e pela conversa manual — os três precisam do mesmo core pra o eco não duplicar.</summary>
+    public static string ResolveOutboundCoreId(string? waMessageId, string fallbackPrefix)
+    {
+        var core = ExtractMessageCore(waMessageId);
+        return string.IsNullOrEmpty(core) ? $"{fallbackPrefix}_{Guid.NewGuid():N}" : core;
+    }
+
     /// <summary>Telefone E.164 do autor de uma mensagem, conforme o tipo de chat: em grupo, do
     /// participante; em individual recebido, do próprio chat (do nosso lado, no envio, não há autor
     /// externo → null). Regra única usada igual pelo webhook (tempo real) e pelo sync (histórico).</summary>

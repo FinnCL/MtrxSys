@@ -36,6 +36,38 @@ public static class ConversationsEndpoints
             return Results.Ok(new { linked });
         });
 
+        // Inicia uma conversa NOVA pelo Chat: manda a 1ª mensagem e materializa Contact + Conversation
+        // + ChatMessage. Traz as travas de 1º contato (número existe / opt-out / sessão WORKING) — ver
+        // StartConversationUseCase. Devolve a conversa + mensagens pra o front já abrir a thread.
+        group.MapPost("/", async (
+            StartConversationRequest req,
+            StartConversationUseCase useCase,
+            CancellationToken ct) =>
+        {
+            var result = await useCase.RunAsync(req.Phone, req.ContactId, req.Text, ct);
+            if (!result.Success)
+            {
+                var statusCode = result.Outcome switch
+                {
+                    StartConversationOutcome.EmptyText or StartConversationOutcome.InvalidPhone => 400,
+                    StartConversationOutcome.OptedOut => 409,
+                    StartConversationOutcome.SessionNotWorking => 409,
+                    StartConversationOutcome.NumberCheckUnavailable => 409,
+                    StartConversationOutcome.NumberNotOnWhatsApp => 422,
+                    StartConversationOutcome.SendFailed => 502,
+                    _ => 500,
+                };
+                return Results.Problem(result.Error, statusCode: statusCode);
+            }
+            // Devolve a conversa + a mensagem recém-enviada (o ChatThread rebusca o histórico ao abrir,
+            // então não vale um segundo hit no banco pra listar tudo aqui).
+            return Results.Ok(new
+            {
+                conversation = ToDto(result.Conversation!),
+                messages = new[] { ToDto(result.Message!) },
+            });
+        });
+
         group.MapGet("/counts", async (
             string? search,
             IConversationRepository repo,
@@ -164,6 +196,9 @@ public static class ConversationsEndpoints
         m.MediaUrl);
 
     public sealed record SendMessageRequest(string Text);
+
+    // Phone (digitado) OU ContactId (contato do CRM) identifica o alvo; Text é a 1ª mensagem.
+    public sealed record StartConversationRequest(string? Phone, Guid? ContactId, string Text);
 
     public sealed record ConversationDto(
         Guid Id,

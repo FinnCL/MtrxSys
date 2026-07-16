@@ -240,7 +240,7 @@ function Shell() {
         <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} onDisconnect={wahaWorking === true ? () => setConfirmDisconnect(true) : undefined} onOpenConversation={openConversation} />
       ) : (
         <main className="three-col">
-          <ConversationList selectedId={selected?.id ?? null} onSelect={setSelected} />
+          <ConversationList selectedId={selected?.id ?? null} onSelect={setSelected} onStarted={setSelected} />
           {selected ? (
             <ChatThread conversation={selected} />
           ) : (

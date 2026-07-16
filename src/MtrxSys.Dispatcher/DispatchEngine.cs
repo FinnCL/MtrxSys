@@ -32,7 +32,6 @@ public sealed class DispatchEngine(
     IDispatchMetrics metrics,
     ISystemStateRepository systemState,
     ISharedPhoneLedger ledger,
-    IOwnedGroupRepository ownedGroups,
     DispatchSettleTracker settle,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
@@ -212,22 +211,6 @@ public sealed class DispatchEngine(
                 skipped++;
                 continue;
             }
-            // ISENTOS: telefones dos grupos que o operador marcou como seus (ver OwnedGroup). Pra eles
-            // a trava de "já falei com esse" não vale — mas opt-out, checagem de número, teto diário e
-            // fase humana continuam valendo.
-            //
-            // Lido FRESCO a cada job, e só aqui (nunca no topo do ciclo). Os dois motivos são opostos
-            // e ambos importam:
-            //   • Não no topo: a esmagadora maioria dos ciclos sai no `break` da fila vazia sem
-            //     enviar nada, e o ciclo roda a cada 5s — ler lá custaria ~17 mil consultas por dia
-            //     por stack (×10) pra uma feature que devolve zero linhas quando ninguém marcou nada.
-            //   • Fresco, e não 1x por ciclo: UM ciclo drena a fila INTEIRA, e com 1,5 a 4 min entre
-            //     mensagens isso são horas. Quem percebe que marcou o grupo errado e desmarca precisa
-            //     que pare AGORA — congelar no início do ciclo faria o motor seguir isentando pelo
-            //     resto dele, como o freio de mão que é relido fresco logo acima, e pelo mesmo motivo.
-            // O custo real é 1 consulta indexada a cada 1,5-4 min de envio ativo: nada.
-            var exemptPhones = await ownedGroups.ListExemptPhonesAsync(ct);
-            var isExempt = exemptPhones.Contains(contact.Phone.E164);
             if (ledger.IsEnabled)
             {
                 // Uma única consulta cobre dedup (Sent) e opt-out (OptedOut). Em Enforce o opt-out é
@@ -244,12 +227,11 @@ public sealed class DispatchEngine(
                             + "Job {JobId} volta para Pending.", job.Id);
                         break;
                     }
-                    // ISENTO: "já enviado em outro ambiente" não bloqueia — é conversa recorrente com
-                    // um conhecido, e é exatamente a trava que a isenção existe pra dispensar.
-                    // OPT-OUT continua bloqueando, isento ou não: quem pediu pra sair, saiu — e num
-                    // grupo de conhecidos isso importa MAIS, não menos.
+                    // Dedup cross-ambiente: "já enviado em outro ambiente" (Sent) e "opt-out em outro
+                    // ambiente" (OptedOut) bloqueiam — os 10 chips não podem mandar a mesma campanha
+                    // pra mesma pessoa (denúncia de spam), e quem pediu SAIR fica fora.
                     if (ledgerStatus == SharedLedgerStatus.OptedOut
-                        || (ledgerStatus == SharedLedgerStatus.Sent && !isExempt))
+                        || ledgerStatus == SharedLedgerStatus.Sent)
                     {
                         var reason = ledgerStatus == SharedLedgerStatus.OptedOut
                             ? "opt-out em outro ambiente"
@@ -425,16 +407,9 @@ public sealed class DispatchEngine(
                 // Livro-razão compartilhado (dedup cross-ambiente): fail-open, só após o commit pra
                 // não registrar "enviado" globalmente algo que não persistiu localmente.
                 //
-                // ISENTO ENTRA NO LIVRO IGUAL. Já teve aqui um `if (!isExempt)` com o argumento de
-                // que marcar "queimaria o conhecido nos 10 stacks pra sempre". Era FALSO: quem tem o
-                // grupo marcado ignora o status Sent (ver o gate acima e o resgate no
-                // enfileiramento), então a marca não o alcança. Ela só vale pros stacks que NÃO têm o
-                // grupo marcado — e ali ela é exatamente o que se quer.
-                //
-                // Sem esta linha, um telefone que é ao mesmo tempo membro do grupo e lead no CRM
-                // some do dedup: os 10 chips não veem marca nenhuma e mandam a MESMA campanha pra
-                // ele, de 10 números diferentes. Isso é denúncia de spam. A isenção é por TELEFONE e
-                // vale pra qualquer job, não só pros de aquecimento — é o que torna o furo possível.
+                // Sem esta linha, os 10 chips não veem marca nenhuma e mandam a MESMA campanha pra o
+                // mesmo telefone, de 10 números diferentes — denúncia de spam. É o que o dedup do
+                // gate acima (status Sent) consome.
                 await ledger.MarkSentAsync(contact.Phone.E164, ct);
 
                 metrics.RecordSendSuccess((int)delayBefore.TotalMilliseconds, typingMs);
@@ -790,11 +765,7 @@ public sealed class DispatchEngine(
         Contact contact, string text, string waMessageId, DateTimeOffset now, CancellationToken ct)
     {
         // Mesmo "core" de id usado pelo webhook (token final), pra de-dupe determinístico.
-        var coreId = WahaChatIdentifier.ExtractMessageCore(waMessageId);
-        if (string.IsNullOrEmpty(coreId))
-        {
-            coreId = $"dispatch_{Guid.NewGuid():N}"; // WAHA não devolveu id; gera um estável.
-        }
+        var coreId = WahaChatIdentifier.ResolveOutboundCoreId(waMessageId, "dispatch");
 
         // O eco do webhook venceu a corrida e já gravou esta mensagem? Então não duplica.
         if (await messages.GetByWaMessageIdAsync(coreId, ct) is not null)
@@ -806,14 +777,25 @@ public sealed class DispatchEngine(
         if (conversation is null)
         {
             var chatId = WahaChatIdentifier.ExtractDigits(contact.Phone.E164) + WahaChatIdentifier.IndividualSuffix;
-            conversation = Conversation.Create(
-                id: Guid.NewGuid(),
-                waChatId: chatId,
-                contactId: contact.Id,
-                title: string.IsNullOrWhiteSpace(contact.Name) ? contact.Phone.E164 : contact.Name,
-                isGroup: false,
-                createdAt: now);
-            await conversations.AddAsync(conversation, ct);
+            // Guarda de órfã: pode existir uma conversa sob esse MESMO chatId (inbound que chegou antes
+            // do contato existir, ContactId null) — e há índice ÚNICO em wa_chat_id, então inserir
+            // estouraria (a mensagem já foi enviada). Reaproveita e vincula, como o webhook faz.
+            conversation = await conversations.GetByWaChatIdAsync(chatId, ct);
+            if (conversation is null)
+            {
+                conversation = Conversation.Create(
+                    id: Guid.NewGuid(),
+                    waChatId: chatId,
+                    contactId: contact.Id,
+                    title: string.IsNullOrWhiteSpace(contact.Name) ? contact.Phone.E164 : contact.Name,
+                    isGroup: false,
+                    createdAt: now);
+                await conversations.AddAsync(conversation, ct);
+            }
+            else if (conversation.ContactId is null)
+            {
+                conversation.LinkContact(contact.Id);
+            }
         }
 
         await messages.AddAsync(

@@ -317,27 +317,8 @@ input[type="checkbox"], input[type="radio"] {
   border-radius: 6px;
   gap: 16px;
 }
-/* MEUS GRUPOS — os criados por aqui (owned_groups). O verde reusa o #22c55e que a tela já usa no
-   resumo de importação, em vez de inventar um segundo verde. A borda esquerda grossa é o que
-   diferencia à distância: é o único sinal que sobrevive a uma lista longa e rolada. */
-.groups-section-mine { border-left: 3px solid #22c55e; padding-left: 12px; margin-bottom: 20px; }
-.groups-section-title { margin: 18px 0 6px; font-size: 13px; font-weight: 700; letter-spacing: .02em;
-  text-transform: uppercase; color: var(--muted); }
-.groups-section-mine .groups-section-title { color: #22c55e; margin-top: 0; }
-.group-row-mine { border-color: #22c55e; }
 .group-members { display: flex; flex-direction: column; gap: 1px; margin-top: 6px;
   font-family: ui-monospace, monospace; }
-/* A chave de isenção: fica na linha do grupo, não escondida atrás de um "avançado" — ela muda o que
-   o disparo faz, então tem que ser visível junto do grupo que ela afeta. */
-.group-exemption { display: flex; align-items: center; gap: 8px; margin-top: 6px;
-  font-size: 12px; color: var(--fg); cursor: pointer; }
-.group-exemption input { cursor: pointer; accent-color: #22c55e; }
-/* Criar grupo: fechado é só um botão; aberto vira o formulário. */
-.groups-create { margin: 12px 0; max-width: 800px; }
-.groups-create-open { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px;
-  background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; }
-.groups-create-open label { font-size: 12px; color: var(--muted); margin-top: 6px; }
-.groups-create-open textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 12px; }
 .group-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .group-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .small { font-size: 12px; }
@@ -418,8 +399,18 @@ input[type="checkbox"], input[type="radio"] {
 }
 
 .sidebar { border-right: 1px solid var(--border); background: var(--bg-2); display: flex; flex-direction: column; min-height: 0; }
-.sidebar-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.sidebar-header { padding: 12px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sidebar-header h2 { margin: 0; font-size: 14px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+/* Picker de destinatário da "Nova conversa": lista clicável, item selecionado destacado. */
+.start-conv-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 240px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 6px; }
+.start-conv-list li { display: flex; flex-direction: column; gap: 1px; padding: 8px 12px; cursor: pointer;
+  border-bottom: 1px solid var(--border); }
+.start-conv-list li:last-child { border-bottom: none; }
+.start-conv-list li:hover { background: var(--bg-3); }
+.start-conv-list li.selected { background: var(--bg-3); box-shadow: inset 3px 0 0 #22c55e; }
+.start-conv-name { font-size: 13px; }
 /* Abas de status dentro da barra de conversas: ocupam a largura, quebram linha e fonte menor. */
 .conv-tabs { margin-left: 0; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .conv-tabs .tab-btn { flex: 1 1 auto; text-align: center; padding: 5px 8px; font-size: 12px; white-space: nowrap; }

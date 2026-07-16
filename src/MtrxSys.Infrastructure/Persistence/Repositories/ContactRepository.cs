@@ -95,18 +95,10 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         // fica de fora de propósito (re-adicionável manualmente). "Renovar lista" zera tudo.
         if (filter.ExcludeAlreadyDispatched)
         {
-            // ISENTOS (membros de grupo criado pelo operador, com a isenção ligada) escapam da trava
-            // do LastSentAt — é literalmente a razão da isenção existir: conversa recorrente com
-            // conhecido. Mas NÃO escapam da trava de já estar na fila: aquilo não é a regra de "uma
-            // vez só", é a proteção contra o mesmo clique enfileirar a pessoa duas vezes.
-            // Lista vazia (o caso normal) traduz pra `= ANY('{}')`, que o Postgres resolve na hora e
-            // deixa a cláusula equivalente ao `LastSentAt == null` de sempre. Um único Where em vez
-            // de dois ramos quase idênticos: a trava da FILA (a parte sensível, que vale pra todos)
-            // aparece uma vez só — escrita duas vezes, um dia alguém corrige uma e esquece a outra.
-            var exempt = filter.ExemptPhonesE164 as IReadOnlyList<string>
-                ?? filter.ExemptPhonesE164?.ToList()
-                ?? [];
-            q = q.Where(c => (c.LastSentAt == null || exempt.Contains(c.Phone.E164))
+            // Fora quem já recebeu (LastSentAt) OU já está na fila (Pending/Retrying) — o segundo é a
+            // proteção contra o mesmo clique enfileirar a pessoa duas vezes. Failed (definitivo) fica
+            // de fora de propósito, re-adicionável manualmente.
+            q = q.Where(c => c.LastSentAt == null
                 && !db.DispatchJobs.Any(j =>
                     j.ContactId == c.Id
                     && (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)));

@@ -306,11 +306,7 @@ public sealed class HumanPhaseAutoSender(
     private async Task RecordOutboundAsync(
         Candidate target, string text, string waMessageId, DateTimeOffset now, CancellationToken ct)
     {
-        var coreId = WahaChatIdentifier.ExtractMessageCore(waMessageId);
-        if (string.IsNullOrEmpty(coreId))
-        {
-            coreId = $"warmup_{Guid.NewGuid():N}";
-        }
+        var coreId = WahaChatIdentifier.ResolveOutboundCoreId(waMessageId, "warmup");
         if (await messages.GetByWaMessageIdAsync(coreId, ct) is not null)
         {
             return; // o eco venceu a corrida
@@ -347,14 +343,26 @@ public sealed class HumanPhaseAutoSender(
                     optInAt: now);
                 await contacts.AddAsync(contact, ct);
             }
-            conversation = Conversation.Create(
-                id: Guid.NewGuid(),
-                waChatId: WahaChatIdentifier.ExtractDigits(target.Member.PhoneE164) + WahaChatIdentifier.IndividualSuffix,
-                contactId: contact.Id,
-                title: target.Member.Name ?? target.Member.PhoneE164,
-                isGroup: false,
-                createdAt: now);
-            await conversations.AddAsync(conversation, ct);
+            var chatId = WahaChatIdentifier.ExtractDigits(target.Member.PhoneE164) + WahaChatIdentifier.IndividualSuffix;
+            // Guarda de órfã (índice único em wa_chat_id): reaproveita a conversa já existente sob esse
+            // chatId (inbound que chegou antes do contato) em vez de estourar no insert. Igual ao
+            // disparo/webhook.
+            conversation = await conversations.GetByWaChatIdAsync(chatId, ct);
+            if (conversation is null)
+            {
+                conversation = Conversation.Create(
+                    id: Guid.NewGuid(),
+                    waChatId: chatId,
+                    contactId: contact.Id,
+                    title: target.Member.Name ?? target.Member.PhoneE164,
+                    isGroup: false,
+                    createdAt: now);
+                await conversations.AddAsync(conversation, ct);
+            }
+            else if (conversation.ContactId is null)
+            {
+                conversation.LinkContact(contact.Id);
+            }
         }
 
         await messages.AddAsync(

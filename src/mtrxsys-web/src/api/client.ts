@@ -230,6 +230,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ text }),
     }),
+  // Inicia uma conversa NOVA: manda a 1ª mensagem por número digitado OU contato do CRM. O backend
+  // barra número sem WhatsApp / opt-out / sessão fora do ar. Devolve a conversa já com as mensagens.
+  startConversation: (body: { phone?: string; contactId?: string; text: string }) =>
+    request<ConversationWithMessages>("/api/conversations", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   listContacts: (params: { stage?: Stage; groupTag?: string } = {}) => {
     const q = new URLSearchParams();
     if (params.stage) q.set("stage", params.stage);
@@ -270,33 +277,9 @@ export const api = {
       body: JSON.stringify({ name, color }),
     }),
   listGroups: () => request<Group[]>("/api/groups"),
-  // Cria o grupo PELO sistema — é o que faz "esse grupo é meu" ser fato e não palpite (o WAHA não
-  // diz quem criou). O grupo criado volta com isMine=true.
-  createGroup: (body: { name: string; phones: string[] }) =>
-    request<Group>("/api/groups", { method: "POST", body: JSON.stringify(body) }),
   // Telefones de quem está dentro do grupo.
   listGroupMembers: (groupId: string) =>
     request<GroupMember[]>(`/api/groups/${encodeURIComponent(groupId)}/participants`),
-  // Declara que um grupo EXISTENTE é seu — o caminho normal, já que o grupo de aquecimento nasce no
-  // aparelho físico (criar por API num chip frio é sinal de bot). Idempotente.
-  claimGroup: (groupId: string) =>
-    request<{ claimed: boolean; alreadyClaimed: boolean; exempt: boolean }>(
-      `/api/groups/${encodeURIComponent(groupId)}/claim`,
-      { method: "POST" },
-    ),
-  // Desfaz a declaração. O grupo continua no WhatsApp; a isenção cai junto.
-  unclaimGroup: (groupId: string) =>
-    request<{ claimed: boolean; wasClaimed: boolean }>(
-      `/api/groups/${encodeURIComponent(groupId)}/claim`,
-      { method: "DELETE" },
-    ),
-  // Liga/desliga a dispensa da trava de "já enviei pra esse" pros membros deste grupo. Ao LIGAR, o
-  // backend re-lê os membros no WhatsApp e fotografa — se o WhatsApp estiver fora, falha e NÃO liga.
-  setGroupExemption: (groupId: string, enabled: boolean) =>
-    request<{ enabled: boolean; members: number }>(
-      `/api/groups/${encodeURIComponent(groupId)}/exemption`,
-      { method: "PATCH", body: JSON.stringify({ enabled }) },
-    ),
   importGroup: (groupId: string, groupTag?: string) =>
     request<ImportResult>(`/api/groups/${encodeURIComponent(groupId)}/import`, {
       method: "POST",
