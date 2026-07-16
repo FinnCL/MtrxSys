@@ -45,7 +45,10 @@ jobs:
 
       - name: Rsync do código pro servidor (sem tocar segredos/artefatos/dados)
         run: |
-          rsync -az \
+          # --delete: espelha o git. Sem ele, um arquivo REMOVIDO no repo fica no servidor (a cópia
+          # é aditiva) e quebra o build — ex.: um .cs deletado compila contra código que já mudou. Os
+          # --exclude protegem segredos/config/dados/artefatos: rsync NÃO deleta arquivo excluído.
+          rsync -az --delete \
             --exclude '.git' --exclude 'node_modules' --exclude 'bin' --exclude 'obj' \
             --exclude 'dist' --exclude 'deploy/.env*' --exclude 'deploy/Caddyfile' \
             --exclude 'deploy/landing' --exclude 'searxng' --exclude 'tmp' --exclude '*.tar.gz' \
