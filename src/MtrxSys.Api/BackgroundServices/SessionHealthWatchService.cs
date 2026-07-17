@@ -17,6 +17,9 @@ public sealed class SessionHealthWatchService(
     SessionReadinessTracker readiness,
     ILogger<SessionHealthWatchService> log) : BackgroundService
 {
+    // Backdate do baseline já-WORKING: qualquer valor >> janela de settle serve (marca como assentada).
+    private static readonly TimeSpan AlreadySettled = TimeSpan.FromDays(1);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var label = string.IsNullOrWhiteSpace(alertOpts.Value.Label) ? "" : $" {alertOpts.Value.Label}";
@@ -40,26 +43,32 @@ public sealed class SessionHealthWatchService(
                     var alerts = scope.ServiceProvider.GetRequiredService<IAlertNotifier>();
                     var status = await waha.GetSessionStatusAsync(dispatch.SessionId, stoppingToken);
                     var working = status == WahaSessionStatus.Working;
+                    var now = DateTimeOffset.UtcNow;
 
-                    // Alimenta a janela de settle do envio manual: marca desde quando está WORKING
-                    // contínuo (ou zera na queda). Ver SessionReadinessTracker.
-                    if (working)
-                    {
-                        readiness.MarkWorking(DateTimeOffset.UtcNow);
-                    }
-                    else
-                    {
-                        readiness.MarkNotWorking();
-                    }
-
+                    // Alimenta a janela de settle do envio manual (ver SessionReadinessTracker) DENTRO
+                    // dos branches — de propósito. O settle deve valer só pra uma RECONEXÃO de verdade,
+                    // não pra restart da api com a sessão já conectada.
                     if (lastWorking is null)
                     {
                         lastWorking = working;
+                        // Baseline (1º tick pós-startup da api). Se JÁ está WORKING, a sessão estava
+                        // conectada ANTES do restart (deploy/recreate) — NÃO é conexão fresca. Marca como
+                        // já-ASSENTADA (settle no passado) pra o envio manual não travar 2min a CADA deploy.
+                        // Só a transição observada abaixo (↓ depois ↑) impõe o settle de verdade.
+                        if (working)
+                        {
+                            readiness.MarkWorking(now - AlreadySettled);
+                        }
+                        else
+                        {
+                            readiness.MarkNotWorking();
+                        }
                         log.LogInformation("SessionHealthWatch: baseline — sessão {Status}.", status);
                     }
                     else if (lastWorking == true && !working)
                     {
                         lastWorking = false;
+                        readiness.MarkNotWorking(); // caiu: o próximo WORKING recomeça a contagem do settle
                         var msg = $"⚠️ MtrxSys{label}: chip OFFLINE (era WORKING, agora {status}). "
                             + "O disparo NÃO envia — reconecte na aba Celular.";
                         log.LogWarning("SessionHealthWatch: {Msg}", msg);
@@ -68,9 +77,18 @@ public sealed class SessionHealthWatchService(
                     else if (lastWorking == false && working)
                     {
                         lastWorking = true;
+                        readiness.MarkWorking(now); // reconexão de VERDADE → impõe o settle (não metralhar)
                         var msg = $"✅ MtrxSys{label}: chip reconectado (WORKING). O disparo pode retomar.";
                         log.LogInformation("SessionHealthWatch: {Msg}", msg);
                         await alerts.NotifyAsync(msg, stoppingToken);
+                    }
+                    else if (working)
+                    {
+                        readiness.MarkWorking(now); // sem transição: ??= no-op, preserva o início
+                    }
+                    else
+                    {
+                        readiness.MarkNotWorking();
                     }
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
