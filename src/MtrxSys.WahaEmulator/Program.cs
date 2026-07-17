@@ -91,6 +91,8 @@ app.MapPost("/api/{session}/auth/request-code", (string session, JsonElement bod
 
 // Não usamos @lid no emulador: 404 = "não resolve" (o app trata como null, sem quebrar).
 app.MapGet("/api/{session}/lids/{lid}", () => Results.NotFound());
+// phone→LID: 404 no emulador → o cliente cai no @c.us (dev não tem LID real).
+app.MapGet("/api/{session}/lids/pn/{phone}", () => Results.NotFound());
 
 // ---- Chats ----
 

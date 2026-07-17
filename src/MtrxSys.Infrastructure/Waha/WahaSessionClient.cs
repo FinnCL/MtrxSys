@@ -79,6 +79,18 @@ internal sealed class WahaSessionClient(WahaHttp http)
         return WahaParsing.PhoneFromChatId(body?.Pn); // "5511921404487@c.us" -> "+5511921404487"
     }
 
+    public async Task<string?> ResolvePhoneToLidAsync(string sessionId, string phoneDigits, CancellationToken ct)
+    {
+        using var req = http.NewRequest(HttpMethod.Get, $"api/{WahaHttp.Esc(sessionId)}/lids/pn/{WahaHttp.Esc(phoneDigits)}");
+        using var resp = await http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            return null; // 404 (WAHA sem esse número mapeado / versão velha) → o chamador cai no @c.us
+        }
+        var body = await resp.Content.ReadFromJsonAsync<LidDto>(WahaHttp.Json, ct);
+        return string.IsNullOrWhiteSpace(body?.Lid) ? null : body.Lid; // já vem "{lid}@lid"
+    }
+
     public async Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct)
     {
         using var req = http.NewRequest(HttpMethod.Post, $"api/sessions/{WahaHttp.Esc(sessionId)}/start");

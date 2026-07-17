@@ -2,6 +2,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Domain.Conversations;
 
 namespace MtrxSys.Infrastructure.Waha;
 
@@ -15,6 +16,8 @@ internal sealed class WahaClient : IWahaClient
     private readonly WahaMessagingClient _messaging;
     private readonly WahaGroupsClient _groups;
     private readonly WahaContactsClient _contacts;
+    private readonly IMemoryCache? _cache;
+    private readonly bool _preferLid;
 
     // cache é opcional (default null) pra preservar o ctor de 2 args que os testes E2E usam; no app o
     // DI injeta o IMemoryCache singleton (ActivatorUtilities resolve params opcionais registrados).
@@ -25,6 +28,8 @@ internal sealed class WahaClient : IWahaClient
         _messaging = new WahaMessagingClient(shared);
         _groups = new WahaGroupsClient(shared, _session, cache); // grupos usa a sessão pra saber o próprio número
         _contacts = new WahaContactsClient(shared);
+        _cache = cache;
+        _preferLid = opts.Value.PreferLidAddressing;
     }
 
     // Sessão
@@ -38,6 +43,8 @@ internal sealed class WahaClient : IWahaClient
         _session.IsProxyReadyAsync(sessionId, ct);
     public Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct) =>
         _session.ResolveLidToPhoneE164Async(sessionId, lid, ct);
+    public Task<string?> ResolvePhoneToLidAsync(string sessionId, string phoneDigits, CancellationToken ct) =>
+        _session.ResolvePhoneToLidAsync(sessionId, phoneDigits, ct);
     public Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct) =>
         _session.EnsureSessionStartedAsync(sessionId, ct);
     public Task RestartSessionAsync(string sessionId, CancellationToken ct) =>
@@ -61,8 +68,68 @@ internal sealed class WahaClient : IWahaClient
         _messaging.ListChatsOverviewAsync(sessionId, limit, ct);
     public Task<IReadOnlyList<WahaMessage>> GetChatMessagesAsync(string sessionId, string chatId, int limit, CancellationToken ct) =>
         _messaging.GetChatMessagesAsync(sessionId, chatId, limit, ct);
-    public Task<string> SendTextAsync(string sessionId, string phoneOrChatId, string text, CancellationToken ct) =>
-        _messaging.SendTextAsync(sessionId, phoneOrChatId, text, ct);
+    public async Task<string> SendTextAsync(string sessionId, string phoneOrChatId, string text, CancellationToken ct)
+    {
+        var target = await ResolveSendTargetAsync(sessionId, phoneOrChatId, ct);
+        return await _messaging.SendTextAsync(sessionId, target, text, ct);
+    }
+
+    // Prefere o @lid pra CONTATO INDIVIDUAL: o WhatsApp migrou pro endereçamento LID e recusa o envio
+    // por @c.us (número puro) com "error 463: missing tctoken" — a mensagem sai (201) e não entrega
+    // (ack=-1). O aparelho manda por @lid e entrega; aqui igualamos. Grupo (@g.us) e alvo já-@lid vão
+    // DIRETO; sem LID / erro / flag desligado → mantém o alvo original (@c.us) = comportamento de hoje,
+    // não quebra nada.
+    private async Task<string> ResolveSendTargetAsync(string sessionId, string phoneOrChatId, CancellationToken ct)
+    {
+        if (!_preferLid
+            || phoneOrChatId.Contains(WahaChatIdentifier.GroupSuffix, StringComparison.Ordinal)
+            || phoneOrChatId.Contains(WahaChatIdentifier.LinkedIdSuffix, StringComparison.Ordinal))
+        {
+            return phoneOrChatId;
+        }
+        var digits = WahaChatIdentifier.ExtractDigits(phoneOrChatId); // "@c.us" e "+55.." → só dígitos
+        if (string.IsNullOrEmpty(digits))
+        {
+            return phoneOrChatId;
+        }
+        var lid = await GetLidCachedAsync(sessionId, digits, ct);
+        return lid ?? phoneOrChatId;
+    }
+
+    // LID é estável → cacheia SÓ o acerto (não o miss: um null pode ser WAHA fora do ar por um instante,
+    // e cachear isso mandaria @c.us por horas mesmo após recuperar). Miss re-tenta no próximo envio.
+    //
+    // BEST-EFFORT ABSOLUTO: resolver o LID é um ENHANCEMENT do endereçamento — NUNCA pode derrubar o
+    // envio. Um blip no /lids/pn (timeout, connection reset, JSON ruim) NÃO pode virar exceção no
+    // SendText; vira null → o chamador cai no @c.us (comportamento de sempre). Só cancelamento propaga.
+    private async Task<string?> GetLidCachedAsync(string sessionId, string digits, CancellationToken ct)
+    {
+        var key = $"lid:{sessionId}:{digits}";
+        if (_cache is not null && _cache.TryGetValue<string>(key, out var cached))
+        {
+            return cached;
+        }
+        string? lid;
+        try
+        {
+            lid = await _session.ResolvePhoneToLidAsync(sessionId, digits, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031
+        catch (Exception)
+        {
+            return null; // hiccup na resolução do LID → fallback @c.us, envio segue
+        }
+#pragma warning restore CA1031
+        if (_cache is not null && !string.IsNullOrEmpty(lid))
+        {
+            _cache.Set(key, lid, TimeSpan.FromHours(6));
+        }
+        return lid;
+    }
     public Task<WahaNumberCheck?> CheckNumberExistsAsync(string sessionId, string phoneE164, CancellationToken ct) =>
         _messaging.CheckNumberExistsAsync(sessionId, phoneE164, ct);
     public Task<string> SendImageAsync(string sessionId, string phoneOrChatId, byte[] imageData, string mimeType, string caption, CancellationToken ct) =>

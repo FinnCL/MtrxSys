@@ -49,4 +49,10 @@ public sealed class WahaOptions
     // nova logo no 1º disparo. Passivo é o tweak de estabilidade conhecido do Baileys. Vai no config.noweb
     // (criação + PUT). null = não mexe (mantém o default true do WAHA). Setar via Waha__NowebMarkOnline.
     public bool? NowebMarkOnline { get; set; }
+
+    // Envia pro contato via @lid (endereçamento LID, moderno) em vez de @c.us. O WhatsApp recusa o
+    // envio por @c.us com "error 463: missing tctoken" e a mensagem não entrega (ack=-1) — o aparelho
+    // manda por @lid e entrega. Resolve o LID por número (GET /lids/pn) antes de enviar; sem LID cai no
+    // @c.us. KILL-SWITCH (Waha__PreferLidAddressing): se por acaso piorar entrega, desliga sem reverter.
+    public bool PreferLidAddressing { get; set; } = true;
 }

@@ -13,6 +13,10 @@ public interface IWahaClient
     Task<bool> IsProxyReadyAsync(string sessionId, CancellationToken ct);
     /// <summary>Resolve um LID (@lid, número oculto) para o telefone E.164 real, ou null se não der.</summary>
     Task<string?> ResolveLidToPhoneE164Async(string sessionId, string lid, CancellationToken ct);
+    /// <summary>Resolve o telefone (dígitos com DDI, ex.: 5571999998888) → o chatId LID ("{lid}@lid"),
+    /// ou null se não houver/não der. Espelha o reverso acima. WAHA: GET /api/{session}/lids/pn/{phone}.
+    /// Usado pra enviar por @lid (endereçamento moderno) em vez de @c.us — evita o erro 463.</summary>
+    Task<string?> ResolvePhoneToLidAsync(string sessionId, string phoneDigits, CancellationToken ct);
     Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct);
     /// <summary>Reinicia a sessão (stop+start). Necessário pra recuperar do estado FAILED, onde um simples start é rejeitado.</summary>
     Task RestartSessionAsync(string sessionId, CancellationToken ct);
