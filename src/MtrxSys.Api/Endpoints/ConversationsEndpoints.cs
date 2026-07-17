@@ -169,14 +169,17 @@ public static class ConversationsEndpoints
                 return Results.Problem("waha did not return a message id", statusCode: 502);
             }
 
-            var existing = await msgs.GetByWaMessageIdAsync(waMessageId, ct);
+            // Chave CORE (a mesma do webhook de ack e do disparo) pra o message.ack casar e o status de
+            // entrega aparecer no Chat.
+            var coreId = WahaChatIdentifier.ResolveOutboundCoreId(waMessageId, "chat");
+            var existing = await msgs.GetByWaMessageIdAsync(coreId, ct);
             if (existing is null)
             {
                 var now = clock.UtcNow;
                 var message = ChatMessage.Create(
                     id: Guid.NewGuid(),
                     conversationId: conversation.Id,
-                    waMessageId: waMessageId,
+                    waMessageId: coreId,
                     direction: MessageDirection.Outbound,
                     authorPhone: null,
                     body: req.Text,
@@ -211,7 +214,8 @@ public static class ConversationsEndpoints
         m.AuthorPhone,
         m.Body,
         m.Timestamp,
-        m.MediaUrl);
+        m.MediaUrl,
+        m.DeliveryStatus.ToString());
 
     public sealed record SendMessageRequest(string Text);
 
@@ -236,5 +240,6 @@ public static class ConversationsEndpoints
         string? AuthorPhone,
         string Body,
         DateTimeOffset Timestamp,
-        string? MediaUrl);
+        string? MediaUrl,
+        string DeliveryStatus);
 }

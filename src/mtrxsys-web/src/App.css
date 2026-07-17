@@ -477,6 +477,11 @@ input[type="checkbox"], input[type="radio"] {
 .msg-author { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
 .msg-body { white-space: pre-wrap; }
 .msg-time { font-size: 10px; color: rgba(255,255,255,0.5); margin-top: 4px; text-align: right; }
+/* Selo de entrega (ack) da nossa mensagem. Falha em vermelho e visível — é o sintoma que estava mudo. */
+.msg-ack { margin-left: 6px; }
+.msg-ack.d-pending, .msg-ack.d-sent, .msg-ack.d-delivered { color: rgba(255,255,255,0.5); }
+.msg-ack.d-read { color: #3b82f6; }
+.msg-ack.d-failed { color: #ef4444; font-weight: 700; }
 
 .composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); background: var(--bg-2); }
 .composer textarea { flex: 1; resize: vertical; min-height: 40px; }

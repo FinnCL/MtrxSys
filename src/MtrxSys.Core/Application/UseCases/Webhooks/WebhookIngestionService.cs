@@ -262,18 +262,27 @@ public sealed class WebhookIngestionService(
             return;
         }
         var coreId = WahaChatIdentifier.ExtractMessageCore(p.Id);
+
+        // Status de entrega NO CHAT — pra TODA mensagem nossa (disparo OU envio manual). É o que torna
+        // a FALHA (ack=-1: WhatsApp rejeitou o envio de companion restrito) visível na tela em vez de
+        // a mensagem parecer enviada. A mensagem foi gravada com a chave CORE (ResolveOutboundCoreId),
+        // então casa com o core do ack.
+        var chatMsg = await messages.GetByWaMessageIdAsync(coreId, ct);
+        chatMsg?.MarkAck(p.Ack.Value);
+
+        // Auditoria do disparo (sensor de shadow-restriction). Só existe pra mensagem de DISPARO.
         var entry = await audit.GetByWaMessageIdAsync(coreId, ct);
-        if (entry is null)
+        entry?.MarkAck(p.Ack.Value, clock.UtcNow);
+
+        if (chatMsg is null && entry is null)
         {
-            // Esperado e inofensivo pra mensagem que NÃO é de disparo (resposta digitada no celular,
-            // envio pelo Chat, auditoria purgada). Só vira sintoma se acontecer com TODO envio.
-            log.LogDebug("ACK {Ack} sem auditoria correspondente (core {Core}) — provavelmente não é "
-                + "mensagem de disparo.", p.Ack, coreId);
+            // Nem no chat nem na auditoria: eco de mensagem já purgada, ou id que não casou. Inofensivo
+            // pontualmente; só vira sintoma (sensor cego) se acontecer com TODO envio.
+            log.LogDebug("ACK {Ack} sem mensagem/auditoria correspondente (core {Core}).", p.Ack, coreId);
             return;
         }
-        entry.MarkAck(p.Ack.Value, clock.UtcNow);
         await uow.SaveChangesAsync(ct);
-        log.LogInformation("ACK {Ack} ({AckName}) para envio {Core}", p.Ack, p.AckName, coreId);
+        log.LogInformation("ACK {Ack} ({AckName}) para {Core}", p.Ack, p.AckName, coreId);
     }
 
     private const string OptOutConfirmationMessage =

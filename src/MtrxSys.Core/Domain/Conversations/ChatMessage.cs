@@ -12,6 +12,9 @@ public sealed class ChatMessage : Entity<Guid>
     public DateTimeOffset Timestamp { get; private set; }
     public string? MediaUrl { get; private set; }
 
+    /// <summary>Status de entrega (do ack do WhatsApp). None em inbound e enquanto não chega ack.</summary>
+    public MessageDeliveryStatus DeliveryStatus { get; private set; }
+
     private ChatMessage() { }
 
     public static ChatMessage Create(
@@ -36,5 +39,25 @@ public sealed class ChatMessage : Entity<Guid>
             Timestamp = timestamp,
             MediaUrl = mediaUrl,
         };
+    }
+
+    /// <summary>Atualiza o status de entrega a partir do ack cru do WhatsApp (message.ack): ack&lt;0 é
+    /// FALHA (rejeitado), 0/1/2/3+ avançam por Pending/Sent/Delivered/Read. Monotônico — só avança no
+    /// caminho de entrega; uma mensagem já entregue não regride por um ack espúrio (ver
+    /// MessageDeliveryStatus). Idempotente.</summary>
+    public void MarkAck(int wahaAck)
+    {
+        var next = wahaAck switch
+        {
+            < 0 => MessageDeliveryStatus.Failed,
+            0 => MessageDeliveryStatus.Pending,
+            1 => MessageDeliveryStatus.Sent,
+            2 => MessageDeliveryStatus.Delivered,
+            _ => MessageDeliveryStatus.Read,
+        };
+        if ((int)next > (int)DeliveryStatus)
+        {
+            DeliveryStatus = next;
+        }
     }
 }

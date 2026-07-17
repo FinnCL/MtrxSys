@@ -8,6 +8,17 @@ interface Props {
   conversation: Conversation;
 }
 
+// Selo de entrega da NOSSA mensagem (do ack do WhatsApp). "Failed" é o que importa: o envio saiu (201)
+// mas o WhatsApp rejeitou (companion restrito / cold) e não chegou a ninguém — sem isto parecia enviada.
+const DELIVERY: Record<ChatMessage["deliveryStatus"], { icon: string; label: string; cls: string }> = {
+  None: { icon: "🕓", label: "enviando…", cls: "d-pending" },
+  Pending: { icon: "🕓", label: "na fila", cls: "d-pending" },
+  Sent: { icon: "✓", label: "no servidor", cls: "d-sent" },
+  Delivered: { icon: "✓✓", label: "entregue", cls: "d-delivered" },
+  Read: { icon: "✓✓", label: "lida", cls: "d-read" },
+  Failed: { icon: "⚠ falhou", label: "o WhatsApp rejeitou o envio (não entregou)", cls: "d-failed" },
+};
+
 export function ChatThread({ conversation }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +69,16 @@ export function ChatThread({ conversation }: Props) {
               <div className="msg-author">{m.authorPhone}</div>
             )}
             <div className="msg-body">{m.body || (m.mediaUrl ? "[mídia]" : "")}</div>
-            <div className="msg-time">{new Date(m.timestamp).toLocaleTimeString()}</div>
+            <div className="msg-time">
+              {new Date(m.timestamp).toLocaleTimeString()}
+              {/* Só mostra o selo quando há ack de verdade — None (mensagens antigas ou instante antes
+                  do 1º ack) não vira "enviando…" pra sempre. */}
+              {m.direction === "Outbound" && m.deliveryStatus !== "None" && (
+                <span className={`msg-ack ${DELIVERY[m.deliveryStatus].cls}`} title={DELIVERY[m.deliveryStatus].label}>
+                  {DELIVERY[m.deliveryStatus].icon}
+                </span>
+              )}
+            </div>
           </div>
         ))}
         <div ref={bottomRef} />

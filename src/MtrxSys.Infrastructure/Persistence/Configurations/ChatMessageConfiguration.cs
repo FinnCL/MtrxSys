@@ -25,6 +25,7 @@ internal sealed class ChatMessageConfiguration : IEntityTypeConfiguration<ChatMe
         // seq scan sobre o histórico dos chips anteriores do stack, que só cresce.
         b.HasIndex(x => x.Timestamp);
         b.Property(x => x.MediaUrl).HasColumnName("media_url").HasMaxLength(500);
+        b.Property(x => x.DeliveryStatus).HasColumnName("delivery_status").HasConversion<int>().IsRequired();
         b.Ignore(x => x.DomainEvents);
         b.HasOne<Conversation>()
             .WithMany()

@@ -74,6 +74,9 @@ export interface ChatMessage {
   body: string;
   timestamp: string;
   mediaUrl: string | null;
+  // Status de entrega (do ack do WhatsApp) pra mensagem NOSSA (outbound). "Failed" = o WhatsApp
+  // rejeitou o envio (companion restrito / cold) — a mensagem "saiu" mas não chegou a ninguém.
+  deliveryStatus: "None" | "Pending" | "Sent" | "Delivered" | "Read" | "Failed";
 }
 
 export interface Contact {
