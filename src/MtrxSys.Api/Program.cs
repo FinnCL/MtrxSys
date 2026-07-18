@@ -204,5 +204,6 @@ app.MapCampaignsEndpoints();
 app.MapOptOutPublicEndpoints();
 app.MapPhoneEndpoints();
 app.MapWarmupEndpoints();
+app.MapFunnelEndpoints();
 
 await app.RunAsync();

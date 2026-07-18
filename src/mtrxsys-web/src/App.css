@@ -1062,3 +1062,17 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
 /* Campo de "colar no emulador" (adb input text) — o noVNC nao repassa Ctrl+V. */
 .phone-type { display: flex; gap: 6px; justify-content: center; width: 100%; max-width: 340px; }
 .phone-type input { flex: 1; min-width: 0; }
+
+/* ===== Funil de inbound: selos de status ===== */
+.funnel-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.funnel-badge.f-pending { background: #6b72801f; color: #6b7280; }
+.funnel-badge.f-engaged { background: #16a34a1f; color: #16a34a; }
+.funnel-badge.f-replied { background: #2563eb1f; color: #2563eb; }

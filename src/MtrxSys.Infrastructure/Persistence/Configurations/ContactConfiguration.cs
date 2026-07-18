@@ -24,6 +24,7 @@ internal sealed class ContactConfiguration : IEntityTypeConfiguration<Contact>
         b.Property(x => x.OptInAt).HasColumnName("opt_in_at");
         b.Property(x => x.OptOutAt).HasColumnName("opt_out_at");
         b.Property(x => x.LastSentAt).HasColumnName("last_sent_at");
+        b.Property(x => x.FirstInboundAt).HasColumnName("first_inbound_at");
         b.Property(x => x.Stage).HasColumnName("stage").HasConversion<int>().IsRequired();
         b.Property(x => x.StageChangedAt).HasColumnName("stage_changed_at");
         b.Property(x => x.DeletedAt).HasColumnName("deleted_at");

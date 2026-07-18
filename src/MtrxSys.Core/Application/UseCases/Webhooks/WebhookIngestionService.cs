@@ -14,6 +14,7 @@ public sealed class WebhookIngestionService(
     IChatMessageRepository messages,
     IContactRepository contacts,
     IContactStageChangeRepository stageChanges,
+    IFunnelInviteRepository funnelInvites,
     IWahaClient waha,
     IUnitOfWork uow,
     IClock clock,
@@ -21,6 +22,7 @@ public sealed class WebhookIngestionService(
     ISharedPhoneLedger ledger,
     ISendAuditRepository audit,
     IOptions<DispatchOptions> dispatchOpts,
+    IOptions<FunnelOptions> funnelOpts,
     ILogger<WebhookIngestionService> log) : IWebhookIngestionService
 {
     public async Task IngestAsync(WahaWebhookEvent evt, CancellationToken ct)
@@ -107,6 +109,9 @@ public sealed class WebhookIngestionService(
         var bodyText = CleanBody(p.Body);
         Guid? contactId = null;
         var newlyOptedOut = false;
+        // Auto-resposta do funil: capturada aqui (antes do commit) e enviada DEPOIS do commit, no
+        // mesmo padrão da confirmação de opt-out. null = nada a enviar.
+        string? pendingAutoReply = null;
         // Resolve o telefone real do remetente: direto (@c.us) ou traduzindo o LID (@lid,
         // número oculto pelo WhatsApp) via WAHA. Sem isso, respostas que chegam por LID
         // (cada vez mais comuns) não casariam com o contato — e o opt-out não funcionaria.
@@ -155,6 +160,10 @@ public sealed class WebhookIngestionService(
                 {
                     await ledger.MarkOptOutAsync(contact.Phone.E164, ct);
                 }
+                // Engajamento do funil: marca o 1º inbound do contato (destrava envio sem 463) e
+                // fecha o convite de funil aberto. Se a auto-resposta estiver ligada e o convite tiver
+                // texto, captura pra enviar após o commit — mas NUNCA pra quem acabou de pedir SAIR.
+                pendingAutoReply = await ApplyFunnelInboundAsync(contact, newlyOptedOut, now, ct);
             }
         }
 
@@ -227,6 +236,48 @@ public sealed class WebhookIngestionService(
             }
 #pragma warning restore CA1031
         }
+
+        // Auto-resposta do funil — após o commit (a pessoa iniciou, então é resposta: baixo risco de
+        // ban e sem 463). O eco desta saída volta pelo webhook e é gravado no chat como outbound.
+        if (pendingAutoReply is not null)
+        {
+#pragma warning disable CA1031
+            try
+            {
+                await waha.SendTextAsync(dispatchOpts.Value.SessionId, chatId, pendingAutoReply, ct);
+                log.LogInformation("Funil: auto-resposta enviada para {ChatId}", chatId);
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Falha ao enviar auto-resposta do funil para {ChatId}", chatId);
+            }
+#pragma warning restore CA1031
+        }
+    }
+
+    // Engajamento do funil no 1º inbound: estampa Contact.FirstInboundAt (idempotente) e fecha o
+    // convite de funil ABERTO do contato (marca engaged). Se a auto-resposta estiver ligada, o convite
+    // tiver texto pendente e a pessoa NÃO tiver pedido SAIR, devolve o texto pra enviar após o commit
+    // (e marca auto_replied). Retorna null quando não há nada a enviar. Best-effort: só grava estado.
+    private async Task<string?> ApplyFunnelInboundAsync(Contact contact, bool newlyOptedOut, DateTimeOffset now, CancellationToken ct)
+    {
+        if (contact.MarkFirstInbound(now))
+        {
+            await contacts.UpdateAsync(contact, ct);
+        }
+        var invite = await funnelInvites.GetOpenByContactIdAsync(contact.Id, ct);
+        if (invite is null || !invite.MarkEngaged(now))
+        {
+            return null;
+        }
+        string? autoReply = null;
+        if (funnelOpts.Value.AutoReplyEnabled && !newlyOptedOut && invite.HasPendingAutoReply)
+        {
+            autoReply = invite.AutoReplyText;
+            invite.MarkAutoReplied(now);
+        }
+        await funnelInvites.UpdateAsync(invite, ct);
+        return autoReply;
     }
 
     // Atualiza o estado de ENTREGA de uma mensagem NOSSA a partir de um message.ack. Só fromMe da nossa

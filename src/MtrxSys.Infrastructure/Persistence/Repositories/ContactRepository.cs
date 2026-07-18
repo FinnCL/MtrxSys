@@ -83,6 +83,11 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         {
             q = q.Where(c => c.Stage != ContactStage.Lead && c.Stage != ContactStage.Lost);
         }
+        // Engajamento do FUNIL: só quem nos mandou inbound de verdade (destrava envio sem 463).
+        if (filter.InboundEngagedOnly)
+        {
+            q = q.Where(c => c.FirstInboundAt != null);
+        }
         if (filter.ExcludeOptedOut)
         {
             q = q.Where(c => c.OptOutAt == null);

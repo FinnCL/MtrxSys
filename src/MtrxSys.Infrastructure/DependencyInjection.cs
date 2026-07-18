@@ -38,6 +38,7 @@ public static class DependencyInjection
         // Motor de aquecimento de CONVERSA (pool) — distinto do WarmupOptions (teto diário de envio).
         services.AddOptions<WarmupEngineOptions>().Bind(config.GetSection(WarmupEngineOptions.SectionName));
         services.AddOptions<OptOutOptions>().Bind(config.GetSection(OptOutOptions.SectionName));
+        services.AddOptions<FunnelOptions>().Bind(config.GetSection(FunnelOptions.SectionName));
         services.AddOptions<WahaOptions>()
             .Bind(config.GetSection(WahaOptions.SectionName))
             // Fonte única do token: reusa Webhooks:WahaToken (o mesmo que a API valida no endpoint),
@@ -125,6 +126,7 @@ public static class DependencyInjection
         services.AddScoped<IContactTagRepository, ContactTagRepository>();
         services.AddScoped<IContactStageChangeRepository, ContactStageChangeRepository>();
         services.AddScoped<IGroupLinkRepository, GroupLinkRepository>();
+        services.AddScoped<IFunnelInviteRepository, FunnelInviteRepository>();
         services.AddScoped<IWarmupCircleRepository, WarmupCircleRepository>();
         services.AddScoped<IHumanPhaseProgressRepository, HumanPhaseProgressRepository>();
         services.AddScoped<IUserRepository, UserRepository>();

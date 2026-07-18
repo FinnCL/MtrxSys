@@ -12,6 +12,9 @@ import type {
   DispatchFilter,
   DispatchReportItem,
   DispatchStats,
+  FunnelGenerateRequest,
+  FunnelLink,
+  FunnelRow,
   Group,
   GroupLinkPage,
   GroupLinkStatus,
@@ -245,6 +248,14 @@ export const api = {
     return request<Contact[]>(`/api/contacts${qs ? `?${qs}` : ""}`);
   },
   listContactGroupTags: () => request<ContactGroupTag[]>("/api/contacts/group-tags"),
+  // Funil de inbound: gera os links wa.me (click-to-chat) pra um lote de contatos (por grupo ou ids).
+  funnelGenerate: (body: FunnelGenerateRequest) =>
+    request<{ count: number; links: FunnelLink[] }>("/api/funnel/links", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  // Painel do funil: convites recentes com status (pendente/engajou/respondeu).
+  funnelList: () => request<FunnelRow[]>("/api/funnel"),
   reactivateContact: (id: string) =>
     request<Contact>(`/api/contacts/${id}/reactivate`, { method: "POST" }),
   // Libera o contato pra novo disparo (zera o "já enviado" só dele) — volta ao público do disparo.

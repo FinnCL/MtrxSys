@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
+using MtrxSys.Core.Domain.Funnel;
 using MtrxSys.Core.Domain.Groups;
 using MtrxSys.Core.Domain.Messages;
 using MtrxSys.Core.Domain.SystemState;
@@ -25,6 +26,7 @@ public sealed class MtrxDbContext(DbContextOptions<MtrxDbContext> options) : DbC
     public DbSet<ContactTagAssignment> ContactTagAssignments => Set<ContactTagAssignment>();
     public DbSet<ContactStageChange> ContactStageChanges => Set<ContactStageChange>();
     public DbSet<GroupLink> GroupLinks => Set<GroupLink>();
+    public DbSet<FunnelInvite> FunnelInvites => Set<FunnelInvite>();
     public DbSet<WarmupCircleMember> WarmupCircle => Set<WarmupCircleMember>();
     public DbSet<User> Users => Set<User>();
 

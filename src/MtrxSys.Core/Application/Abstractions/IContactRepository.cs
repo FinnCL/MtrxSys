@@ -33,6 +33,9 @@ public sealed record ContactFilter(
     string? GroupTag = null,
     bool ExcludeOptedOut = true,
     bool EngagedOnly = false,
+    // Só quem MANDOU inbound de verdade (FirstInboundAt != null) — engajamento/consentimento do
+    // funil, distinto do EngagedOnly (derivado de Stage). É o público seguro pra enviar sem 463.
+    bool InboundEngagedOnly = false,
     // Telefone E.164 a excluir — usado pra nunca disparar pro próprio número conectado.
     string? ExcludePhoneE164 = null,
     // Exclui quem já tem job Pending ou Sent — evita re-enviar pra quem já recebeu e

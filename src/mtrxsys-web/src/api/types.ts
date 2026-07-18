@@ -332,3 +332,31 @@ export interface DispatchJob {
   errorReason: string | null;
   attemptCount: number;
 }
+
+// ===== Funil de inbound =====
+export interface FunnelGenerateRequest {
+  groupTag?: string;
+  contactIds?: string[];
+  prefillText?: string;
+  autoReplyText?: string;
+}
+
+export interface FunnelLink {
+  contactId: string;
+  name: string | null;
+  phone: string;
+  link: string;
+}
+
+export interface FunnelRow {
+  contactId: string;
+  name: string | null;
+  phone: string | null;
+  prefillText: string | null;
+  autoReplyText: string | null;
+  createdAt: string;
+  engagedAt: string | null;
+  autoRepliedAt: string | null;
+  status: "pending" | "engaged" | "replied";
+  link: string | null;
+}
