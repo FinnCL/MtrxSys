@@ -61,7 +61,6 @@ public sealed class WebhookOptOutE2ETests : IAsyncLifetime
             new ChatMessageRepository(_db),
             new ContactRepository(_db),
             new ContactStageChangeRepository(_db),
-            new FunnelInviteRepository(_db),
             _waha,
             new UnitOfWork(_db),
             new FixedClock(),
@@ -69,7 +68,6 @@ public sealed class WebhookOptOutE2ETests : IAsyncLifetime
             new NoOpSharedPhoneLedger(),
             new SendAuditRepository(_db),
             Options.Create(new DispatchOptions { SessionId = "default" }),
-            Options.Create(new FunnelOptions()),
             NullLogger<WebhookIngestionService>.Instance);
 
     private static WahaWebhookEvent InboundFrom(string chatId, string body, string id) =>

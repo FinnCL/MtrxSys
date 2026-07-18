@@ -40,6 +40,7 @@ builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.PhoneKeepAliveS
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WahaProxyEnsureService>();
 // Vigia a saúde da sessão: alerta (log + webhook) quando o chip sai/volta de WORKING.
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.SessionHealthWatchService>();
+builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WarmingDailyResetService>();
 // Motor de aquecimento de conversa (pool). No-op quando WarmupEngine:Enabled=false.
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WarmupWorker>();
 // Envio automático da Fase Humana (chip conversando com o círculo de contatos salvos, via Chat).
@@ -204,6 +205,5 @@ app.MapCampaignsEndpoints();
 app.MapOptOutPublicEndpoints();
 app.MapPhoneEndpoints();
 app.MapWarmupEndpoints();
-app.MapFunnelEndpoints();
 
 await app.RunAsync();

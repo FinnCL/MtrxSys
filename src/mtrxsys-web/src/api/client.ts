@@ -12,9 +12,6 @@ import type {
   DispatchFilter,
   DispatchReportItem,
   DispatchStats,
-  FunnelGenerateRequest,
-  FunnelGenerateResult,
-  FunnelRow,
   Group,
   GroupLinkPage,
   GroupLinkStatus,
@@ -28,6 +25,7 @@ import type {
   PhoneContact,
   Stage,
   Tag,
+  WahaReadiness,
   WahaStatus,
   WarmupStatus,
 } from "./types";
@@ -147,6 +145,8 @@ export const api = {
       auth: false,
     }),
   wahaStatus: () => request<{ status: WahaStatus; session: string }>("/api/waha/status"),
+  // Contagem do reassentamento (settle) pós-conexão: quanto falta pra liberar o envio manual.
+  wahaReadiness: () => request<WahaReadiness>("/api/waha/readiness"),
   wahaStart: () => request<{ status: WahaStatus }>("/api/waha/start", { method: "POST" }),
   // Reset completo: desconecta E apaga a sessão (sem resíduo no volume) e recria → QR novo.
   // Usado ao trocar de número, pra o pareamento ser dinâmico (não restaura o aparelho antigo).
@@ -248,14 +248,6 @@ export const api = {
     return request<Contact[]>(`/api/contacts${qs ? `?${qs}` : ""}`);
   },
   listContactGroupTags: () => request<ContactGroupTag[]>("/api/contacts/group-tags"),
-  // Funil de inbound: registra os convites e devolve UM link wa.me do chip conectado pra distribuir.
-  funnelGenerate: (body: FunnelGenerateRequest) =>
-    request<FunnelGenerateResult>("/api/funnel/links", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-  // Painel do funil: convites recentes com status (pendente/engajou/respondeu).
-  funnelList: () => request<FunnelRow[]>("/api/funnel"),
   reactivateContact: (id: string) =>
     request<Contact>(`/api/contacts/${id}/reactivate`, { method: "POST" }),
   // Libera o contato pra novo disparo (zera o "já enviado" só dele) — volta ao público do disparo.

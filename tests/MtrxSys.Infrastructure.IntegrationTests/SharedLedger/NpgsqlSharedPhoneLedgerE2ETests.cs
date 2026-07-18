@@ -70,4 +70,48 @@ public sealed class NpgsqlSharedPhoneLedgerE2ETests : IAsyncLifetime
 
         chip.Should().Be("B"); // proveniência preservada (não vira "A")
     }
+
+    // ── Dedup CROSS-CHIP (habilita o re-envio do aquecimento sem furar o anti-spam) ──────────────
+
+    [Fact]
+    public async Task Sent_pelo_MESMO_chip_NAO_suprime()
+    {
+        // Chip A enviou pra X. Consultado pelo PRÓPRIO chip A, X não consta como suprimido: re-enviar do
+        // mesmo chip é continuidade (o LastSentAt LOCAL governa), não o cenário do dedup. Sem isto, o
+        // reset diário do aquecimento nunca voltaria a alcançar os respondedores.
+        var a = Ledger("A");
+        await a.MarkSentAsync("+5511999990020", CancellationToken.None);
+
+        (await a.GetStatusAsync("+5511999990020", CancellationToken.None))
+            .Should().Be(SharedLedgerStatus.None);
+        (await a.GetSuppressedAsync(["+5511999990020"], CancellationToken.None))
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Sent_por_OUTRO_chip_suprime()
+    {
+        // Chip B enviou pra X. Consultado pelo chip A, X é suprimido — dois chips não podem cair na
+        // mesma pessoa (denúncia de spam). O dedup cross-chip continua valendo.
+        await Ledger("B").MarkSentAsync("+5511999990021", CancellationToken.None);
+        var a = Ledger("A");
+
+        (await a.GetStatusAsync("+5511999990021", CancellationToken.None))
+            .Should().Be(SharedLedgerStatus.Sent);
+        (await a.GetSuppressedAsync(["+5511999990021"], CancellationToken.None))
+            .Should().Contain("+5511999990021");
+    }
+
+    [Fact]
+    public async Task OptOut_suprime_ate_no_MESMO_chip()
+    {
+        // Opt-out SEMPRE vence — inclusive pra quem consulta pelo mesmo chip que registrou (LGPD).
+        var a = Ledger("A");
+        await a.MarkOptOutAsync("+5511999990022", CancellationToken.None);
+
+        (await a.GetStatusAsync("+5511999990022", CancellationToken.None))
+            .Should().Be(SharedLedgerStatus.OptedOut);
+        (await a.GetSuppressedAsync(["+5511999990022"], CancellationToken.None))
+            .Should().Contain("+5511999990022");
+    }
 }

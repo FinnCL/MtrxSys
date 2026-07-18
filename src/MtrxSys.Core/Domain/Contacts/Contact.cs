@@ -16,11 +16,6 @@ public sealed class Contact : Entity<Guid>
     public DateTimeOffset? OptInAt { get; private set; }
     public DateTimeOffset? OptOutAt { get; private set; }
     public DateTimeOffset? LastSentAt { get; private set; }
-    /// <summary>Quando o contato mandou a 1ª mensagem PRA GENTE (inbound real). É o sinal de
-    /// engajamento/consentimento do funil — distinto de OptInAt, que é estampado na CRIAÇÃO de todo
-    /// contato (importação/sync) e por isso não prova que a pessoa nos procurou. Só o inbound de
-    /// verdade destrava o envio livre (sem 463). null = ainda não nos escreveu.</summary>
-    public DateTimeOffset? FirstInboundAt { get; private set; }
     public ContactStage Stage { get; private set; } = ContactStage.Lead;
     public DateTimeOffset? StageChangedAt { get; private set; }
     /// <summary>Soft delete ("descartado"): quando preenchido, some das listas e do disparo,
@@ -83,18 +78,6 @@ public sealed class Contact : Entity<Guid>
     }
 
     public void OptOut(DateTimeOffset at) => OptOutAt = at;
-
-    /// <summary>Marca o 1º inbound (engajamento do funil). IDEMPOTENTE: só grava na primeira vez —
-    /// chamadas seguintes não mexem (preserva a data original). Retorna true se ESTE foi o 1º.</summary>
-    public bool MarkFirstInbound(DateTimeOffset at)
-    {
-        if (FirstInboundAt is not null)
-        {
-            return false;
-        }
-        FirstInboundAt = at;
-        return true;
-    }
 
     /// <summary>Re-importação de grupo: desfaz o descarte (soft delete) e preenche o grupo se
     /// estava sem. Não move entre grupos (só preenche quando vazio). Retorna true se algo mudou —

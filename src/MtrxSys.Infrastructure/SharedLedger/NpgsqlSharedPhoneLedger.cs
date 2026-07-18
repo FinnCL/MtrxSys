@@ -35,8 +35,15 @@ public sealed class NpgsqlSharedPhoneLedger(
         }
         return GuardedAsync(nameof(GetStatusAsync), fallback: SharedLedgerStatus.Unavailable, async conn =>
         {
-            await using var cmd = new NpgsqlCommand("SELECT status FROM phone_ledger WHERE phone_e164 = @p LIMIT 1", conn);
+            // Dedup é CROSS-CHIP: opt-out (2) sempre suprime; "enviado" (1) só suprime se foi OUTRO chip
+            // (`chip IS DISTINCT FROM @c`). Re-enviar do MESMO chip pro contato NÃO é o cenário do dedup
+            // (10 chips na mesma pessoa = spam) — é continuidade, e quem controla isso é o LastSentAt
+            // LOCAL. Sem isto, o reset diário do aquecimento não re-enviaria pros respondedores (o ledger
+            // os manteria como Sent pra sempre). null/legado (chip desconhecido) é DISTINCT → suprime.
+            await using var cmd = new NpgsqlCommand(
+                "SELECT status FROM phone_ledger WHERE phone_e164 = @p AND (status = 2 OR chip IS DISTINCT FROM @c) LIMIT 1", conn);
             cmd.Parameters.AddWithValue("p", phoneE164);
+            cmd.Parameters.AddWithValue("c", _opts.Chip);
             var raw = await cmd.ExecuteScalarAsync(ct);
             if (raw is null or DBNull)
             {
@@ -64,8 +71,13 @@ public sealed class NpgsqlSharedPhoneLedger(
         }
         return GuardedAsync(nameof(GetSuppressedAsync), Empty, async conn =>
         {
-            await using var cmd = new NpgsqlCommand("SELECT phone_e164 FROM phone_ledger WHERE phone_e164 = ANY(@p)", conn);
+            // Cross-chip only (ver GetStatusAsync): opt-out sempre; "enviado" só de OUTRO chip. Re-envio
+            // do mesmo chip é liberado aqui (o LastSentAt local governa) — é o que faz o reset diário do
+            // aquecimento voltar a alcançar os respondedores.
+            await using var cmd = new NpgsqlCommand(
+                "SELECT phone_e164 FROM phone_ledger WHERE phone_e164 = ANY(@p) AND (status = 2 OR chip IS DISTINCT FROM @c)", conn);
             cmd.Parameters.AddWithValue("p", arr);
+            cmd.Parameters.AddWithValue("c", _opts.Chip);
             var set = new HashSet<string>(StringComparer.Ordinal);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))

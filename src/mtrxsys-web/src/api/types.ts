@@ -1,5 +1,14 @@
 export type WahaStatus = "Unknown" | "Stopped" | "Starting" | "ScanQrCode" | "Working" | "Failed";
 
+// Janela de reassentamento (settle): quanto falta, após o chip (re)conectar, pra liberar o envio
+// manual. remainingSeconds decrementa; ready=true quando já pode enviar. working=false = sem sessão.
+export interface WahaReadiness {
+  working: boolean;
+  settleSeconds: number;
+  remainingSeconds: number;
+  ready: boolean;
+}
+
 export type Stage = "Lead" | "Qualified" | "Proposal" | "Won" | "Lost";
 
 export const ALL_STAGES: Stage[] = ["Lead", "Qualified", "Proposal", "Won", "Lost"];
@@ -333,28 +342,3 @@ export interface DispatchJob {
   attemptCount: number;
 }
 
-// ===== Funil de inbound =====
-export interface FunnelGenerateRequest {
-  groupTag?: string;
-  contactIds?: string[];
-  prefillText?: string;
-  autoReplyText?: string;
-}
-
-// Resposta da geração: UM link wa.me do chip pra distribuir + quantos contatos foram convidados.
-export interface FunnelGenerateResult {
-  count: number;
-  chatLink: string;
-}
-
-export interface FunnelRow {
-  contactId: string;
-  name: string | null;
-  phone: string | null;
-  prefillText: string | null;
-  autoReplyText: string | null;
-  createdAt: string;
-  engagedAt: string | null;
-  autoRepliedAt: string | null;
-  status: "pending" | "engaged" | "replied";
-}

@@ -9,9 +9,6 @@ public interface IContactRepository
     /// <summary>Carrega num único SELECT os contatos cujos telefones estão na lista, indexados por
     /// E.164. Usado pela importação de grupo pra evitar o N+1 (uma consulta por participante).</summary>
     Task<IReadOnlyDictionary<string, Contact>> GetByPhonesAsync(IReadOnlyCollection<string> e164s, CancellationToken ct);
-    /// <summary>Carrega num único SELECT os contatos dos ids dados, indexados por Id. Usado pelo funil
-    /// (geração de links e painel) pra evitar o N+1 de um GetById por convite.</summary>
-    Task<IReadOnlyDictionary<Guid, Contact>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
     Task AddAsync(Contact contact, CancellationToken ct);
     Task UpdateAsync(Contact contact, CancellationToken ct);
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);
@@ -28,6 +25,11 @@ public interface IContactRepository
     /// <summary>Zera o marcador de envio (LastSentAt) de todos os contatos. Usado no "Renovar
     /// lista": quem só tinha recebido volta a "Novo", consistente com voltar a ser re-disparável.</summary>
     Task<int> ClearLastSentAsync(CancellationToken ct);
+
+    /// <summary>Zera o LastSentAt só de quem ENGAJOU (respondeu/avançou — Stage != Novo/Descartado), pra
+    /// re-disparar pros MESMOS no dia seguinte durante o aquecimento. NÃO toca em quem saiu (opt-out),
+    /// descartados, nem nos "Novo" (frios). Retorna quantos foram liberados.</summary>
+    Task<int> ClearLastSentForEngagedAsync(CancellationToken ct);
 }
 
 public sealed record ContactFilter(
@@ -36,9 +38,6 @@ public sealed record ContactFilter(
     string? GroupTag = null,
     bool ExcludeOptedOut = true,
     bool EngagedOnly = false,
-    // Só quem MANDOU inbound de verdade (FirstInboundAt != null) — engajamento/consentimento do
-    // funil, distinto do EngagedOnly (derivado de Stage). É o público seguro pra enviar sem 463.
-    bool InboundEngagedOnly = false,
     // Telefone E.164 a excluir — usado pra nunca disparar pro próprio número conectado.
     string? ExcludePhoneE164 = null,
     // Exclui quem já tem job Pending ou Sent — evita re-enviar pra quem já recebeu e

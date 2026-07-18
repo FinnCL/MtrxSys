@@ -121,6 +121,7 @@ public static class CampaignsEndpoints
             IWahaClient waha,
             IOptions<DispatchOptions> dispatchOpts,
             ISystemStateRepository state,
+            IDailySendCountsRepository dailyCounts,
             ISharedPhoneLedger ledger,
             ILoggerFactory logFactory,
             CancellationToken ct) =>
@@ -173,6 +174,25 @@ public static class CampaignsEndpoints
             // pra reusar na pausa lá embaixo (sem segundo hit no banco).
             var sysState = await state.GetAsync(ct);
             var ownPhone = sysState.WarmupPhone;
+
+            // FASE DE AQUECIMENTO: nos primeiros N dias ATIVOS do chip (dias com envio), o disparo SÓ
+            // aceita "Respondeu" (EngagedOnly). Frio recém-pareado é o gatilho nº1 de ban; quem já te
+            // escreveu é seguro. Conta a partir do marco do chip (re-parear reinicia). 0 desliga.
+            var warmingDays = dispatchOpts.Value.WarmingResponderOnlyDays;
+            if (warmingDays > 0 && sysState.WarmupStartedOn is { } warmupSince)
+            {
+                var brToday = IClock.ToBrasiliaDate(clock.UtcNow);
+                var activeDays = await dailyCounts.CountActiveDaysBeforeAsync(warmupSince, brToday, ct);
+                if (WarmingPhase.IsActive(warmupSince, activeDays, warmingDays) && !(req.Filter?.EngagedOnly ?? false))
+                {
+                    return Results.Problem(
+                        $"Chip em aquecimento (dia {activeDays + 1} de {warmingDays}): nesta fase só é "
+                        + "permitido disparar para quem já respondeu. Selecione o público "
+                        + "\"Só quem já respondeu\".",
+                        statusCode: 409);
+                }
+            }
+
             var filter = new ContactFilter(
                 Stage: stage,
                 TagName: req.Filter?.TagName,

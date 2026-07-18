@@ -16,7 +16,6 @@ public sealed class WebhookIngestionServiceTests
     private readonly IChatMessageRepository _messages = Substitute.For<IChatMessageRepository>();
     private readonly IContactRepository _contacts = Substitute.For<IContactRepository>();
     private readonly IContactStageChangeRepository _stageChanges = Substitute.For<IContactStageChangeRepository>();
-    private readonly IFunnelInviteRepository _funnelInvites = Substitute.For<IFunnelInviteRepository>();
     private readonly IWahaClient _waha = Substitute.For<IWahaClient>();
     private readonly IUnitOfWork _uow = Substitute.For<IUnitOfWork>();
     private readonly IClock _clock = Substitute.For<IClock>();
@@ -32,7 +31,6 @@ public sealed class WebhookIngestionServiceTests
             _messages,
             _contacts,
             _stageChanges,
-            _funnelInvites,
             _waha,
             _uow,
             _clock,
@@ -40,7 +38,6 @@ public sealed class WebhookIngestionServiceTests
             _ledger,
             _audit,
             opts,
-            Options.Create(new FunnelOptions()),
             NullLogger<WebhookIngestionService>.Instance);
     }
 

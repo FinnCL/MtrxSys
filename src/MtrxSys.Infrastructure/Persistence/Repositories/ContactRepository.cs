@@ -27,20 +27,6 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         return found.ToDictionary(c => c.Phone.E164, StringComparer.Ordinal);
     }
 
-    public async Task<IReadOnlyDictionary<Guid, Contact>> GetByIdsAsync(
-        IReadOnlyCollection<Guid> ids, CancellationToken ct)
-    {
-        if (ids.Count == 0)
-        {
-            return new Dictionary<Guid, Contact>();
-        }
-        var found = await db.Contacts
-            .Where(c => ids.Contains(c.Id))
-            .ToListAsync(ct);
-        // Id é a PK, sem colisão de chave.
-        return found.ToDictionary(c => c.Id);
-    }
-
     public async Task AddAsync(Contact contact, CancellationToken ct) =>
         await db.Contacts.AddAsync(contact, ct);
 
@@ -81,6 +67,17 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
             .Where(c => c.LastSentAt != null)
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSentAt, (DateTimeOffset?)null), ct);
 
+    // Aquecimento: libera SÓ os respondedores (Stage != Novo/Descartado, sem opt-out, não descartados)
+    // pra re-disparar pros mesmos no dia seguinte. Frios ("Novo") NUNCA entram — a fase é só warm.
+    public Task<int> ClearLastSentForEngagedAsync(CancellationToken ct) =>
+        db.Contacts
+            .Where(c => c.LastSentAt != null
+                && c.DeletedAt == null
+                && c.OptOutAt == null
+                && c.Stage != ContactStage.Lead
+                && c.Stage != ContactStage.Lost)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSentAt, (DateTimeOffset?)null), ct);
+
     public Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct) =>
         ApplyFilter(db.Contacts.AsQueryable(), filter).CountAsync(ct);
 
@@ -96,11 +93,6 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         if (filter.EngagedOnly)
         {
             q = q.Where(c => c.Stage != ContactStage.Lead && c.Stage != ContactStage.Lost);
-        }
-        // Engajamento do FUNIL: só quem nos mandou inbound de verdade (destrava envio sem 463).
-        if (filter.InboundEngagedOnly)
-        {
-            q = q.Where(c => c.FirstInboundAt != null);
         }
         if (filter.ExcludeOptedOut)
         {

@@ -58,4 +58,12 @@ public sealed class DispatchOptions
     // lista de outro. Re-importar o grupo com o chip atual "move" os contatos pra ele. false = desliga
     // (volta a disparar pra qualquer contato do público, arriscando 463 em quem for frio pro chip).
     public bool OnlyCurrentChipContacts { get; set; } = true;
+
+    // FASE DE AQUECIMENTO POR RESPONDEDORES: nos primeiros N dias ATIVOS de um chip (dias COM envio, não
+    // de calendário — chip parado não amadurece), o disparo SÓ aceita o público "Respondeu" (EngagedOnly).
+    // Quem já te escreveu neste chip é seguro (sem 463); mandar pra frio recém-pareado é o gatilho nº1 de
+    // ban. Depois de N dias ativos, abre pra todas as audiências. Conta a partir do marco do chip
+    // (WarmupStartedOn), então re-parear reinicia a fase. 0 desliga a trava. Ver WarmingDailyResetService,
+    // que à meia-noite de Brasília libera os respondedores pra novo disparo enquanto a fase durar.
+    public int WarmingResponderOnlyDays { get; set; } = 3;
 }

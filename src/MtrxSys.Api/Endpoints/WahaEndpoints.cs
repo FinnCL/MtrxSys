@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Webhooks;
+using MtrxSys.Core.Safety;
 
 namespace MtrxSys.Api.Endpoints;
 
@@ -18,6 +19,30 @@ public static class WahaEndpoints
         {
             var status = await waha.GetSessionStatusAsync(dispatch.Value.SessionId, ct);
             return Results.Ok(new { status = status.ToString(), session = dispatch.Value.SessionId });
+        });
+
+        // Janela de reassentamento (settle) pro contador da UI: depois que o chip (re)conecta, o envio
+        // manual fica bloqueado ~SettleAfterReconnectSeconds — mandar antes disso já restringiu o chip
+        // por 7 dias (prod 2026-07-16). Expõe quanto FALTA pra liberar, pra a tela mostrar a contagem e
+        // o operador não tentar enviar cedo (e levar 409 sem entender). Mesma fonte que o gate de envio
+        // (SessionReadinessTracker), então a contagem bate com o que realmente destrava.
+        group.MapGet("/readiness", (
+            SessionReadinessTracker readiness,
+            IOptions<DispatchOptions> dispatch,
+            IClock clock) =>
+        {
+            var settle = Math.Max(0, dispatch.Value.SettleAfterReconnectSeconds);
+            var workingFor = readiness.WorkingFor(clock.UtcNow);
+            var elapsed = workingFor is { } w ? (int)w.TotalSeconds : (int?)null;
+            var remaining = elapsed is { } e ? Math.Max(0, settle - e) : settle;
+            var ready = elapsed is { } e2 && e2 >= settle;
+            return Results.Ok(new
+            {
+                working = workingFor is not null,
+                settleSeconds = settle,
+                remainingSeconds = remaining,
+                ready,
+            });
         });
 
         group.MapPost("/start", async (
