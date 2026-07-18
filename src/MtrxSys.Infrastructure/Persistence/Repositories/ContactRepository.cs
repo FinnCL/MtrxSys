@@ -74,8 +74,7 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
             .Where(c => c.LastSentAt != null
                 && c.DeletedAt == null
                 && c.OptOutAt == null
-                && c.Stage != ContactStage.Lead
-                && c.Stage != ContactStage.Lost)
+                && !ContactStages.NonEngaged.Contains(c.Stage))
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSentAt, (DateTimeOffset?)null), ct);
 
     public Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct) =>
@@ -92,7 +91,7 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         // "Engajados" = qualquer um que respondeu/avançou: tudo menos "Novo" (Lead) e "Descartado" (Lost).
         if (filter.EngagedOnly)
         {
-            q = q.Where(c => c.Stage != ContactStage.Lead && c.Stage != ContactStage.Lost);
+            q = q.Where(c => !ContactStages.NonEngaged.Contains(c.Stage));
         }
         if (filter.ExcludeOptedOut)
         {

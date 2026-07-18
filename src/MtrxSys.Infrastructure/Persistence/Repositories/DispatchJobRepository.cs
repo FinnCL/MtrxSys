@@ -142,9 +142,9 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
                 ErrorReason: j.ErrorReason,
                 AttemptCount: j.AttemptCount,
                 ImportedByPhone: c?.ImportedByPhone,
-                // Engajou = respondeu/avançou (Stage != Novo/Descartado). Mesma definição do público
-                // "Respondeu" do disparo — a linha do relatório mostra "Respondeu" pra esses.
-                Engaged: c is not null && c.Stage != ContactStage.Lead && c.Stage != ContactStage.Lost);
+                // Engajou = respondeu/avançou (fonte única ContactStages.IsEngaged) — a linha do
+                // relatório mostra "Respondeu" pra esses, mesma definição do público "Respondeu".
+                Engaged: c is not null && ContactStages.IsEngaged(c.Stage));
         }).ToList();
     }
 }
