@@ -627,10 +627,11 @@ export function CampaignsScreen() {
         <div className="audience-row">
           <label>
             <span>Público</span>
-            {/* Fase de aquecimento: o público fica TRAVADO em "Respondeu" (o efeito acima força o estado,
-                e aqui só a opção segura aparece). Fora da fase, "Todos" volta. */}
+            {/* Fase de aquecimento: o público fica TRAVADO em "Respondeu". O `value` usa o efetivo
+                (não o estado cru) pra nunca ficar num valor sem opção no 1º render — o ajuste-durante-a-
+                render acima sincroniza o estado pro disparo/contagem. Fora da fase, "Todos" volta. */}
             <select
-              value={audience}
+              value={responderOnly ? "responded" : audience}
               onChange={(e) => setAudience(e.target.value as "all" | "responded")}
               disabled={responderOnly}
             >
