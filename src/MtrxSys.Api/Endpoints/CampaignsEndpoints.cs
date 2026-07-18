@@ -521,6 +521,7 @@ public static class CampaignsEndpoints
                 // marca) OU de outro chip → cinza, sem envio.
                 fromCurrentChip = currentChip is null
                     || string.Equals(i.ImportedByPhone, currentChip, StringComparison.Ordinal),
+                engaged = i.Engaged,
             }));
         });
 

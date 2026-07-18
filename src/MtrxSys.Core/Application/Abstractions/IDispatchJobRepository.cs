@@ -38,4 +38,7 @@ public sealed record DispatchReportItem(
     string? ErrorReason,
     int AttemptCount,
     // Chip que importou o contato — pra o relatório marcar "outro chip" (não sai deste chip).
-    string? ImportedByPhone = null);
+    string? ImportedByPhone = null,
+    // Contato já ENGAJOU (respondeu/avançou — Stage != Novo/Descartado)? Pro relatório marcar
+    // "Respondeu" na linha — ex.: na fase de aquecimento a fila é só de respondedores.
+    bool Engaged = false);

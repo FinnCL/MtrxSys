@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Domain.Campaigns;
+using MtrxSys.Core.Domain.Contacts;
 
 namespace MtrxSys.Infrastructure.Persistence.Repositories;
 
@@ -140,7 +141,10 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
                 SentAt: j.SentAt,
                 ErrorReason: j.ErrorReason,
                 AttemptCount: j.AttemptCount,
-                ImportedByPhone: c?.ImportedByPhone);
+                ImportedByPhone: c?.ImportedByPhone,
+                // Engajou = respondeu/avançou (Stage != Novo/Descartado). Mesma definição do público
+                // "Respondeu" do disparo — a linha do relatório mostra "Respondeu" pra esses.
+                Engaged: c is not null && c.Stage != ContactStage.Lead && c.Stage != ContactStage.Lost);
         }).ToList();
     }
 }

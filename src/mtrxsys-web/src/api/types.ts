@@ -333,6 +333,8 @@ export interface DispatchReportItem {
   // false = contato de OUTRO chip (o disparo pula, anti-463). O front mostra em cinza + "outro chip".
   // Legado (sem marca) vem true (não marca à toa).
   fromCurrentChip: boolean;
+  // Contato já respondeu/avançou (Stage != Novo/Descartado). O relatório marca "Respondeu" na linha.
+  engaged: boolean;
 }
 
 export interface DispatchJob {

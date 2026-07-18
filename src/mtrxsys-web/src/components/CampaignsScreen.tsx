@@ -875,6 +875,11 @@ export function CampaignsScreen() {
                     <span className={`stat-chip stat-${i.status.toLowerCase()}`}>
                       {DISPATCH_STATUS_LABELS[i.status]}
                     </span>
+                    {i.engaged && (
+                      <span className="engaged-badge" title="Contato que já respondeu/avançou — público seguro (é o único liberado na fase de aquecimento).">
+                        Respondeu
+                      </span>
+                    )}
                     {!i.fromCurrentChip && <span className="other-chip-badge">outro chip</span>}
                     {(i.status === "Retrying" || i.status === "Failed") && i.attemptCount > 0 && (
                       <span className="muted small"> · {i.attemptCount + 1}ª tentativa</span>
