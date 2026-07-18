@@ -368,14 +368,22 @@ public static class CampaignsEndpoints
         });
 
         dispatch.MapGet("/warmup", async (
-            WarmupManager warmup, ISystemStateRepository state, CancellationToken ct) =>
+            WarmupManager warmup, ISystemStateRepository state,
+            IOptions<DispatchOptions> dispatchOpts, CancellationToken ct) =>
         {
             var s = await warmup.GetSnapshotAsync(ct);
-            var phone = (await state.GetAsync(ct)).WarmupPhone;
+            var sysState = await state.GetAsync(ct);
+            var phone = sysState.WarmupPhone;
+            // Fase "só quem respondeu": os primeiros N dias ATIVOS (s.DayIndex = dias com envio antes de
+            // hoje). Mesma definição da trava do disparo — a UI usa pra travar o seletor em "Respondeu".
+            var warmingDays = dispatchOpts.Value.WarmingResponderOnlyDays;
+            var responderOnlyPhase = WarmingPhase.IsActive(sysState.WarmupStartedOn, s.DayIndex, warmingDays);
             return Results.Ok(new
             {
                 phone,
                 startedOn = s.StartedOn,
+                responderOnlyPhase,
+                responderOnlyDaysLeft = responderOnlyPhase ? warmingDays - s.DayIndex : 0,
                 // dayIndex é base-0 no domínio; expõe base-1 pra UI ("dia 1 de 7").
                 day = s.DayIndex + 1,
                 totalDays = s.Curve.Length,

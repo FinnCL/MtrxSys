@@ -181,6 +181,8 @@ export function CampaignsScreen() {
   }, [loadAudienceCount]);
 
   useEffect(() => {
+    // Busca a contagem do público no servidor (estado externo); setState pós-await não cascateia render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadAudienceCount();
   }, [loadAudienceCount]);
 
@@ -204,6 +206,8 @@ export function CampaignsScreen() {
   // mais lá, cai pra primeira disponível.
   useEffect(() => {
     if (messages.length === 0) return;
+    // Sincroniza a seleção com a lista externa (templates): setState pós-guard, não cascateia render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedMessageId((prev) =>
       prev !== null && messages.some((m) => m.id === prev) ? prev : messages[0].id,
     );
@@ -233,6 +237,12 @@ export function CampaignsScreen() {
   // reaparecer se bater o novo teto. "Cancelar" mantém dismissed porque atCap segue true.
   // Ajuste durante a render (em vez de setState-in-effect); o guard !capDismissed evita loop.
   if (warmup && !warmup.atCap && capDismissed) setCapDismissed(false);
+
+  // FASE DE AQUECIMENTO ("só quem respondeu"): trava o público em "Respondeu" enquanto durar. Ajuste
+  // durante a render (mesmo padrão acima; o guard evita loop): o seletor esconde/desabilita "Todos",
+  // mas o ESTADO também precisa ser forçado, senão o disparo iria como "Todos" mesmo com a UI travada.
+  const responderOnly = warmup?.responderOnlyPhase === true;
+  if (responderOnly && audience !== "responded") setAudience("responded");
 
   // Fim do envio: a fila tinha contatos e zerou enquanto enviava (não pausado, não foi
   // limpar/renovar). Inclui Retrying — só está concluído quando nada mais está na fila nem
@@ -617,8 +627,14 @@ export function CampaignsScreen() {
         <div className="audience-row">
           <label>
             <span>Público</span>
-            <select value={audience} onChange={(e) => setAudience(e.target.value as "all" | "responded")}>
-              <option value="all">Todos os contatos</option>
+            {/* Fase de aquecimento: o público fica TRAVADO em "Respondeu" (o efeito acima força o estado,
+                e aqui só a opção segura aparece). Fora da fase, "Todos" volta. */}
+            <select
+              value={audience}
+              onChange={(e) => setAudience(e.target.value as "all" | "responded")}
+              disabled={responderOnly}
+            >
+              {!responderOnly && <option value="all">Todos os contatos</option>}
               <option value="responded">Só quem já respondeu</option>
             </select>
           </label>
@@ -635,7 +651,16 @@ export function CampaignsScreen() {
             </select>
           </label>
         </div>
-        <p className="muted small">Quem pediu pra sair nunca recebe.</p>
+        {responderOnly ? (
+          <p className="muted small">
+            🔥 Aquecimento{typeof warmup?.responderOnlyDaysLeft === "number" && warmup.responderOnlyDaysLeft > 0
+              ? ` (faltam ${warmup.responderOnlyDaysLeft} dia(s) ativo(s))`
+              : ""}: nesta fase o disparo fica travado em <strong>só quem já respondeu</strong> — mandar
+            pra frio num chip novo derruba o número. Depois abre pra todas as audiências.
+          </p>
+        ) : (
+          <p className="muted small">Quem pediu pra sair nunca recebe.</p>
+        )}
       </section>
 
       {warmup && (

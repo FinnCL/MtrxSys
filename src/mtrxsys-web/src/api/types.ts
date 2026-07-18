@@ -256,6 +256,10 @@ export interface DispatchStats {
 export interface WarmupStatus {
   phone: string | null;     // número que o aquecimento acompanha
   startedOn: string;
+  // Fase "só quem respondeu": nos primeiros dias ATIVOS do chip, o disparo trava no público
+  // "Respondeu" (frio num chip novo derruba). A tela usa pra travar o seletor de público.
+  responderOnlyPhase: boolean;
+  responderOnlyDaysLeft: number;
   day: number;
   totalDays: number;
   todayLimit: number;       // teto da curva
