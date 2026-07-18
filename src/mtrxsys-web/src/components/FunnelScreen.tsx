@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { ContactGroupTag, FunnelLink, FunnelRow } from "../api/types";
+import type { ContactGroupTag, FunnelRow } from "../api/types";
 
 const STATUS_LABEL: Record<FunnelRow["status"], { text: string; cls: string }> = {
   pending: { text: "Pendente", cls: "f-pending" },
@@ -8,19 +8,21 @@ const STATUS_LABEL: Record<FunnelRow["status"], { text: string; cls: string }> =
   replied: { text: "Auto-respondido", cls: "f-replied" },
 };
 
-// Funil de inbound: o operador escolhe uma audiência, escreve o texto pré-preenchido do link e
-// (opcional) a auto-resposta; gera os links wa.me pra distribuir por anúncio/e-mail/etc. Quando a
-// pessoa clica e te escreve, ela aparece como "Respondeu" — e aí o Chat conversa livre (sem 463).
+// Funil de inbound: o operador escolhe uma audiência e o texto que já vem escrito pra pessoa te
+// enviar; o sistema gera UM link wa.me do CHIP conectado pra distribuir (anúncio, e-mail/SMS, ou
+// postar num grupo). Quem clica te ESCREVE (inbound = consentimento) e vira "Respondeu" — e aí o
+// Chat conversa livre, sem o 463. O casamento de quem respondeu é pelo telefone, não pelo link.
 export function FunnelScreen() {
   const [tags, setTags] = useState<ContactGroupTag[]>([]);
   const [groupTag, setGroupTag] = useState("");
-  const [prefill, setPrefill] = useState("Oi! Vi seu contato e queria te falar uma coisa.");
+  const [prefill, setPrefill] = useState("Oi! Tenho interesse, pode me passar mais informações?");
   const [autoReply, setAutoReply] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [links, setLinks] = useState<FunnelLink[]>([]);
+  const [chatLink, setChatLink] = useState<string | null>(null);
+  const [invitedCount, setInvitedCount] = useState(0);
   const [rows, setRows] = useState<FunnelRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const loadRows = useCallback(async () => {
     try {
@@ -32,6 +34,9 @@ export function FunnelScreen() {
 
   useEffect(() => {
     api.listContactGroupTags().then(setTags).catch(() => {});
+    // Sincroniza com estado externo (convites no servidor): o setState é pós-await, não cascateia
+    // render — mesmo padrão do HumanPhaseCard/PlaybookScreen.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadRows();
     const h = setInterval(loadRows, 8_000);
     return () => clearInterval(h);
@@ -46,7 +51,8 @@ export function FunnelScreen() {
         prefillText: prefill || undefined,
         autoReplyText: autoReply || undefined,
       });
-      setLinks(res.links);
+      setChatLink(res.chatLink);
+      setInvitedCount(res.count);
       await loadRows();
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
@@ -55,24 +61,11 @@ export function FunnelScreen() {
     }
   }
 
-  function copy(text: string, key: string) {
-    void navigator.clipboard.writeText(text);
-    setCopied(key);
-    setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
-  }
-
-  function exportCsv() {
-    const header = "nome,telefone,link\n";
-    const body = links
-      .map((l) => `"${(l.name ?? "").replace(/"/g, '""')}","${l.phone}","${l.link}"`)
-      .join("\n");
-    const blob = new Blob([header + body], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "funil-links.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+  function copyLink() {
+    if (!chatLink) return;
+    void navigator.clipboard.writeText(chatLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   }
 
   return (
@@ -80,12 +73,13 @@ export function FunnelScreen() {
       <section style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: 12 }}>
         <h2 style={{ margin: 0 }}>Funil de inbound</h2>
         <p className="muted" style={{ margin: 0 }}>
-          Gere links <strong>wa.me</strong> pra distribuir (anúncio, link, e-mail/SMS). Quando a pessoa clica e
-          te escreve, ela vira <strong>Respondeu</strong> — e aí você conversa livre pelo Chat, sem o 463.
+          Gere <strong>um link wa.me do seu chip</strong> pra distribuir (anúncio, link, e-mail/SMS, ou
+          poste num grupo que você participa). Quem clica <strong>te escreve</strong> — vira{" "}
+          <strong>Respondeu</strong> e você conversa livre pelo Chat, sem o 463.
         </p>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span>Audiência</span>
+          <span>Audiência (quem você vai convidar)</span>
           <select value={groupTag} onChange={(e) => setGroupTag(e.target.value)}>
             <option value="">Todos os contatos</option>
             {tags.map((t) => (
@@ -97,7 +91,7 @@ export function FunnelScreen() {
         </label>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span>Texto do link (o que já vem escrito quando a pessoa abre)</span>
+          <span>Texto que já vem escrito pra pessoa te enviar (ela pode editar)</span>
           <textarea value={prefill} onChange={(e) => setPrefill(e.target.value)} rows={2} />
         </label>
 
@@ -113,38 +107,22 @@ export function FunnelScreen() {
 
         <div>
           <button type="button" onClick={() => void generate()} disabled={generating}>
-            {generating ? "Gerando..." : "Gerar links"}
+            {generating ? "Gerando..." : "Gerar link"}
           </button>
         </div>
         {error && <p className="error">{error}</p>}
       </section>
 
-      {links.length > 0 && (
-        <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <h3 style={{ margin: 0 }}>{links.length} links gerados</h3>
-            <button type="button" onClick={exportCsv}>Exportar CSV</button>
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table>
-              <thead>
-                <tr><th>Contato</th><th>Telefone</th><th>Link</th><th /></tr>
-              </thead>
-              <tbody>
-                {links.map((l) => (
-                  <tr key={l.contactId}>
-                    <td>{l.name ?? "—"}</td>
-                    <td style={{ fontVariantNumeric: "tabular-nums" }}>{l.phone}</td>
-                    <td><a href={l.link} target="_blank" rel="noreferrer">{l.link}</a></td>
-                    <td>
-                      <button type="button" onClick={() => copy(l.link, l.contactId)}>
-                        {copied === l.contactId ? "Copiado!" : "Copiar"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {chatLink && (
+        <section style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: 8 }}>
+          <h3 style={{ margin: 0 }}>Link do chip</h3>
+          <p className="muted" style={{ margin: 0 }}>
+            {invitedCount} {invitedCount === 1 ? "contato convidado" : "contatos convidados"} — distribua o
+            link abaixo. Quem clicar e te escrever aparece como <strong>Respondeu</strong> na tabela.
+          </p>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <a href={chatLink} target="_blank" rel="noreferrer" style={{ wordBreak: "break-all" }}>{chatLink}</a>
+            <button type="button" onClick={copyLink}>{copied ? "Copiado!" : "Copiar"}</button>
           </div>
         </section>
       )}
@@ -158,7 +136,7 @@ export function FunnelScreen() {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={5} className="muted">Nenhum convite ainda. Gere links acima.</td></tr>
+                <tr><td colSpan={5} className="muted">Nenhum convite ainda. Gere o link acima.</td></tr>
               )}
               {rows.map((r) => {
                 const s = STATUS_LABEL[r.status];

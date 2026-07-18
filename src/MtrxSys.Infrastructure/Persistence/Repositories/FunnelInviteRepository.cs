@@ -16,6 +16,20 @@ internal sealed class FunnelInviteRepository(MtrxDbContext db) : IFunnelInviteRe
             .OrderByDescending(f => f.CreatedAt)
             .FirstOrDefaultAsync(ct);
 
+    // Convites abertos destes contatos num único SELECT (rastreados: o chamador atualiza os textos e
+    // o SaveChanges persiste). Sem AsNoTracking de propósito — a geração reusa e MUTA estes convites.
+    public async Task<IReadOnlyList<FunnelInvite>> ListOpenByContactIdsAsync(
+        IReadOnlyCollection<Guid> contactIds, CancellationToken ct)
+    {
+        if (contactIds.Count == 0)
+        {
+            return [];
+        }
+        return await db.FunnelInvites
+            .Where(f => f.EngagedAt == null && contactIds.Contains(f.ContactId))
+            .ToListAsync(ct);
+    }
+
     public Task UpdateAsync(FunnelInvite invite, CancellationToken ct)
     {
         if (db.Entry(invite).State == EntityState.Detached)

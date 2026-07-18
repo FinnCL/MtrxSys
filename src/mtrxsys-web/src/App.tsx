@@ -10,6 +10,7 @@ import { CollectorScreen } from "./components/CollectorScreen";
 import { ContactsScreen } from "./components/ContactsScreen";
 import { CampaignsScreen } from "./components/CampaignsScreen";
 import { FunnelScreen } from "./components/FunnelScreen";
+import { PlaybookScreen } from "./components/PlaybookScreen";
 import { LivePhoneScreen } from "./components/LivePhoneScreen";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { api } from "./api/client";
@@ -31,10 +32,10 @@ const PHONE_SERVER_OPTION = import.meta.env.VITE_PHONE_SERVER === "1";
 // LDPlayer), emulator-5556 (2ª)… Configurável por ambiente. Vazio = emulator-5554.
 const EMULATOR_UDID = import.meta.env.VITE_EMULATOR_UDID as string | undefined;
 
-type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns" | "funnel" | "phone";
+type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns" | "funnel" | "playbook" | "phone";
 
 // Persiste a aba ativa pra sobreviver ao F5/atualizar — sem isso, recarregar sempre cai no Chat.
-const VIEW_TABS: ViewTab[] = ["phone", "chat", "collector", "groups", "contacts", "campaigns", "funnel"];
+const VIEW_TABS: ViewTab[] = ["phone", "playbook", "chat", "collector", "groups", "contacts", "campaigns", "funnel"];
 function loadView(): ViewTab {
   const v = localStorage.getItem("app.view");
   return VIEW_TABS.includes(v as ViewTab) ? (v as ViewTab) : "chat";
@@ -177,6 +178,13 @@ function Shell() {
             </button>
             <button
               type="button"
+              className={`tab-btn${view === "playbook" ? " active" : ""}`}
+              onClick={() => setView("playbook")}
+            >
+              Primeiros dias
+            </button>
+            <button
+              type="button"
               className={`tab-btn${view === "chat" ? " active" : ""}`}
               onClick={() => setView("chat")}
             >
@@ -246,6 +254,8 @@ function Shell() {
         <CampaignsScreen />
       ) : view === "funnel" ? (
         <FunnelScreen />
+      ) : view === "playbook" ? (
+        <PlaybookScreen onNavigate={setView} />
       ) : view === "phone" ? (
         <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} onDisconnect={wahaWorking === true ? () => setConfirmDisconnect(true) : undefined} onOpenConversation={openConversation} />
       ) : (

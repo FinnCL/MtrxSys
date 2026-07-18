@@ -68,4 +68,23 @@ public sealed class FunnelInviteTests
         invite.MarkAutoReplied(T0.AddMinutes(5));
         invite.AutoRepliedAt.Should().Be(T0.AddMinutes(1));
     }
+
+    [Fact]
+    public void UpdateContent_atualiza_convite_aberto()
+    {
+        var invite = FunnelInvite.Create(Guid.NewGuid(), Guid.NewGuid(), "oi", "obrigado", T0);
+        invite.UpdateContent("texto novo", "resposta nova");
+        invite.PrefillText.Should().Be("texto novo");
+        invite.AutoReplyText.Should().Be("resposta nova");
+    }
+
+    [Fact]
+    public void UpdateContent_e_noop_depois_de_engajado()
+    {
+        var invite = FunnelInvite.Create(Guid.NewGuid(), Guid.NewGuid(), "oi", "obrigado", T0);
+        invite.MarkEngaged(T0.AddMinutes(1));
+        invite.UpdateContent("mudou", "mudou");
+        invite.PrefillText.Should().Be("oi", "convite já engajado não muda mais o texto");
+        invite.AutoReplyText.Should().Be("obrigado");
+    }
 }

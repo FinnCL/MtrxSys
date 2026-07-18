@@ -44,6 +44,19 @@ public sealed class FunnelInvite : Entity<Guid>
         return true;
     }
 
+    /// <summary>Atualiza os textos de um convite AINDA ABERTO (re-gerar o link com texto novo, sem
+    /// duplicar o convite). No-op depois de engajado: aí o convite já cumpriu o papel e a auto-resposta
+    /// pode até já ter saído — mudar o texto retroativamente seria enganoso.</summary>
+    public void UpdateContent(string? prefillText, string? autoReplyText)
+    {
+        if (EngagedAt is not null)
+        {
+            return;
+        }
+        PrefillText = prefillText;
+        AutoReplyText = autoReplyText;
+    }
+
     public void MarkAutoReplied(DateTimeOffset at) => AutoRepliedAt ??= at;
 
     /// <summary>Tem auto-resposta pendente pra enviar? (texto configurado e ainda não enviada).</summary>

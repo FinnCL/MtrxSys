@@ -341,11 +341,10 @@ export interface FunnelGenerateRequest {
   autoReplyText?: string;
 }
 
-export interface FunnelLink {
-  contactId: string;
-  name: string | null;
-  phone: string;
-  link: string;
+// Resposta da geração: UM link wa.me do chip pra distribuir + quantos contatos foram convidados.
+export interface FunnelGenerateResult {
+  count: number;
+  chatLink: string;
 }
 
 export interface FunnelRow {
@@ -358,5 +357,4 @@ export interface FunnelRow {
   engagedAt: string | null;
   autoRepliedAt: string | null;
   status: "pending" | "engaged" | "replied";
-  link: string | null;
 }

@@ -27,6 +27,20 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         return found.ToDictionary(c => c.Phone.E164, StringComparer.Ordinal);
     }
 
+    public async Task<IReadOnlyDictionary<Guid, Contact>> GetByIdsAsync(
+        IReadOnlyCollection<Guid> ids, CancellationToken ct)
+    {
+        if (ids.Count == 0)
+        {
+            return new Dictionary<Guid, Contact>();
+        }
+        var found = await db.Contacts
+            .Where(c => ids.Contains(c.Id))
+            .ToListAsync(ct);
+        // Id é a PK, sem colisão de chave.
+        return found.ToDictionary(c => c.Id);
+    }
+
     public async Task AddAsync(Contact contact, CancellationToken ct) =>
         await db.Contacts.AddAsync(contact, ct);
 

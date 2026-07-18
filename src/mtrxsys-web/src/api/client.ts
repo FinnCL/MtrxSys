@@ -13,7 +13,7 @@ import type {
   DispatchReportItem,
   DispatchStats,
   FunnelGenerateRequest,
-  FunnelLink,
+  FunnelGenerateResult,
   FunnelRow,
   Group,
   GroupLinkPage,
@@ -248,9 +248,9 @@ export const api = {
     return request<Contact[]>(`/api/contacts${qs ? `?${qs}` : ""}`);
   },
   listContactGroupTags: () => request<ContactGroupTag[]>("/api/contacts/group-tags"),
-  // Funil de inbound: gera os links wa.me (click-to-chat) pra um lote de contatos (por grupo ou ids).
+  // Funil de inbound: registra os convites e devolve UM link wa.me do chip conectado pra distribuir.
   funnelGenerate: (body: FunnelGenerateRequest) =>
-    request<{ count: number; links: FunnelLink[] }>("/api/funnel/links", {
+    request<FunnelGenerateResult>("/api/funnel/links", {
       method: "POST",
       body: JSON.stringify(body),
     }),
