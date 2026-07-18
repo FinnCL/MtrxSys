@@ -93,21 +93,58 @@ internal sealed class WahaSessionClient(WahaHttp http)
 
     public async Task EnsureSessionStartedAsync(string sessionId, CancellationToken ct)
     {
-        using var req = http.NewRequest(HttpMethod.Post, $"api/sessions/{WahaHttp.Esc(sessionId)}/start");
+        // Lê a sessão UMA vez (existe? tem config? qual status?). NÃO confiamos no POST /start pra
+        // criar: algumas versões do WAHA (2026.4.x) CRIAM uma sessão "pelada" (config nulo — sem
+        // webhook/token nem noweb.store) no /start em vez de devolver 404. Aí o /start "dá certo" mas
+        // a sessão nasce sem o token do webhook (inbound/opt-out viram 401) e sem store.fullSync (chat
+        // 400, 463 a co-membro), e o QR fica instável. Então: probe + cria com o config COMPLETO
+        // quando falta, em vez de assumir que /start faz a coisa certa.
+        var dto = await TryGetSessionAsync(sessionId, ct);
+        var status = WahaParsing.ParseStatus(dto?.Status);
+
+        // Conectada: NUNCA recria nem apaga (isso deslogaria a conta). Nada a fazer.
+        if (status is WahaSessionStatus.Working)
+        {
+            return;
+        }
+
+        // Existe COM config (webhook/store/proxy já gravados): só (re)inicia, preservando a credencial
+        // guardada — uma sessão parada pode reconectar a MESMA conta. O restart cobre também FAILED (o
+        // WAHA recusa o /start puro em FAILED) e ScanQrCode/Stopped, sem apagar nada.
+        if (dto?.Config is not null)
+        {
+            using var req = http.NewRequest(HttpMethod.Post, $"api/sessions/{WahaHttp.Esc(sessionId)}/restart");
+            using var resp = await http.SendAsync(req, ct);
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+            {
+                await CreateSessionAsync(sessionId, ct); // sumiu entre o probe e o restart
+                return;
+            }
+            // 422/409 = estado que recusa restart no momento (ex.: já iniciando) — tolera; o poll segue.
+            if (resp.StatusCode is HttpStatusCode.UnprocessableEntity or HttpStatusCode.Conflict)
+            {
+                return;
+            }
+            resp.EnsureSuccessStatusCode();
+            return;
+        }
+
+        // Não existe, ou existe "pelada" (config nulo): recria com o config completo. Apagar aqui é
+        // seguro — fora de Working não há conta pareada a perder, e a sessão pelada nunca pareou direito.
+        if (dto is not null)
+        {
+            await DeleteSessionAsync(sessionId, ct);
+        }
+        await CreateSessionAsync(sessionId, ct);
+    }
+
+    private async Task<SessionDto?> TryGetSessionAsync(string sessionId, CancellationToken ct)
+    {
+        using var req = http.NewRequest(HttpMethod.Get, $"api/sessions/{WahaHttp.Esc(sessionId)}");
         using var resp = await http.SendAsync(req, ct);
-        if (resp.StatusCode is HttpStatusCode.UnprocessableEntity or HttpStatusCode.Conflict)
-        {
-            return;
-        }
-        // Engine NOWEB: o /start NÃO cria a sessão — só inicia uma que já existe. Quando ela ainda
-        // não foi criada (ex.: stack novo, ou logo após um delete no reset), o WAHA responde 404.
-        // Nesse caso criamos a sessão já iniciando; o webhook é aplicado em seguida pelo ensurer.
-        if (resp.StatusCode == HttpStatusCode.NotFound)
-        {
-            await CreateSessionAsync(sessionId, ct);
-            return;
-        }
-        resp.EnsureSuccessStatusCode();
+        return resp.IsSuccessStatusCode
+            ? await resp.Content.ReadFromJsonAsync<SessionDto>(WahaHttp.Json, ct)
+            : null;
     }
 
     private async Task CreateSessionAsync(string sessionId, CancellationToken ct)

@@ -28,17 +28,11 @@ public static class WahaEndpoints
             CancellationToken ct) =>
         {
             var sessionId = dispatch.Value.SessionId;
-            // De FAILED, o WAHA rejeita um simples /start (422) — só recupera com restart
-            // (stop+start). Senão, garante a sessão iniciada normalmente.
-            var current = await waha.GetSessionStatusAsync(sessionId, ct);
-            if (current == WahaSessionStatus.Failed)
-            {
-                await waha.RestartSessionAsync(sessionId, ct);
-            }
-            else
-            {
-                await waha.EnsureSessionStartedAsync(sessionId, ct);
-            }
+            // EnsureSessionStartedAsync é robusto pra qualquer estado: recria com config completo
+            // quando a sessão falta ou está "pelada", reinicia/reconecta quando já existe com config
+            // (inclusive de FAILED, via restart), e NUNCA mexe numa sessão Working. Não precisa mais
+            // tratar FAILED aqui — o /start puro em FAILED (que o WAHA recusa) virava sessão travada.
+            await waha.EnsureSessionStartedAsync(sessionId, ct);
 
             await TryEnsureWebhookAsync(waha, sessionId, wahaOpts.Value, logFactory.CreateLogger("WahaStart"), ct);
 
