@@ -322,10 +322,14 @@ export function CampaignsScreen() {
           (i.name ?? "").toLowerCase().includes(reportQuery),
       )
     : report;
-  // Ordena: contatos do CHIP ATUAL primeiro; os de OUTRO chip (cinza/desabilitados) vão pro FIM da
-  // lista. sort é estável no JS moderno → preserva a ordem interna (histórico/fila) dentro de cada grupo.
+  // Ordena, em níveis (sort ESTÁVEL → preserva a ordem interna histórico-DESC/fila-FIFO dentro de cada
+  // grupo): 1) RESPONDEU (engajados) primeiro — o público seguro, e o ÚNICO da fase de aquecimento, fica
+  // agrupado no topo; 2) contatos do CHIP ATUAL antes dos de OUTRO chip (cinza/desabilitados, que vão pro
+  // fim). O `?? false` protege backend antigo (sem o campo `engaged`) — aí cai no comportamento anterior.
   const filteredReport = [...searchedReport].sort(
-    (a, b) => Number(b.fromCurrentChip) - Number(a.fromCurrentChip),
+    (a, b) =>
+      (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0) ||
+      Number(b.fromCurrentChip) - Number(a.fromCurrentChip),
   );
   const reportTotalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
   // Clamp na leitura (sem setState): se o poll de 5s muda o total, a página nunca "estoura".
