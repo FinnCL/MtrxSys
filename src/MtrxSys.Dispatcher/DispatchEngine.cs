@@ -61,6 +61,15 @@ public sealed class DispatchEngine(
         // disparar pros contatos que ESTE chip importou (co-membros dele). Lido 1x por ciclo.
         var connectedPhone = sysStateSnapshot.WarmupPhone;
 
+        // FASE "SÓ RESPONDEU" (aquecimento por respondedores): nos primeiros N dias ATIVOS do chip, o
+        // disparo SÓ pode SAIR pra quem engajou. É a trava no MOTOR — não só no endpoint/UI: um job de
+        // NÃO-respondedor que já estava na fila (enfileirado antes da trava, ou por qualquer caminho) é
+        // PULADO no envio; senão o motor mandaria pra frio recém-pareado (gatilho de ban) só porque o
+        // job existia. Lido 1x por ciclo (DayIndex = dias ativos ANTES de hoje, não muda no ciclo).
+        var warmupSnapshot = await warmup.GetSnapshotAsync(ct);
+        var responderOnlyPhase = WarmingPhase.IsActive(
+            sysStateSnapshot.WarmupStartedOn, warmupSnapshot.DayIndex, dispatchOpts.Value.WarmingResponderOnlyDays);
+
         while (!ct.IsCancellationRequested)
         {
             // Freio de mão: operador pausou os envios pelo botão "Parar envios". Leitura fresca
@@ -207,6 +216,16 @@ public sealed class DispatchEngine(
                 && !string.Equals(contact.ImportedByPhone, connectedPhone, StringComparison.Ordinal))
             {
                 job.MarkSkipped("contato não é do chip conectado (só envia p/ importados por ele) — evita 463");
+                await uow.SaveChangesAsync(ct);
+                skipped++;
+                continue;
+            }
+            // FASE DE AQUECIMENTO (só responderam): não-engajado NÃO sai — mesmo já estando na fila
+            // (job antigo de "Todos", ou enfileirado antes da trava). Mandar pra frio num chip novo é o
+            // gatilho nº1 de ban. Só quem respondeu/avançou passa; o resto fica pulado até a fase fechar.
+            if (responderOnlyPhase && !ContactStages.IsEngaged(contact.Stage))
+            {
+                job.MarkSkipped("aquecimento: nos primeiros dias só envia p/ quem respondeu");
                 await uow.SaveChangesAsync(ct);
                 skipped++;
                 continue;

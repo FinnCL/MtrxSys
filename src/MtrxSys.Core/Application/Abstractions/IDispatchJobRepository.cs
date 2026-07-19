@@ -25,6 +25,10 @@ public interface IDispatchJobRepository
     Task<int> ClearPendingByTemplateAsync(Guid templateId, CancellationToken ct);
     /// <summary>Remove TODOS os jobs (renova a lista/zera o histórico de envios).</summary>
     Task<int> ClearAllAsync(CancellationToken ct);
+    /// <summary>Remove os jobs de HISTÓRICO (Enviada/Falhou/Pulada) de UM contato — o que "sujava" o
+    /// relatório com o status velho ("Enviada") depois de liberar o contato pra novo disparo. Mantém
+    /// Pending/Retrying (fila ativa). É o análogo per-contato do ClearAllAsync ("Renovar lista").</summary>
+    Task<int> DeleteHistoryByContactAsync(Guid contactId, CancellationToken ct);
 }
 
 public sealed record DispatchStats(int Pending, int Sent, int Failed, int Skipped, int Retrying);

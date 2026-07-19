@@ -122,6 +122,15 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
     public Task<int> ClearAllAsync(CancellationToken ct) =>
         db.DispatchJobs.ExecuteDeleteAsync(ct);
 
+    // Histórico (Enviada/Falhou/Pulada) de UM contato — some do relatório ao liberar pra novo disparo.
+    // Mantém Pending/Retrying (fila ativa). ExecuteDelete roda fora do change tracker (bulk, sem xmin).
+    public Task<int> DeleteHistoryByContactAsync(Guid contactId, CancellationToken ct) =>
+        db.DispatchJobs
+            .Where(j => j.ContactId == contactId
+                && j.Status != DispatchStatus.Pending
+                && j.Status != DispatchStatus.Retrying)
+            .ExecuteDeleteAsync(ct);
+
     private async Task<IReadOnlyList<DispatchReportItem>> BuildReportAsync(List<DispatchJob> jobs, CancellationToken ct)
     {
         var contactIds = jobs.Select(j => j.ContactId).Distinct().ToList();

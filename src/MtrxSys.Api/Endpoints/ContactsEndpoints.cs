@@ -197,12 +197,15 @@ public static class ContactsEndpoints
             return Results.Ok(ToDto(contact));
         });
 
-        // Libera UM contato pra um novo disparo: zera só o LastSentAt dele (equivalente per-contato
-        // do "Renovar lista"). Ele volta ao público do disparo — o filtro exclui quem tem LastSentAt.
-        // Não apaga o histórico de jobs (o próximo disparo cria um job novo) nem mexe em Stage/OptOut.
+        // Libera UM contato pra um novo disparo: zera o LastSentAt dele (equivalente per-contato do
+        // "Renovar lista") E apaga o histórico de jobs dele (Enviada/Falhou/Pulada). Sem esse segundo
+        // passo, o relatório de envios seguia mostrando o status VELHO ("Enviada") depois de liberar —
+        // era a inconsistência: em Contatos o contato voltava a "Novo", mas no Disparo continuava
+        // "Enviada". Fila ativa (Pending/Retrying) fica; Stage/OptOut não mudam.
         group.MapPost("/{id:guid}/resend", async (
             Guid id,
             IContactRepository contacts,
+            IDispatchJobRepository jobs,
             IUnitOfWork uow,
             CancellationToken ct) =>
         {
@@ -216,6 +219,8 @@ public static class ContactsEndpoints
                 await contacts.UpdateAsync(contact, ct);
                 await uow.SaveChangesAsync(ct);
             }
+            // Limpa o histórico do relatório pra este contato (idempotente; bulk fora do change tracker).
+            await jobs.DeleteHistoryByContactAsync(id, ct);
             return Results.Ok(ToDto(contact));
         });
 
