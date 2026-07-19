@@ -6,14 +6,12 @@ using MtrxSys.Core.Domain.SystemState;
 namespace MtrxSys.Core.Safety;
 
 /// <summary>Foto da fase "só quem respondeu" AGORA. <see cref="Active"/> = ainda aquecendo;
-/// <see cref="ActiveDays"/> = dias COM ENVIO antes de hoje (base-0); <see cref="CurrentDay"/> e
-/// <see cref="DaysLeft"/> são as versões humanas pra mensagem/UI.</summary>
+/// <see cref="ActiveDays"/> = dias COM ENVIO antes de hoje (base-0); <see cref="CurrentDay"/> é a
+/// versão humana (base-1) pra mensagem/UI.</summary>
 public readonly record struct WarmingPhaseStatus(bool Active, int ActiveDays, int WarmingDays)
 {
     // "dia N de M" pra humano (base-1). Fora da fase não tem significado — use só quando Active.
     public int CurrentDay => ActiveDays + 1;
-
-    public int DaysLeft => Active ? Math.Max(0, WarmingDays - ActiveDays) : 0;
 }
 
 /// <summary>FONTE ÚNICA da pergunta "o chip está na fase de aquecimento por respondedores AGORA?".

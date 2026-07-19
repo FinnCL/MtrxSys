@@ -111,4 +111,27 @@ public sealed class WarmingQueueCleanupE2ETests : IAsyncLifetime
         var foraDaFase = await repo.ListReportAsync(null, 1000, engagedOnly: false, Ct);
         foraDaFase.Should().HaveCount(3, "fora da fase mostra todos, como antes");
     }
+
+    [Fact]
+    public async Task Drill_down_por_status_revela_a_pulada_nao_respondedora_com_o_motivo()
+    {
+        var c = Contact.Create(Guid.NewGuid(), _phones.Validate("11955550031").Value!,
+            name: "11955550031", groupTag: null, theme: null, optInAt: Now); // Lead = não respondeu
+        _db.Contacts.Add(c);
+        var job = DispatchJob.Schedule(Guid.NewGuid(), c.Id, Guid.NewGuid(), Now);
+        job.MarkSkipped("contato não é do chip conectado");
+        _db.DispatchJobs.Add(job);
+        await _db.SaveChangesAsync(Ct);
+        _db.ChangeTracker.Clear();
+
+        var repo = new DispatchJobRepository(_db);
+
+        // Visão geral na fase (engagedOnly) esconde a pulada não-respondedora — foi o que cegou a análise.
+        var visaoGeral = await repo.ListReportAsync(DispatchStatus.Skipped, 1000, engagedOnly: true, Ct);
+        visaoGeral.Should().BeEmpty("na visão geral da fase a pulada não-respondedora fica oculta");
+
+        // Drill-down por status (o endpoint desliga o filtro quando há status) revela a pulada + o motivo.
+        var drillDown = await repo.ListReportAsync(DispatchStatus.Skipped, 1000, engagedOnly: false, Ct);
+        drillDown.Should().ContainSingle().Which.ErrorReason.Should().Be("contato não é do chip conectado");
+    }
 }

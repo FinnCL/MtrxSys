@@ -501,14 +501,18 @@ public static class CampaignsEndpoints
             // deste chip; o disparo os pula, anti-463). Null (desconhecido) → não marca ninguém.
             var sysState = await state.GetAsync(ct);
             var currentChip = sysState.WarmupPhone;
-            // FASE DE AQUECIMENTO: nos primeiros N dias ativos a TABELA mostra só respondedores — mesmo
-            // público que a fila aceita nesses dias. Sem isto, não-respondedores pulados/legado ainda
-            // apareciam. Fonte única (WarmingPhaseService) — mesma conta do POST de disparo e do reset.
+            // FASE DE AQUECIMENTO: na VISÃO GERAL, a tabela mostra só respondedores — mesmo público que a
+            // fila aceita nesses dias. Sem isto, não-respondedores pulados/legado ainda apareciam. Fonte
+            // única (WarmingPhaseService) — mesma conta do POST de disparo e do reset.
             //
-            // includeAll=true DESLIGA o filtro: é o backup COMPLETO pré-"Renovar lista" (que apaga tudo).
-            // Sem esse bypass, na fase o backup sairia só com respondedores e o reset apagaria o histórico
-            // de não-respondedores SEM ter salvo — perda de auditoria. O backup tem que ser íntegro.
-            var inWarming = includeAll != true && (await warmingPhase.EvaluateAsync(sysState, ct)).Active;
+            // O filtro só vale na visão geral. Ele é DESLIGADO quando:
+            //  • includeAll=true → backup COMPLETO pré-"Renovar lista" (que apaga tudo); sem isso o backup
+            //    sairia só com respondedores e o reset apagaria o histórico não-salvo — perda de auditoria.
+            //  • um status específico é selecionado (drill-down) → o operador clicou "Puladas"/"Enviadas"
+            //    pra investigar AQUELE recorte; escondê-lo abriria uma tabela vazia com o contador em 2.
+            //    Aí mostra o status inteiro, com o motivo na coluna Erro.
+            var applyWarmingFilter = includeAll != true && parsed is null;
+            var inWarming = applyWarmingFilter && (await warmingPhase.EvaluateAsync(sysState, ct)).Active;
             var take = Math.Clamp(limit ?? 1000, 1, 5000);
             var items = await repo.ListReportAsync(parsed, take, inWarming, ct);
             return Results.Ok(items.Select(i => new

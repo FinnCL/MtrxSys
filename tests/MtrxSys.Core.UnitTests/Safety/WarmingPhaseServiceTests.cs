@@ -55,11 +55,10 @@ public sealed class WarmingPhaseServiceTests
     }
 
     [Theory]
-    [InlineData(0, true, 1, 3)]   // 1º dia de disparo
-    [InlineData(2, true, 3, 1)]   // 3º dia, falta 1
-    [InlineData(3, false, 4, 0)]  // cumpriu os 3 dias ativos → abre
-    public async Task Segue_os_dias_ATIVOS_e_expoe_os_campos_humanos(
-        int activeDays, bool active, int currentDay, int daysLeft)
+    [InlineData(0, true, 1)]   // 1º dia de disparo
+    [InlineData(2, true, 3)]   // 3º dia
+    [InlineData(3, false, 4)]  // cumpriu os 3 dias ativos → abre
+    public async Task Segue_os_dias_ATIVOS_e_expoe_o_dia_humano(int activeDays, bool active, int currentDay)
     {
         ActiveDays(activeDays);
 
@@ -68,6 +67,5 @@ public sealed class WarmingPhaseServiceTests
         status.Active.Should().Be(active);
         status.ActiveDays.Should().Be(activeDays);
         status.CurrentDay.Should().Be(currentDay);
-        status.DaysLeft.Should().Be(daysLeft);
     }
 }
