@@ -1,6 +1,4 @@
-using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
-using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Safety;
@@ -71,31 +69,24 @@ public sealed class WarmingDailyResetService(
         using var scope = services.CreateScope();
         var sp = scope.ServiceProvider;
 
-        var warmingDays = sp.GetRequiredService<IOptions<DispatchOptions>>().Value.WarmingResponderOnlyDays;
-        if (warmingDays <= 0)
-        {
-            return; // trava desligada
-        }
-
         var state = await sp.GetRequiredService<ISystemStateRepository>().GetAsync(ct);
-        if (state.WarmupStartedOn is not { } since)
+        // Fonte única da fase (mesma conta do disparo e do relatório). Active=false cobre trava
+        // desligada, chip sem marco e aquecimento já concluído → disparo normal, sem reset automático.
+        var warming = await sp.GetRequiredService<WarmingPhaseService>().EvaluateAsync(state, ct);
+        if (!warming.Active)
         {
-            return; // sem marco de chip → fase não se aplica
-        }
-
-        var counts = sp.GetRequiredService<IDailySendCountsRepository>();
-        var activeDays = await counts.CountActiveDaysBeforeAsync(since, brToday, ct);
-        if (!WarmingPhase.IsActive(since, activeDays, warmingDays))
-        {
-            return; // aquecimento concluído / não se aplica → disparo normal, sem reset automático
+            return;
         }
 
         // Só renova se o dia que fechou teve disparo (senão o aquecimento não avança nem libera).
+        var counts = sp.GetRequiredService<IDailySendCountsRepository>();
         var yesterday = brToday.AddDays(-1);
         var yesterdayHadActivity = await counts.CountActiveDaysBeforeAsync(yesterday, brToday, ct) > 0;
         if (!yesterdayHadActivity)
         {
-            log.LogInformation("Aquecimento: sem disparo ontem — não renova (dia ativo {D}/{T}).", activeDays, warmingDays);
+            log.LogInformation(
+                "Aquecimento: sem disparo ontem — não renova (dia ativo {D}/{T}).",
+                warming.ActiveDays, warming.WarmingDays);
             return;
         }
 
@@ -157,6 +148,6 @@ public sealed class WarmingDailyResetService(
 
         log.LogInformation(
             "Aquecimento: reset diário — {N} respondedores re-enfileirados e PAUSADOS (clique 'Iniciar "
-            + "envios'). Dia ativo {D}/{T}.", targets.Count, activeDays, warmingDays);
+            + "envios'). Dia ativo {D}/{T}.", targets.Count, warming.ActiveDays, warming.WarmingDays);
     }
 }

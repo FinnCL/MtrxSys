@@ -447,8 +447,9 @@ export function CampaignsScreen() {
     setConfirmRenew(false);
     suppressDoneRef.current = true; // zerar resultados aqui não é "conclusão"
     try {
-      // Backup COMPLETO (ignora o filtro de status da tela) — o reset apaga tudo.
-      const all = await api.dispatchReport(undefined, 5000);
+      // Backup COMPLETO (ignora o filtro de status da tela E o da fase de aquecimento) — o reset
+      // apaga tudo, então o backup precisa trazer inclusive não-respondedores/legado (includeAll).
+      const all = await api.dispatchReport(undefined, 5000, true);
       if (all.length > 0) {
         downloadDispatchReportXlsx(all);
       }
@@ -658,10 +659,10 @@ export function CampaignsScreen() {
         </div>
         {responderOnly ? (
           <p className="muted small">
-            🔥 Aquecimento{typeof warmup?.responderOnlyDaysLeft === "number" && warmup.responderOnlyDaysLeft > 0
+            Aquecimento{typeof warmup?.responderOnlyDaysLeft === "number" && warmup.responderOnlyDaysLeft > 0
               ? ` (faltam ${warmup.responderOnlyDaysLeft} dia(s) ativo(s))`
-              : ""}: nesta fase o disparo fica travado em <strong>só quem já respondeu</strong> — mandar
-            pra frio num chip novo derruba o número. Depois abre pra todas as audiências.
+              : ""}: só é permitido disparar para <strong>quem já respondeu</strong>. Disparar para
+            contato frio num chip novo derruba o número. Depois abre para todas as audiências.
           </p>
         ) : (
           <p className="muted small">Quem pediu pra sair nunca recebe.</p>
@@ -756,7 +757,7 @@ export function CampaignsScreen() {
           </>
         ) : (
           <>
-            <p className="sending-banner">Enviando — {pendingCount} restante(s). Saindo aos poucos.</p>
+            <p className="sending-banner">Enviando. {pendingCount} restante(s). Saindo aos poucos.</p>
             <button type="button" className="pause-btn" onClick={() => void onStop()}>
               Parar envios
             </button>
@@ -880,7 +881,7 @@ export function CampaignsScreen() {
                       {DISPATCH_STATUS_LABELS[i.status]}
                     </span>
                     {i.engaged && (
-                      <span className="engaged-badge" title="Contato que já respondeu/avançou — público seguro (é o único liberado na fase de aquecimento).">
+                      <span className="stat-chip stat-engaged" title="Contato que já respondeu ou avançou; público seguro (o único liberado na fase de aquecimento).">
                         Respondeu
                       </span>
                     )}

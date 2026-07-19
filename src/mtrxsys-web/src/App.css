@@ -630,11 +630,9 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
   font-size: 11px; background: var(--bg-3); color: var(--muted); border: 1px solid var(--border);
   vertical-align: middle; white-space: nowrap;
 }
-.engaged-badge {
-  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 10px;
-  font-size: 11px; background: #16a34a1f; color: #16a34a; border: 1px solid #16a34a44;
-  vertical-align: middle; white-space: nowrap;
-}
+/* "Respondeu": mesmo padrão de chip do status "Enviada" (.stat-chip), com cor própria (azul do
+   accent) pra não se confundir com o verde do enviado quando aparecem lado a lado. */
+.stat-engaged { margin-left: 6px; background: rgba(74, 141, 244, 0.2); color: var(--accent); white-space: nowrap; }
 .contacts-table .mono { font-family: ui-monospace, monospace; }
 .reactivate-btn { padding: 3px 10px; font-size: 12px; background: var(--bg-3); color: var(--fg); }
 .reactivate-btn:hover { background: var(--accent); }

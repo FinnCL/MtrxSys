@@ -385,10 +385,13 @@ export const api = {
       body: JSON.stringify({ templateIds, filter }),
     }),
   dispatchStats: () => request<DispatchStats>("/api/dispatch/stats"),
-  dispatchReport: (status?: string, limit = 1000) => {
+  // includeAll: ignora o filtro da fase de aquecimento (que mostra só respondedores) e traz TODOS —
+  // usado no backup completo antes de "Renovar lista", que apaga o histórico inteiro.
+  dispatchReport: (status?: string, limit = 1000, includeAll = false) => {
     const q = new URLSearchParams();
     if (status) q.set("status", status);
     q.set("limit", String(limit));
+    if (includeAll) q.set("includeAll", "true");
     return request<DispatchReportItem[]>(`/api/dispatch/report?${q.toString()}`);
   },
   dispatchStatus: () =>

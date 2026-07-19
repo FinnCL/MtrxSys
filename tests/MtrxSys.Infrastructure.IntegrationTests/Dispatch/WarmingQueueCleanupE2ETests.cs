@@ -89,4 +89,26 @@ public sealed class WarmingQueueCleanupE2ETests : IAsyncLifetime
         remaining.Should().BeEquivalentTo(new[] { engajadoNaFila, novoHistorico });
         remaining.Should().NotContain(engajadoHistorico, "o Enviada de ontem do respondedor é limpo");
     }
+
+    [Fact]
+    public async Task Report_na_fase_mostra_so_respondedores_mas_fora_da_fase_mostra_todos()
+    {
+        await SeedJobAsync("11955550021", ContactStage.Qualified, sent: true);   // respondedor
+        await SeedJobAsync("11955550022", ContactStage.Lead, sent: true);        // não respondeu (Enviada legado)
+        var pulado = await SeedJobAsync("11955550023", ContactStage.Lead, sent: false);
+        // Simula um job PULADO pelo motor na fase (não-respondedor que estava na fila).
+        var puladoJob = await _db.DispatchJobs.FirstAsync(j => j.Id == pulado, Ct);
+        puladoJob.MarkSkipped("aquecimento");
+        await _db.SaveChangesAsync(Ct);
+        _db.ChangeTracker.Clear();
+
+        var repo = new DispatchJobRepository(_db);
+
+        var naFase = await repo.ListReportAsync(null, 1000, engagedOnly: true, Ct);
+        naFase.Select(r => r.Phone).Should().ContainSingle()
+            .Which.Should().Be("+5511955550021", "na fase a tabela mostra só quem respondeu");
+
+        var foraDaFase = await repo.ListReportAsync(null, 1000, engagedOnly: false, Ct);
+        foraDaFase.Should().HaveCount(3, "fora da fase mostra todos, como antes");
+    }
 }

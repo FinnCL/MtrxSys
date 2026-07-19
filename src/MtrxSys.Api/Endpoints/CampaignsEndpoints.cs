@@ -121,7 +121,7 @@ public static class CampaignsEndpoints
             IWahaClient waha,
             IOptions<DispatchOptions> dispatchOpts,
             ISystemStateRepository state,
-            IDailySendCountsRepository dailyCounts,
+            WarmingPhaseService warmingPhase,
             ISharedPhoneLedger ledger,
             ILoggerFactory logFactory,
             CancellationToken ct) =>
@@ -178,21 +178,15 @@ public static class CampaignsEndpoints
             // FASE DE AQUECIMENTO: nos primeiros N dias ATIVOS do chip (dias com envio), o disparo SÓ
             // aceita "Respondeu" (EngagedOnly). Frio recém-pareado é o gatilho nº1 de ban; quem já te
             // escreveu é seguro. Conta a partir do marco do chip (re-parear reinicia). 0 desliga.
-            var warmingDays = dispatchOpts.Value.WarmingResponderOnlyDays;
-            var inWarming = false;
-            if (warmingDays > 0 && sysState.WarmupStartedOn is { } warmupSince)
+            var warming = await warmingPhase.EvaluateAsync(sysState, ct);
+            var inWarming = warming.Active;
+            if (inWarming && !(req.Filter?.EngagedOnly ?? false))
             {
-                var brToday = IClock.ToBrasiliaDate(clock.UtcNow);
-                var activeDays = await dailyCounts.CountActiveDaysBeforeAsync(warmupSince, brToday, ct);
-                inWarming = WarmingPhase.IsActive(warmupSince, activeDays, warmingDays);
-                if (inWarming && !(req.Filter?.EngagedOnly ?? false))
-                {
-                    return Results.Problem(
-                        $"Chip em aquecimento (dia {activeDays + 1} de {warmingDays}): nesta fase só é "
-                        + "permitido disparar para quem já respondeu. Selecione o público "
-                        + "\"Só quem já respondeu\".",
-                        statusCode: 409);
-                }
+                return Results.Problem(
+                    $"Chip em aquecimento (dia {warming.CurrentDay} de {warming.WarmingDays}): nesta fase só é "
+                    + "permitido disparar para quem já respondeu. Selecione o público "
+                    + "\"Só quem já respondeu\".",
+                    statusCode: 409);
             }
 
             var filter = new ContactFilter(
@@ -488,8 +482,10 @@ public static class CampaignsEndpoints
         dispatch.MapGet("/report", async (
             string? status,
             int? limit,
+            bool? includeAll,
             IDispatchJobRepository repo,
             ISystemStateRepository state,
+            WarmingPhaseService warmingPhase,
             CancellationToken ct) =>
         {
             DispatchStatus? parsed = null;
@@ -501,11 +497,20 @@ public static class CampaignsEndpoints
                 }
                 parsed = s;
             }
-            var take = Math.Clamp(limit ?? 1000, 1, 5000);
-            var items = await repo.ListReportAsync(parsed, take, ct);
             // Chip conectado agora — pra marcar no relatório quais itens são de OUTRO chip (não saem
             // deste chip; o disparo os pula, anti-463). Null (desconhecido) → não marca ninguém.
-            var currentChip = (await state.GetAsync(ct)).WarmupPhone;
+            var sysState = await state.GetAsync(ct);
+            var currentChip = sysState.WarmupPhone;
+            // FASE DE AQUECIMENTO: nos primeiros N dias ativos a TABELA mostra só respondedores — mesmo
+            // público que a fila aceita nesses dias. Sem isto, não-respondedores pulados/legado ainda
+            // apareciam. Fonte única (WarmingPhaseService) — mesma conta do POST de disparo e do reset.
+            //
+            // includeAll=true DESLIGA o filtro: é o backup COMPLETO pré-"Renovar lista" (que apaga tudo).
+            // Sem esse bypass, na fase o backup sairia só com respondedores e o reset apagaria o histórico
+            // de não-respondedores SEM ter salvo — perda de auditoria. O backup tem que ser íntegro.
+            var inWarming = includeAll != true && (await warmingPhase.EvaluateAsync(sysState, ct)).Active;
+            var take = Math.Clamp(limit ?? 1000, 1, 5000);
+            var items = await repo.ListReportAsync(parsed, take, inWarming, ct);
             return Results.Ok(items.Select(i => new
             {
                 phone = i.Phone,

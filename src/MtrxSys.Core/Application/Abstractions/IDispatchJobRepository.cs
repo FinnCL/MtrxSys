@@ -12,7 +12,10 @@ public interface IDispatchJobRepository
     Task UpdateAsync(DispatchJob job, CancellationToken ct);
     Task<DispatchStats> GetStatsAsync(CancellationToken ct);
     Task<IReadOnlyList<DispatchJob>> ListRecentAsync(int limit, CancellationToken ct);
-    Task<IReadOnlyList<DispatchReportItem>> ListReportAsync(DispatchStatus? status, int limit, CancellationToken ct);
+    /// <summary>Relatório de envios (histórico + fila). <paramref name="engagedOnly"/> true (fase de
+    /// aquecimento) restringe a SÓ respondedores — o mesmo público que a fila aceita nesses dias, pra a
+    /// tabela não exibir não-respondedores (pulados/legado). Fora da fase mostra todos, como antes.</summary>
+    Task<IReadOnlyList<DispatchReportItem>> ListReportAsync(DispatchStatus? status, int limit, bool engagedOnly, CancellationToken ct);
     /// <summary>Remove os jobs ainda na fila (Pending e Retrying) — cancela o que foi preparado
     /// (ou reenfileirado após falha) e ainda não saiu.</summary>
     Task<int> ClearPendingAsync(CancellationToken ct);

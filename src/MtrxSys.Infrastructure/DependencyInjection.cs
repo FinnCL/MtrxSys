@@ -152,6 +152,7 @@ public static class DependencyInjection
         services.AddScoped<TypingSimulator>();
         services.AddScoped<CircuitBreaker>();
         services.AddScoped<WarmupManager>();
+        services.AddScoped<WarmingPhaseService>();
         services.AddScoped<HumanPhaseGate>();
 
         // Aquecimento de conversa (pool): estado em memória (singleton), banco de frases, fábrica de

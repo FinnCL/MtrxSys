@@ -63,7 +63,7 @@ public sealed class ReportDiscardedFilterE2ETests : IAsyncLifetime
         // Antes de descartar: os dois enviados aparecem e contam.
         var before = await jobs.GetStatsAsync(Ct);
         before.Sent.Should().Be(2);
-        var reportBefore = await jobs.ListReportAsync(null, 1000, Ct);
+        var reportBefore = await jobs.ListReportAsync(null, 1000, engagedOnly: false, Ct);
         reportBefore.Select(r => r.Phone).Should().Contain(new[] { active.Phone.E164, toDiscard.Phone.E164 });
 
         // Descarta (soft delete) o grupo do segundo — mesmo caminho da tela (ExecuteUpdate real).
@@ -72,7 +72,7 @@ public sealed class ReportDiscardedFilterE2ETests : IAsyncLifetime
         // Depois: o descartado saiu do report E do contador; o ativo permanece nos dois.
         var after = await jobs.GetStatsAsync(Ct);
         after.Sent.Should().Be(1, "o job do contato descartado não conta mais");
-        var reportAfter = await jobs.ListReportAsync(null, 1000, Ct);
+        var reportAfter = await jobs.ListReportAsync(null, 1000, engagedOnly: false, Ct);
         reportAfter.Select(r => r.Phone).Should().ContainSingle().Which.Should().Be(active.Phone.E164);
     }
 }

@@ -42,6 +42,13 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
     private IQueryable<DispatchJob> ExcludingDiscardedContacts(IQueryable<DispatchJob> jobs) =>
         jobs.Where(j => !db.Contacts.Any(c => c.Id == j.ContactId && c.DeletedAt != null));
 
+    // Fase de aquecimento: o relatório mostra SÓ respondedores (engajados) — o mesmo público que a fila
+    // aceita nesses dias. Job de não-respondedor (pulado pelo motor, ou histórico legado) fica de fora,
+    // e job órfão (sem contato) também sai (não é respondedor). Subquery correlacionada — mesmo padrão
+    // do DeleteNonEngagedPending; a tradução EF é coberta por teste E2E.
+    private IQueryable<DispatchJob> EngagedContactsOnly(IQueryable<DispatchJob> jobs) =>
+        jobs.Where(j => db.Contacts.Any(c => c.Id == j.ContactId && !ContactStages.NonEngaged.Contains(c.Stage)));
+
     public async Task<DispatchStats> GetStatsAsync(CancellationToken ct)
     {
         var grouped = await ExcludingDiscardedContacts(db.DispatchJobs)
@@ -62,7 +69,7 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
             .Take(limit)
             .ToListAsync(ct);
 
-    public async Task<IReadOnlyList<DispatchReportItem>> ListReportAsync(DispatchStatus? status, int limit, CancellationToken ct)
+    public async Task<IReadOnlyList<DispatchReportItem>> ListReportAsync(DispatchStatus? status, int limit, bool engagedOnly, CancellationToken ct)
     {
         var baseQuery = db.DispatchJobs.AsQueryable();
         if (status is { } s)
@@ -73,6 +80,12 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         // Contatos descartados (soft delete) somem do resultado dos envios — mesmo filtro dos
         // contadores (ver ExcludingDiscardedContacts).
         baseQuery = ExcludingDiscardedContacts(baseQuery);
+
+        // Fase de aquecimento: restringe a tabela a respondedores (ver EngagedContactsOnly).
+        if (engagedOnly)
+        {
+            baseQuery = EngagedContactsOnly(baseQuery);
+        }
 
         // Duas queries pra ordenar cada grupo na direção certa — não dá pra fazer em uma só
         // porque histórico precisa de DESC e Pending precisa de ASC.
