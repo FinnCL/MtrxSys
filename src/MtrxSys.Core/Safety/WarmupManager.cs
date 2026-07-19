@@ -42,8 +42,15 @@ public sealed class WarmupManager(
     // iguais pra quem nunca escreveu pra ela — isso é assinatura de bot com 4, com 3 ou com 1. Se a
     // causa for essa (e a evidência aponta pra lá), nenhuma curva salva: o que salva é ter conversa
     // com RESPOSTA antes de automatizar, que é o que o HumanPhaseGate faz e estava desligado.
+    //
+    // O DOBRO 12 (índices 2 e 3) é DE PROPÓSITO: os 3 primeiros dias ativos são a fase "só respondeu"
+    // (quente, ver DispatchOptions.WarmingResponderOnlyDays), e o índice 3 é o PRIMEIRO dia que abre pro
+    // FRIO. Segurar 12 (em vez de saltar pro 15 — justo o número que restringiu o chip em 15/07) faz o
+    // primeiro tiro frio herdar o mesmo volume do dia anterior: transição PLANA, sem degrau, que é o
+    // padrão mais consistente (o WhatsApp lê volume errático como sinal). A partir do índice 4 retoma
+    // o ramp. Esta curva DEVE ser idêntica à dos appsettings (Api + Dispatcher) — ver nota acima.
     private static readonly int[] DefaultCurve =
-        [5, 8, 12, 15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
+        [5, 8, 12, 12, 15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
 
     public async Task<bool> CanSendAsync(CancellationToken ct)
     {
