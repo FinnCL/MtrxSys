@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Domain.Campaigns;
+using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Safety;
 
 namespace MtrxSys.Api.BackgroundServices;
@@ -98,9 +100,64 @@ public sealed class WarmingDailyResetService(
         }
 
         var contacts = sp.GetRequiredService<IContactRepository>();
-        var cleared = await contacts.ClearLastSentForEngagedAsync(ct);
+        var jobs = sp.GetRequiredService<IDispatchJobRepository>();
+        var templates = sp.GetRequiredService<IMessageTemplateRepository>();
+        var rng = sp.GetRequiredService<IRandomSource>();
+        var ledger = sp.GetRequiredService<ISharedPhoneLedger>();
+        var clock = sp.GetRequiredService<IClock>();
+        var uow = sp.GetRequiredService<IUnitOfWork>();
+        var stateRepo = sp.GetRequiredService<ISystemStateRepository>();
+
+        // 1. Libera os respondedores (LastSentAt) E limpa o histórico deles — pra o ciclo do dia
+        //    começar LIMPO, sem o "Enviada" de ontem duplicando com o "Na fila" de hoje. Bulk, fora do uow.
+        var freed = await contacts.ClearLastSentForEngagedAsync(ct);
+        await jobs.DeleteEngagedHistoryAsync(ct);
+
+        // Templates ATIVOS pro rodízio (mesmo pote do disparo normal). Sem nenhum ativo → só libera;
+        // não dá pra re-enfileirar sem mensagem.
+        var pool = (await templates.ListAllAsync(ct)).Where(t => t.Active).ToList();
+        if (pool.Count == 0)
+        {
+            log.LogWarning(
+                "Aquecimento: reset diário liberou {N} respondedores, mas NÃO há template ativo — não "
+                + "re-enfileirei. Ative/crie uma mensagem pra o re-envio automático funcionar.", freed);
+            return;
+        }
+
+        // 2. Público SEGURO: engajado, sem opt-out, não o próprio número, e sem job na fila. (1ª das 3
+        //    blindagens; as outras: fila PAUSADA abaixo, e o motor PULA não-respondedor no envio.)
+        var filter = new ContactFilter(
+            EngagedOnly: true, ExcludeOptedOut: true,
+            ExcludePhoneE164: state.WarmupPhone, ExcludeAlreadyDispatched: true);
+        var targets = await contacts.ListByFilterAsync(filter, ct);
+        // Dedup do ledger (opt-out + OUTRO chip; mesmo-chip é liberado pelo fix cross-chip).
+        if (ledger.IsEnforcing && targets.Count > 0)
+        {
+            var suppressed = await ledger.GetSuppressedAsync(targets.Select(c => c.Phone.E164).ToArray(), ct);
+            targets = targets.Where(c => !suppressed.Contains(c.Phone.E164)).ToList();
+        }
+        if (targets.Count == 0)
+        {
+            log.LogInformation("Aquecimento: reset diário — {N} liberados, nenhum pra re-enfileirar agora.", freed);
+            return;
+        }
+
+        // 3. Cria os jobs (rodízio) e PAUSA a fila (2ª blindagem): NADA sai sem o operador clicar
+        //    "Iniciar envios" de manhã — evita envio automático de madrugada e mantém o controle da hora.
+        var now = clock.UtcNow;
+        var idx = 0;
+        foreach (var c in targets)
+        {
+            var tpl = pool[rng.NextInt(0, pool.Count)];
+            await jobs.AddAsync(DispatchJob.Schedule(Guid.NewGuid(), c.Id, tpl.Id, now.AddMilliseconds(idx)), ct);
+            idx++;
+        }
+        state.Pause(SystemStateAggregate.ManualPauseReason);
+        await stateRepo.UpdateAsync(state, ct);
+        await uow.SaveChangesAsync(ct);
+
         log.LogInformation(
-            "Aquecimento: reset diário — {N} respondedores liberados pra novo disparo (dia ativo {D}/{T}).",
-            cleared, activeDays, warmingDays);
+            "Aquecimento: reset diário — {N} respondedores re-enfileirados e PAUSADOS (clique 'Iniciar "
+            + "envios'). Dia ativo {D}/{T}.", targets.Count, activeDays, warmingDays);
     }
 }

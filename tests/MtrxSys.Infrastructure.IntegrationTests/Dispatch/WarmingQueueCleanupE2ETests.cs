@@ -73,4 +73,20 @@ public sealed class WarmingQueueCleanupE2ETests : IAsyncLifetime
         remaining.Should().NotContain(novoNaFila, "Novo na fila é removido no aquecimento");
         remaining.Should().NotContain(descartadoNaFila, "Descartado na fila é removido no aquecimento");
     }
+
+    [Fact]
+    public async Task Reset_apaga_o_historico_dos_engajados_mas_mantem_a_fila_e_os_nao_engajados()
+    {
+        var engajadoHistorico = await SeedJobAsync("11955550011", ContactStage.Qualified, sent: true);  // apaga
+        var engajadoNaFila = await SeedJobAsync("11955550012", ContactStage.Won, sent: false);           // fila: fica
+        var novoHistorico = await SeedJobAsync("11955550013", ContactStage.Lead, sent: true);            // não-engajado: fica
+
+        var removed = await new DispatchJobRepository(_db).DeleteEngagedHistoryAsync(Ct);
+
+        removed.Should().Be(1, "só o histórico (Enviada) do engajado sai");
+        _db.ChangeTracker.Clear();
+        var remaining = await _db.DispatchJobs.Select(j => j.Id).ToListAsync(Ct);
+        remaining.Should().BeEquivalentTo(new[] { engajadoNaFila, novoHistorico });
+        remaining.Should().NotContain(engajadoHistorico, "o Enviada de ontem do respondedor é limpo");
+    }
 }

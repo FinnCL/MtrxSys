@@ -33,6 +33,10 @@ public interface IDispatchJobRepository
     /// Usado na fase de aquecimento pra a fila ser 100% de respondedores — limpa jobs legados de um
     /// disparo "Todos" anterior à trava. Não toca em histórico (Enviada/Falhou/Pulada). Retorna quantos.</summary>
     Task<int> DeleteNonEngagedPendingAsync(CancellationToken ct);
+    /// <summary>Remove o HISTÓRICO (Enviada/Falhou/Pulada) dos ENGAJADOS. Usado no reset diário do
+    /// aquecimento pra o ciclo do dia começar limpo — sem o "Enviada" de ontem duplicando com o novo
+    /// "Na fila" de hoje. Não toca na fila (Pending/Retrying). Retorna quantos.</summary>
+    Task<int> DeleteEngagedHistoryAsync(CancellationToken ct);
 }
 
 public sealed record DispatchStats(int Pending, int Sent, int Failed, int Skipped, int Retrying);
