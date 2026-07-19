@@ -29,6 +29,10 @@ public interface IDispatchJobRepository
     /// relatório com o status velho ("Enviada") depois de liberar o contato pra novo disparo. Mantém
     /// Pending/Retrying (fila ativa). É o análogo per-contato do ClearAllAsync ("Renovar lista").</summary>
     Task<int> DeleteHistoryByContactAsync(Guid contactId, CancellationToken ct);
+    /// <summary>Remove da FILA (Pending/Retrying) os jobs de quem NÃO engajou (Stage Novo/Descartado).
+    /// Usado na fase de aquecimento pra a fila ser 100% de respondedores — limpa jobs legados de um
+    /// disparo "Todos" anterior à trava. Não toca em histórico (Enviada/Falhou/Pulada). Retorna quantos.</summary>
+    Task<int> DeleteNonEngagedPendingAsync(CancellationToken ct);
 }
 
 public sealed record DispatchStats(int Pending, int Sent, int Failed, int Skipped, int Retrying);

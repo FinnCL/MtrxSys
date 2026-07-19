@@ -131,6 +131,14 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
                 && j.Status != DispatchStatus.Retrying)
             .ExecuteDeleteAsync(ct);
 
+    // Fase de aquecimento: apaga da FILA (Pending/Retrying) quem NÃO engajou (subquery correlacionada
+    // no contato → EXISTS ... stage IN (...)). Só a fila; histórico fica. Traduzido por teste E2E.
+    public Task<int> DeleteNonEngagedPendingAsync(CancellationToken ct) =>
+        db.DispatchJobs
+            .Where(j => (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)
+                && db.Contacts.Any(c => c.Id == j.ContactId && ContactStages.NonEngaged.Contains(c.Stage)))
+            .ExecuteDeleteAsync(ct);
+
     private async Task<IReadOnlyList<DispatchReportItem>> BuildReportAsync(List<DispatchJob> jobs, CancellationToken ct)
     {
         var contactIds = jobs.Select(j => j.ContactId).Distinct().ToList();

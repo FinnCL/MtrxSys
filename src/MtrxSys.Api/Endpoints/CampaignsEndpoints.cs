@@ -179,11 +179,13 @@ public static class CampaignsEndpoints
             // aceita "Respondeu" (EngagedOnly). Frio recém-pareado é o gatilho nº1 de ban; quem já te
             // escreveu é seguro. Conta a partir do marco do chip (re-parear reinicia). 0 desliga.
             var warmingDays = dispatchOpts.Value.WarmingResponderOnlyDays;
+            var inWarming = false;
             if (warmingDays > 0 && sysState.WarmupStartedOn is { } warmupSince)
             {
                 var brToday = IClock.ToBrasiliaDate(clock.UtcNow);
                 var activeDays = await dailyCounts.CountActiveDaysBeforeAsync(warmupSince, brToday, ct);
-                if (WarmingPhase.IsActive(warmupSince, activeDays, warmingDays) && !(req.Filter?.EngagedOnly ?? false))
+                inWarming = WarmingPhase.IsActive(warmupSince, activeDays, warmingDays);
+                if (inWarming && !(req.Filter?.EngagedOnly ?? false))
                 {
                     return Results.Problem(
                         $"Chip em aquecimento (dia {activeDays + 1} de {warmingDays}): nesta fase só é "
@@ -250,6 +252,14 @@ public static class CampaignsEndpoints
                 await state.UpdateAsync(sysState, ct);
             }
             await uow.SaveChangesAsync(ct);
+            // Fase de aquecimento: a fila tem que ser 100% respondedores. Apaga jobs LEGADOS de não-
+            // respondedores (de um "Todos" anterior à trava) que estivessem "Na fila" — senão eles
+            // apareceriam na tabela e o motor teria que pulá-los. Aqui já saem da fila. (Bulk, fora do
+            // uow; os jobs recém-criados são de respondedores, não são afetados. Histórico fica.)
+            if (inWarming)
+            {
+                await jobs.DeleteNonEngagedPendingAsync(ct);
+            }
             // `paused` é o estado REAL depois desta chamada — a tela precisa dele pra saber se mostra
             // "Iniciar envios" ou "Enviando". Antes ela adivinhava, e adivinhava errado no somar.
             return Results.Ok(new
