@@ -203,18 +203,10 @@ public static class CampaignsEndpoints
                 EngagedOnly: req.Filter?.EngagedOnly ?? false,
                 ExcludePhoneE164: ownPhone,
                 ExcludeAlreadyDispatched: true); // não re-enfileira quem já recebeu/está na fila
-            var targets = await contacts.ListByFilterAsync(filter, ct);
-            // Dedup entre ambientes: em Enforce, tira do público quem já consta no registro
-            // compartilhado (já enviado/opt-out em outro chip) — evita enfileirar jobs que o motor
-            // pularia e mantém a contagem coerente. Em Observe/Off não altera o público.
-            if (ledger.IsEnforcing && targets.Count > 0)
-            {
-                var suppressed = await ledger.GetSuppressedAsync(targets.Select(c => c.Phone.E164).ToArray(), ct);
-                if (suppressed.Count > 0)
-                {
-                    targets = targets.Where(c => !suppressed.Contains(c.Phone.E164)).ToList();
-                }
-            }
+            // Dedup entre ambientes (Enforce): tira do público quem já consta no registro compartilhado
+            // (já enviado/opt-out em OUTRO chip) — evita enfileirar jobs que o motor pularia e mantém a
+            // contagem coerente. Fonte única (FilterOutSuppressedAsync); no-op em Observe/Off.
+            var targets = await ledger.FilterOutSuppressedAsync(await contacts.ListByFilterAsync(filter, ct), ct);
             var now = clock.UtcNow;
             // NOVOS IMPORTADOS NO TOPO DA FILA: DequeueNextPending ordena por ScheduledAt ASC, então
             // pra os recém-adicionados saírem PRIMEIRO eles precisam de ScheduledAt anterior ao mais
@@ -486,12 +478,8 @@ public static class CampaignsEndpoints
             // assim a contagem bate com o que o disparo realmente enfileira (mesma lógica do POST).
             if (ledger.IsEnforcing)
             {
-                var targets = await contacts.ListByFilterAsync(filter, ct);
-                var suppressed = await ledger.GetSuppressedAsync(targets.Select(c => c.Phone.E164).ToArray(), ct);
-                return Results.Ok(new
-                {
-                    count = targets.Count(c => !suppressed.Contains(c.Phone.E164)),
-                });
+                var kept = await ledger.FilterOutSuppressedAsync(await contacts.ListByFilterAsync(filter, ct), ct);
+                return Results.Ok(new { count = kept.Count });
             }
             var count = await contacts.CountByFilterAsync(filter, ct);
             return Results.Ok(new { count });

@@ -129,13 +129,7 @@ public sealed class WarmingDailyResetService(
         var filter = new ContactFilter(
             EngagedOnly: true, ExcludeOptedOut: true,
             ExcludePhoneE164: state.WarmupPhone, ExcludeAlreadyDispatched: true);
-        var targets = await contacts.ListByFilterAsync(filter, ct);
-        // Dedup do ledger (opt-out + OUTRO chip; mesmo-chip é liberado pelo fix cross-chip).
-        if (ledger.IsEnforcing && targets.Count > 0)
-        {
-            var suppressed = await ledger.GetSuppressedAsync(targets.Select(c => c.Phone.E164).ToArray(), ct);
-            targets = targets.Where(c => !suppressed.Contains(c.Phone.E164)).ToList();
-        }
+        var targets = await ledger.FilterOutSuppressedAsync(await contacts.ListByFilterAsync(filter, ct), ct);
         if (targets.Count == 0)
         {
             log.LogInformation("Aquecimento: reset diário — {N} liberados, nenhum pra re-enfileirar agora.", freed);
@@ -155,6 +149,11 @@ public sealed class WarmingDailyResetService(
         state.Pause(SystemStateAggregate.ManualPauseReason);
         await stateRepo.UpdateAsync(state, ct);
         await uow.SaveChangesAsync(ct);
+
+        // Fila 100% respondedores (mesmo contrato do endpoint de disparo): remove qualquer job legado de
+        // não-respondedor que tenha sobrado na fila — senão ele apareceria na tabela e o motor teria que
+        // pulá-lo. Os jobs recém-criados acima são de engajados, não são afetados. (Bulk, fora do uow.)
+        await jobs.DeleteNonEngagedPendingAsync(ct);
 
         log.LogInformation(
             "Aquecimento: reset diário — {N} respondedores re-enfileirados e PAUSADOS (clique 'Iniciar "
