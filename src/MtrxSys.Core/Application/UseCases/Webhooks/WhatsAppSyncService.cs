@@ -83,6 +83,13 @@ public sealed class WhatsAppSyncService(
         var kind = WahaChatIdentifier.Classify(chat.Id);
         var isGroup = kind == WahaChatIdentifier.Kind.Group || chat.IsGroup;
 
+        // WAHA devolve o próprio id do chat ("557185543603@c.us") como "nome" quando o número não está
+        // salvo na agenda e não tem nome público. Não é nome — sanitiza pra null (senão o id vaza pra UI
+        // como se fosse nome). JID sempre tem "@"; nome real (agenda/push name) não.
+        static string? CleanChatName(string? raw) =>
+            string.IsNullOrWhiteSpace(raw) || raw.Contains('@') ? null : raw;
+        var cleanName = CleanChatName(chat.Name);
+
         Guid? contactId = null;
         var contactCreated = false;
         if (kind == WahaChatIdentifier.Kind.Individual)
@@ -97,7 +104,7 @@ public sealed class WhatsAppSyncService(
                     contact = Contact.Create(
                         id: Guid.NewGuid(),
                         phone: phone,
-                        name: chat.Name,
+                        name: cleanName,
                         groupTag: null,
                         theme: null,
                         optInAt: now);
@@ -117,7 +124,7 @@ public sealed class WhatsAppSyncService(
                 id: Guid.NewGuid(),
                 waChatId: chat.Id,
                 contactId: contactId,
-                title: chat.Name,
+                title: cleanName,
                 isGroup: isGroup,
                 createdAt: now);
             await conversations.AddAsync(conversation, ct);
@@ -128,9 +135,9 @@ public sealed class WhatsAppSyncService(
             {
                 conversation.LinkContact(contactId.Value);
             }
-            if (!string.IsNullOrWhiteSpace(chat.Name) && !string.Equals(conversation.Title, chat.Name, StringComparison.Ordinal))
+            if (!string.IsNullOrWhiteSpace(cleanName) && !string.Equals(conversation.Title, cleanName, StringComparison.Ordinal))
             {
-                conversation.Rename(chat.Name);
+                conversation.Rename(cleanName);
             }
         }
 
