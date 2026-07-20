@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Application.UseCases.Dispatch;
 using MtrxSys.Core.Application.UseCases.Webhooks;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
@@ -67,6 +68,7 @@ public sealed class WebhookOptOutE2ETests : IAsyncLifetime
             _phones,
             new NoOpSharedPhoneLedger(),
             new SendAuditRepository(_db),
+            Substitute.For<IResponderDispatchEnqueuer>(),
             Options.Create(new DispatchOptions { SessionId = "default" }),
             NullLogger<WebhookIngestionService>.Instance);
 
