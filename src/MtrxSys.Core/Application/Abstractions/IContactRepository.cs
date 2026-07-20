@@ -42,6 +42,9 @@ public sealed record ContactFilter(
     string? ExcludePhoneE164 = null,
     // Exclui quem já tem job Pending ou Sent — evita re-enviar pra quem já recebeu e
     // duplicar quem já está na fila. Usado no disparo e na prévia de público.
-    bool ExcludeAlreadyDispatched = false);
+    bool ExcludeAlreadyDispatched = false,
+    // Restringe a UM contato (por Id). Usado pelo enfileiramento por-respondedor (webhook) pra
+    // reusar EXATAMENTE o mesmo dedup/segurança do disparo em lote, só que num contato só.
+    Guid? ContactId = null);
 
 public sealed record ContactGroupTag(string GroupTag, int Count);

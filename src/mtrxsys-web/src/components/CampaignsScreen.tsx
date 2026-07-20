@@ -662,7 +662,9 @@ export function CampaignsScreen() {
             Aquecimento{typeof warmup?.responderOnlyDaysLeft === "number" && warmup.responderOnlyDaysLeft > 0
               ? ` (faltam ${warmup.responderOnlyDaysLeft} dia(s) ativo(s))`
               : ""}: só é permitido disparar para <strong>quem já respondeu</strong>. Disparar para
-            contato frio num chip novo derruba o número. Depois abre para todas as audiências.
+            contato frio num chip novo derruba o número. Depois abre para todas as audiências.{" "}
+            <strong>Quem responder entra na fila automaticamente</strong> (com a fila pausada) — clique{" "}
+            <strong>Iniciar envios</strong> para disparar.
           </p>
         ) : (
           <p className="muted small">Quem pediu pra sair nunca recebe.</p>

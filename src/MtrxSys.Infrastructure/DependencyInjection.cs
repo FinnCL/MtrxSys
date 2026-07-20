@@ -154,6 +154,10 @@ public static class DependencyInjection
         services.AddScoped<WarmupManager>();
         services.AddScoped<WarmingPhaseService>();
         services.AddScoped<HumanPhaseGate>();
+        // Enfileira na hora pra disparo um contato que acabou de responder (fase de aquecimento) —
+        // "oi" manual → resposta → "Na fila + Respondeu", sem esperar o reset da meia-noite.
+        services.AddScoped<MtrxSys.Core.Application.UseCases.Dispatch.IResponderDispatchEnqueuer,
+            MtrxSys.Core.Application.UseCases.Dispatch.ResponderDispatchEnqueuer>();
 
         // Aquecimento de conversa (pool): estado em memória (singleton), banco de frases, fábrica de
         // clientes WAHA por membro (named HttpClient com handler pooled) e o motor (scoped — usa o

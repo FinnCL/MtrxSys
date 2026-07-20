@@ -88,6 +88,10 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         {
             q = q.Where(c => c.Stage == stage);
         }
+        if (filter.ContactId is { } onlyContactId)
+        {
+            q = q.Where(c => c.Id == onlyContactId);
+        }
         // "Engajados" = qualquer um que respondeu/avançou: tudo menos "Novo" (Lead) e "Descartado" (Lost).
         if (filter.EngagedOnly)
         {

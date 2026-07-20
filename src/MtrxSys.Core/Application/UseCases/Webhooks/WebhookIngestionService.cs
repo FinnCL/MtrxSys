@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Application.UseCases.Dispatch;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
 using MtrxSys.Core.Safety;
@@ -20,6 +21,7 @@ public sealed class WebhookIngestionService(
     BrazilPhoneValidator phones,
     ISharedPhoneLedger ledger,
     ISendAuditRepository audit,
+    IResponderDispatchEnqueuer enqueuer,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<WebhookIngestionService> log) : IWebhookIngestionService
 {
@@ -107,6 +109,7 @@ public sealed class WebhookIngestionService(
         var bodyText = CleanBody(p.Body);
         Guid? contactId = null;
         var newlyOptedOut = false;
+        var becameEngaged = false;
         // Resolve o telefone real do remetente: direto (@c.us) ou traduzindo o LID (@lid,
         // número oculto pelo WhatsApp) via WAHA. Sem isso, respostas que chegam por LID
         // (cada vez mais comuns) não casariam com o contato — e o opt-out não funcionaria.
@@ -148,7 +151,9 @@ public sealed class WebhookIngestionService(
             // Classificação automática quando o CONTATO respondeu (mensagem recebida).
             if (p.FromMe != true)
             {
-                newlyOptedOut = await ApplyInboundClassificationAsync(contact, bodyText, now, ct);
+                var outcome = await ApplyInboundClassificationAsync(contact, bodyText, now, ct);
+                newlyOptedOut = outcome.NewlyOptedOut;
+                becameEngaged = outcome.BecameEngaged;
                 // Opt-out global: propaga pro registro compartilhado (fail-open, idempotente).
                 // É o lado seguro do erro — se algo falhar, no máximo a pessoa deixa de receber.
                 if (newlyOptedOut)
@@ -227,6 +232,28 @@ public sealed class WebhookIngestionService(
             }
 #pragma warning restore CA1031
         }
+
+        // Respondedor NOVO na fase de aquecimento: enfileira JÁ pra disparo (o operador não espera o
+        // reset da meia-noite) → o contato aparece como "Na fila" + "Respondeu". PÓS-COMMIT e best-
+        // effort: a resposta já está gravada; se isto falhar, o reset diário cobre. Nunca pode
+        // derrubar/500 o webhook.
+        if (becameEngaged && contactId is not null)
+        {
+#pragma warning disable CA1031
+            try
+            {
+                await enqueuer.EnqueueSingleResponderAsync(contactId.Value, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Falha ao enfileirar respondedor {ContactId} pós-resposta; o reset diário cobre.", contactId);
+            }
+#pragma warning restore CA1031
+        }
     }
 
     // Atualiza o estado de ENTREGA de uma mensagem NOSSA a partir de um message.ack. Só fromMe da nossa
@@ -292,9 +319,10 @@ public sealed class WebhookIngestionService(
     // - pediu pra sair ("SAIR" etc.) → opt-out + "Descartado" (Lost);
     // - respondeu qualquer outra coisa e ainda estava em "Novo" (Lead) → "Respondeu" (Qualified).
     // Não rebaixa quem já avançou (ex.: Cliente continua Cliente).
-    // Retorna true se ESTE processamento acabou de marcar o opt-out (transição nova) —
-    // usado pra enviar a confirmação uma única vez.
-    private async Task<bool> ApplyInboundClassificationAsync(Contact contact, string? body, DateTimeOffset now, CancellationToken ct)
+    // Retorna InboundOutcome: NewlyOptedOut (transição nova → confirma o opt-out uma vez) e
+    // BecameEngaged (Novo → Respondeu AGORA → enfileira pra disparo na hora). Quem já estava engajado
+    // e só respondeu de novo NÃO conta como BecameEngaged.
+    private async Task<InboundOutcome> ApplyInboundClassificationAsync(Contact contact, string? body, DateTimeOffset now, CancellationToken ct)
     {
         if (OptOutDetector.IsOptOut(body))
         {
@@ -306,22 +334,28 @@ public sealed class WebhookIngestionService(
                 log.LogInformation("Contato {ContactId} pediu opt-out via resposta", contact.Id);
             }
             await MoveStageAsync(contact, ContactStage.Lost, now, ct);
-            return newlyOptedOut;
+            return new InboundOutcome(newlyOptedOut, BecameEngaged: false);
         }
 
         if (contact.Stage == ContactStage.Lead)
         {
-            await MoveStageAsync(contact, ContactStage.Qualified, now, ct);
+            var became = await MoveStageAsync(contact, ContactStage.Qualified, now, ct);
+            return new InboundOutcome(NewlyOptedOut: false, BecameEngaged: became);
         }
-        return false;
+        return new InboundOutcome(false, false);
     }
 
-    private async Task MoveStageAsync(Contact contact, ContactStage to, DateTimeOffset now, CancellationToken ct)
+    // Resultado da classificação de uma resposta: se marcou opt-out agora e/ou se o contato acabou de
+    // virar "Respondeu" (Novo → Qualified) — este último dispara o enfileiramento na hora.
+    private readonly record struct InboundOutcome(bool NewlyOptedOut, bool BecameEngaged);
+
+    // Retorna true se a transição de fato ocorreu (ChangeStage devolveu o estágio anterior).
+    private async Task<bool> MoveStageAsync(Contact contact, ContactStage to, DateTimeOffset now, CancellationToken ct)
     {
         var previous = contact.ChangeStage(to, now);
         if (previous is null)
         {
-            return;
+            return false;
         }
         await contacts.UpdateAsync(contact, ct);
         await stageChanges.AddAsync(
@@ -333,6 +367,7 @@ public sealed class WebhookIngestionService(
                 changedAt: now,
                 changedByUserId: Guid.Empty),
             ct);
+        return true;
     }
 
 

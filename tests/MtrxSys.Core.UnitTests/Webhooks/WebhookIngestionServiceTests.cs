@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Application.UseCases.Dispatch;
 using MtrxSys.Core.Application.UseCases.Webhooks;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
@@ -21,6 +22,7 @@ public sealed class WebhookIngestionServiceTests
     private readonly IClock _clock = Substitute.For<IClock>();
     private readonly ISharedPhoneLedger _ledger = Substitute.For<ISharedPhoneLedger>();
     private readonly ISendAuditRepository _audit = Substitute.For<ISendAuditRepository>();
+    private readonly IResponderDispatchEnqueuer _enqueuer = Substitute.For<IResponderDispatchEnqueuer>();
 
     private WebhookIngestionService BuildService()
     {
@@ -37,6 +39,7 @@ public sealed class WebhookIngestionServiceTests
             new MtrxSys.Core.Validation.BrazilPhoneValidator(),
             _ledger,
             _audit,
+            _enqueuer,
             opts,
             NullLogger<WebhookIngestionService>.Instance);
     }
