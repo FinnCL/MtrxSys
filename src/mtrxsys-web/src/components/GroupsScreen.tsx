@@ -216,7 +216,7 @@ export function GroupsScreen() {
         </div>
         <p className="muted">
           Grupos que o WhatsApp logado participa. Importe os participantes pra cadastrá-los como contatos no CRM.
-          Entrou gente nova depois? Clique <strong>Importar</strong> de novo — só os novos são adicionados
+          Entrou gente nova depois? Clique <strong>Importar</strong> de novo: só os novos são adicionados
           (os já cadastrados são pulados como duplicados).
         </p>
       </header>

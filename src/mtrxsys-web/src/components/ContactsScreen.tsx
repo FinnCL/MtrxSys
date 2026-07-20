@@ -199,7 +199,7 @@ export function ContactsScreen() {
         </div>
         <p className="muted">
           Clique numa lista para abrir os contatos salvos dela. Lista é só uma etiqueta pra organizar
-          seus contatos aqui — não é o grupo do WhatsApp.
+          seus contatos aqui, não é o grupo do WhatsApp.
         </p>
       </header>
 

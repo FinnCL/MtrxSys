@@ -689,6 +689,20 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
 .warmup-line { font-size: 14px; margin: 0 0 8px; color: var(--fg); }
 .warmup-bonus { color: var(--warn); font-weight: 600; }
 
+/* Aviso da fase "só respondeu" em destaque (callout), não apagado: tom --warn como o resto do
+   aquecimento; frases-chave em negrito herdam a cor de destaque. */
+.warmup-note {
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 4px 0 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--warn);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--fg);
+}
+.warmup-note strong { color: var(--warn); }
+
 /* Modal de teto atingido (liberar mais envios). */
 .modal-overlay {
   position: fixed; inset: 0; z-index: 100;

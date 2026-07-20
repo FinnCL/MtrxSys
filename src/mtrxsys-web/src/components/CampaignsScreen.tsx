@@ -55,6 +55,12 @@ const STAT_CHIPS: { key: DispatchJobStatus; label: string; cls: string }[] = [
   { key: "Skipped", label: "Puladas", cls: "stat-skipped" },
 ];
 
+// Prioridade de exibição na tabela de resultados: "Enviada" no topo, "Na fila" + "Respondeu" logo
+// depois (público seguro pronto pra sair), e o resto abaixo. Função pura (sem estado) → fica fora do
+// render pra não ser recriada a cada renderização.
+const reportStatusRank = (i: DispatchReportItem) =>
+  i.status === "Sent" ? 0 : i.status === "Pending" && i.engaged ? 1 : 2;
+
 export function CampaignsScreen() {
   const [messages, setMessages] = useState<MessageTemplate[]>([]);
   const [groupTags, setGroupTags] = useState<ContactGroupTag[]>([]);
@@ -323,11 +329,13 @@ export function CampaignsScreen() {
       )
     : report;
   // Ordena, em níveis (sort ESTÁVEL → preserva a ordem interna histórico-DESC/fila-FIFO dentro de cada
-  // grupo): 1) RESPONDEU (engajados) primeiro — o público seguro, e o ÚNICO da fase de aquecimento, fica
-  // agrupado no topo; 2) contatos do CHIP ATUAL antes dos de OUTRO chip (cinza/desabilitados, que vão pro
-  // fim). O `?? false` protege backend antigo (sem o campo `engaged`) — aí cai no comportamento anterior.
+  // grupo): 1) PRIORIDADE de status — "Enviada" no topo, logo depois "Na fila" + "Respondeu" (o público
+  // seguro pronto pra sair), e o resto (Pulada/Falhou/etc.) abaixo; 2) RESPONDEU (engajados) antes dos que
+  // não responderam; 3) contatos do CHIP ATUAL antes dos de OUTRO chip (cinza/desabilitados, no fim). O
+  // `?? false` protege backend antigo (sem o campo `engaged`) — aí cai no comportamento anterior.
   const filteredReport = [...searchedReport].sort(
     (a, b) =>
+      reportStatusRank(a) - reportStatusRank(b) ||
       (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0) ||
       Number(b.fromCurrentChip) - Number(a.fromCurrentChip),
   );
@@ -561,24 +569,24 @@ export function CampaignsScreen() {
         <details className="help-toggle">
           <summary>Como escrever a mensagem (variar sem cair como spam)</summary>
           <p className="muted small">
-            <strong>Como variar sem cair como spam:</strong> dentro de uma mensagem, use{" "}
-            <code>{"{a|b|c}"}</code> — o sistema sorteia uma opção por contato (pode usar vários pontos no
-            texto, ex.: <code>{"{Oi|Olá}"}</code>). <strong>Não</strong> separe a saudação em modelos
+            <strong>Variar sem parecer spam:</strong> dentro de uma mensagem, use{" "}
+            <code>{"{a|b|c}"}</code> e o sistema sorteia uma opção por contato (pode repetir em vários
+            trechos, ex.: <code>{"{Oi|Olá}"}</code>). <strong>Não</strong> separe a saudação em modelos
             diferentes ("Oi" num, "Olá" noutro): isso manda texto idêntico pra muita gente. Só crie um{" "}
-            <strong>2º modelo</strong> se o <strong>corpo</strong> da mensagem for diferente (outro
-            argumento), não pra trocar a saudação. Seus contatos não têm nome → prefira saudações sem nome.
-            A linha de saída (<strong>"SAIR"</strong>) já vem pronta no campo — mantenha ela.
+            <strong>2º modelo</strong> quando o <strong>corpo</strong> da mensagem for diferente (outro
+            argumento), não pra trocar a saudação. Como seus contatos não têm nome, prefira saudações sem
+            nome. A linha <strong>"SAIR"</strong> já vem pronta no campo: mantenha ela.
           </p>
           <p className="muted small">
-            <strong>Link:</strong> é só colar no texto — o WhatsApp gera a prévia sozinho. Prefira o{" "}
-            <strong>seu domínio</strong> (ex.: <code>seusite.com.br</code>); <strong>evite encurtadores</strong>{" "}
+            <strong>Link:</strong> cole direto no texto que o WhatsApp gera a prévia sozinho. Prefira o{" "}
+            <strong>seu domínio</strong> (ex.: <code>seusite.com.br</code>) e <strong>evite encurtadores</strong>{" "}
             (bit.ly etc.), que pesam mais como spam.
           </p>
         </details>
         {messages.length > 0 && (
           <>
             <p className="muted small pool-label">
-              Salvas — escolha qual usar neste disparo ({messages.length} {messages.length === 1 ? "mensagem" : "mensagens"}):
+              Salvas: escolha qual usar neste disparo ({messages.length} {messages.length === 1 ? "mensagem" : "mensagens"}):
             </p>
             <ul className="message-pool">
               {messages.map((m) => {
@@ -658,13 +666,12 @@ export function CampaignsScreen() {
           </label>
         </div>
         {responderOnly ? (
-          <p className="muted small">
-            Aquecimento{typeof warmup?.responderOnlyDaysLeft === "number" && warmup.responderOnlyDaysLeft > 0
-              ? ` (faltam ${warmup.responderOnlyDaysLeft} dia(s) ativo(s))`
-              : ""}: só é permitido disparar para <strong>quem já respondeu</strong>. Disparar para
-            contato frio num chip novo derruba o número. Depois abre para todas as audiências.{" "}
-            <strong>Quem responder entra na fila automaticamente</strong> (com a fila pausada) — clique{" "}
-            <strong>Iniciar envios</strong> para disparar.
+          <p className="warmup-note">
+            <strong>Aquecimento{typeof warmup?.responderOnlyDaysLeft === "number" && warmup.responderOnlyDaysLeft > 0
+              ? ` (faltam ${warmup.responderOnlyDaysLeft} dia${warmup.responderOnlyDaysLeft === 1 ? "" : "s"} ativo${warmup.responderOnlyDaysLeft === 1 ? "" : "s"})`
+              : ""}.</strong> Só dispare para <strong>quem já respondeu</strong>: contato frio num chip novo
+            derruba o número. <strong>Quem responder entra na fila automaticamente</strong> (fila pausada).
+            Clique <strong>Iniciar envios</strong> para disparar. Depois abre para todas as audiências.
           </p>
         ) : (
           <p className="muted small">Quem pediu pra sair nunca recebe.</p>
@@ -675,7 +682,7 @@ export function CampaignsScreen() {
         <section className="campaigns-section warmup-panel">
           <div className="warmup-head">
             <h3>
-              Aquecimento do chip — {warmupDone
+              Aquecimento do chip: {warmupDone
                 ? <>concluído · teto de {warmup.plateauLimit}/dia</>
                 : <>dia {warmup.day} de {warmup.totalDays}</>}
               {warmup.phone && <span className="warmup-phone"> · {warmup.phone}</span>}
@@ -746,13 +753,18 @@ export function CampaignsScreen() {
         ) : paused ? (
           <>
             <p className="prepared-banner">
-              {pendingCount} contato(s) na fila — revise em "Resultado dos envios" e inicie quando quiser.
+              {pendingCount} {pendingCount === 1 ? "contato" : "contatos"} na fila. Revise em "Resultado dos envios" e inicie quando quiser.
             </p>
             <div className="dispatch-actions">
               <button type="button" className="dispatch-btn" onClick={() => setConfirmStart(true)}>
                 Iniciar envios
               </button>
-              <button type="button" className="clear-btn" onClick={() => setConfirmClear(true)}>
+              <button
+                type="button"
+                className="clear-btn"
+                onClick={() => setConfirmClear(true)}
+                title="Cancela os envios que ainda não saíram (Na fila e Reenviando). O histórico (Enviada/Pulada/Falhou) permanece. Para zerar tudo, use Renovar lista."
+              >
                 Limpar fila
               </button>
             </div>
