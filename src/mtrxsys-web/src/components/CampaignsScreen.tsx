@@ -433,7 +433,7 @@ export function CampaignsScreen() {
     try {
       await api.resumeDispatch();
       setPaused(false);
-      setDispatchMsg("Envios iniciados — vão sair aos poucos, com intervalos.");
+      setDispatchMsg("Envios iniciados. Vão sair aos poucos, com intervalos.");
       await loadLive();
     } catch (ex) {
       setDispatchMsg(`Erro: ${ex instanceof Error ? ex.message : String(ex)}`);

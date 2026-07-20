@@ -389,8 +389,6 @@ input[type="checkbox"], input[type="radio"] {
 .stat-skipped { background: var(--bg-3); color: var(--muted); }
 .stat-greeting, .stat-intro, .stat-hook, .stat-optout { background: rgba(74, 141, 244, 0.2); color: var(--accent); }
 
-.dispatch-msg { color: var(--muted); font-size: 13px; margin: 0; }
-
 .three-col {
   flex: 1;
   display: grid;
@@ -691,17 +689,21 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
 
 /* Aviso da fase "só respondeu" em destaque (callout), não apagado: tom --warn como o resto do
    aquecimento; frases-chave em negrito herdam a cor de destaque. */
+/* Aviso do aquecimento: discreto, no mesmo padrão de "nota" do resto (filete lateral, fundo
+   sutil). Só a borda esquerda e o título puxam o laranja; o corpo fica apagado pra não poluir. */
 .warmup-note {
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 12.5px;
+  line-height: 1.5;
   margin: 4px 0 0;
-  padding: 10px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--warn);
-  background: rgba(245, 158, 11, 0.12);
-  color: var(--fg);
+  padding: 8px 12px;
+  border-radius: 6px;
+  border-left: 3px solid var(--warn);
+  background: rgba(245, 158, 11, 0.06);
+  color: var(--muted);
+  max-width: 640px;
 }
-.warmup-note strong { color: var(--warn); }
+.warmup-note strong { color: var(--fg); font-weight: 600; }
+.warmup-note strong:first-child { color: var(--warn); }
 
 /* Modal de teto atingido (liberar mais envios). */
 .modal-overlay {
@@ -752,7 +754,7 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
 }
 .audience-count { font-size: 13px; margin: 0 0 10px; color: var(--fg); }
 .audience-count.zero { color: var(--danger); }
-.dispatch-msg { margin-top: 12px; font-size: 14px; }
+.dispatch-msg { margin: 12px 0 0; font-size: 14px; color: var(--muted); }
 .pool-label { margin: 0 0 6px; color: #22c55e; font-weight: 600; }
 .message-pool { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
 .message-pool li {

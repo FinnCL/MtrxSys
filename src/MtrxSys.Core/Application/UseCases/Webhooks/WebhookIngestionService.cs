@@ -125,8 +125,11 @@ public sealed class WebhookIngestionService(
         if (e164 is not null)
         {
             var phone = phones.NormalizeTrusted(e164);
-            // O nome público (NotifyName) só vale quando é a pessoa que mandou (inbound).
-            var inboundName = p.FromMe == true ? null : p.NotifyName;
+            // O nome público (NotifyName) só vale quando é a pessoa que mandou (inbound). Sanitiza pela
+            // fonte única: se vier um JID no lugar do nome (quirk do WAHA), guarda null — mesma regra do sync.
+            var inboundName = p.FromMe == true || WahaChatIdentifier.LooksLikeChatId(p.NotifyName)
+                ? null
+                : p.NotifyName;
             var contact = await contacts.GetByPhoneAsync(phone.E164, ct);
             if (contact is null)
             {
@@ -171,7 +174,8 @@ public sealed class WebhookIngestionService(
             // disparo chegando por @lid criaria uma 2ª conversa do mesmo contato.
             conversation = await conversations.GetByContactIdAsync(contactId.Value, ct);
         }
-        var conversationTitle = p.NotifyName; // título = nome público, quando houver
+        // Título = nome público, quando houver; sanitiza JID disfarçado de nome (mesma fonte única do sync).
+        var conversationTitle = WahaChatIdentifier.LooksLikeChatId(p.NotifyName) ? null : p.NotifyName;
         if (conversation is null)
         {
             conversation = Conversation.Create(

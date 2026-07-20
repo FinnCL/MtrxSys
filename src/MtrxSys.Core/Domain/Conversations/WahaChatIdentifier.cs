@@ -39,6 +39,14 @@ public static class WahaChatIdentifier
 
     public static bool IsGroup(string? chatId) => Classify(chatId) == Kind.Group;
 
+    /// <summary>True se o texto É um id de chat (JID: "5571..@c.us", "..@lid", "..@g.us", legado
+    /// "..@s.whatsapp.net") disfarçado de nome. O WAHA às vezes devolve o próprio id no campo "nome"
+    /// quando o número não tem nome público/salvo — guardar isso vazaria o id pra UI como se fosse nome.
+    /// Fonte ÚNICA da regra (sync e webhook usam), mais precisa que "tem @": um nome real com "@"
+    /// (apelido, algo tipo e-mail) NÃO é confundido com id, pois não termina num sufixo de JID.</summary>
+    public static bool LooksLikeChatId(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && Classify(text) != Kind.Unknown;
+
     public static bool HasRealPhone(string? chatId) => Classify(chatId) == Kind.Individual;
 
     /// <summary>Conta de sistema/notificações do WhatsApp (0@c.us, dígitos todos zero) e canal de

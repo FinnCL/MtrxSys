@@ -85,10 +85,10 @@ public sealed class WhatsAppSyncService(
 
         // WAHA devolve o próprio id do chat ("557185543603@c.us") como "nome" quando o número não está
         // salvo na agenda e não tem nome público. Não é nome — sanitiza pra null (senão o id vaza pra UI
-        // como se fosse nome). JID sempre tem "@"; nome real (agenda/push name) não.
-        static string? CleanChatName(string? raw) =>
-            string.IsNullOrWhiteSpace(raw) || raw.Contains('@') ? null : raw;
-        var cleanName = CleanChatName(chat.Name);
+        // como se fosse nome), pela fonte única WahaChatIdentifier (dona dos sufixos de JID).
+        var cleanName = string.IsNullOrWhiteSpace(chat.Name) || WahaChatIdentifier.LooksLikeChatId(chat.Name)
+            ? null
+            : chat.Name;
 
         Guid? contactId = null;
         var contactCreated = false;

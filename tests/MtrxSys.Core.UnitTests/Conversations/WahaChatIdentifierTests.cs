@@ -19,6 +19,22 @@ public sealed class WahaChatIdentifierTests
     public void ExtractMessageCore_returns_stable_core(string input, string expected) =>
         WahaChatIdentifier.ExtractMessageCore(input).Should().Be(expected);
 
+    [Theory]
+    // JID disfarçado de nome (quirk do WAHA) → detectado, pra virar "sem nome".
+    [InlineData("557185543603@c.us", true)]
+    [InlineData("157239574847645@lid", true)]
+    [InlineData("120363427847675650@g.us", true)]
+    [InlineData("557185543603@s.whatsapp.net", true)]
+    // Nome de gente (mesmo com "@") NÃO é confundido — não termina em sufixo de JID.
+    [InlineData("Alice", false)]
+    [InlineData("fulano@gmail.com", false)]
+    [InlineData("@nick", false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData(null, false)]
+    public void LooksLikeChatId_detects_jid_not_real_names(string? text, bool expected) =>
+        WahaChatIdentifier.LooksLikeChatId(text).Should().Be(expected);
+
     [Fact]
     public void ExtractMessageCore_send_and_echo_share_the_same_core()
     {
