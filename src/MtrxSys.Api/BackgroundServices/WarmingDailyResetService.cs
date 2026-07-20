@@ -1,4 +1,5 @@
 using MtrxSys.Core.Application.Abstractions;
+using MtrxSys.Core.Application.UseCases.Dispatch;
 using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Safety;
@@ -73,7 +74,8 @@ public sealed class WarmingDailyResetService(
         // Fonte única da fase (mesma conta do disparo e do relatório). Active=false cobre trava
         // desligada, chip sem marco e aquecimento já concluído → disparo normal, sem reset automático.
         var warming = await sp.GetRequiredService<WarmingPhaseService>().EvaluateAsync(state, ct);
-        if (!warming.Active)
+        // ResponderOnly (dias 1-3) e Hybrid (dia 4 → platô) renovam a fila diária; Mature / trava off não.
+        if (!warming.Active && !warming.IsHybrid)
         {
             return;
         }
@@ -87,6 +89,17 @@ public sealed class WarmingDailyResetService(
             log.LogInformation(
                 "Aquecimento: sem disparo ontem — não renova (dia ativo {D}/{T}).",
                 warming.ActiveDays, warming.WarmingDays);
+            return;
+        }
+
+        // FASE HÍBRIDA (dia 4 → platô): monta o lote misto (círculo re-enviável + frios novos,
+        // intercalado) via o builder único, e PAUSA. Sai daqui — o resto abaixo é só ResponderOnly.
+        if (warming.IsHybrid)
+        {
+            var built = await sp.GetRequiredService<IHybridCycleEnqueuer>().BuildAndEnqueueAsync(ct);
+            log.LogInformation(
+                "Aquecimento HÍBRIDO: lote diário montado ({N} contatos) e PAUSADO. Dia ativo {D}/{T}.",
+                built, warming.ActiveDays, warming.WarmingDays);
             return;
         }
 

@@ -32,6 +32,7 @@ public sealed class DispatchEngine(
     IDispatchMetrics metrics,
     ISystemStateRepository systemState,
     ISharedPhoneLedger ledger,
+    IWarmupCircleRepository warmupCircle,
     DispatchSettleTracker settle,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
@@ -69,6 +70,13 @@ public sealed class DispatchEngine(
         var warmupSnapshot = await warmup.GetSnapshotAsync(ct);
         var responderOnlyPhase = WarmingPhase.IsActive(
             sysStateSnapshot.WarmupStartedOn, warmupSnapshot.DayIndex, dispatchOpts.Value.WarmingResponderOnlyDays);
+
+        // CÍRCULO DE AQUECIMENTO (fase híbrida): seus PRÓPRIOS números, re-enviáveis. São ISENTOS da
+        // supressão cross-chip "Sent" do ledger (reaquecer os SEUS números em vários chips é intencional
+        // e seguro) e NÃO são marcados no ledger (senão seriam suprimidos nos OUTROS chips). Opt-out
+        // continua valendo. Carregado SOB DEMANDA (1x, no 1º job) e só quando o ledger está ligado —
+        // ciclo ocioso ou ledger Off nem consulta.
+        HashSet<Guid>? circleContactIds = null;
 
         while (!ct.IsCancellationRequested)
         {
@@ -189,6 +197,10 @@ public sealed class DispatchEngine(
                 skipped++;
                 continue;
             }
+            // Contato do CÍRCULO? (isento da supressão cross-chip "Sent" e do MarkSent.) Só carrega o
+            // set se o ledger está ligado (senão isCircle não muda nada), e uma vez só por ciclo.
+            var isCircle = ledger.IsEnabled
+                && (circleContactIds ??= await LoadCircleContactIdsAsync(ct)).Contains(contact.Id);
             if (contact.OptOutAt is not null)
             {
                 job.MarkSkipped("opted out");
@@ -249,8 +261,10 @@ public sealed class DispatchEngine(
                     // Dedup cross-ambiente: "já enviado em outro ambiente" (Sent) e "opt-out em outro
                     // ambiente" (OptedOut) bloqueiam — os 10 chips não podem mandar a mesma campanha
                     // pra mesma pessoa (denúncia de spam), e quem pediu SAIR fica fora.
+                    // Círculo é ISENTO do dedup "Sent" cross-chip (reaquecer SEUS números em vários chips
+                    // é intencional). O opt-out cross-chip continua bloqueando TODOS, inclusive o círculo.
                     if (ledgerStatus == SharedLedgerStatus.OptedOut
-                        || ledgerStatus == SharedLedgerStatus.Sent)
+                        || (ledgerStatus == SharedLedgerStatus.Sent && !isCircle))
                     {
                         var reason = ledgerStatus == SharedLedgerStatus.OptedOut
                             ? "opt-out em outro ambiente"
@@ -264,7 +278,8 @@ public sealed class DispatchEngine(
                         continue;
                     }
                 }
-                else if (ledgerStatus is SharedLedgerStatus.OptedOut or SharedLedgerStatus.Sent)
+                else if (ledgerStatus == SharedLedgerStatus.OptedOut
+                    || (ledgerStatus == SharedLedgerStatus.Sent && !isCircle))
                 {
                     log.LogInformation(
                         "[ledger observe] Job {JobId} ({Phone}) SERIA pulado (consta no registro compartilhado).",
@@ -429,7 +444,12 @@ public sealed class DispatchEngine(
                 // Sem esta linha, os 10 chips não veem marca nenhuma e mandam a MESMA campanha pra o
                 // mesmo telefone, de 10 números diferentes — denúncia de spam. É o que o dedup do
                 // gate acima (status Sent) consome.
-                await ledger.MarkSentAsync(contact.Phone.E164, ct);
+                // NÃO marca o CÍRCULO (seus números): marcar suprimiria eles nos OUTROS chips (dedup
+                // cross-chip), quebrando o aquecimento deles. Terceiros (frios) são marcados normalmente.
+                if (!isCircle)
+                {
+                    await ledger.MarkSentAsync(contact.Phone.E164, ct);
+                }
 
                 metrics.RecordSendSuccess((int)delayBefore.TotalMilliseconds, typingMs);
                 sent++;
@@ -517,6 +537,16 @@ public sealed class DispatchEngine(
     // Reconcilia o número conectado com o WarmupPhone: número diferente → RestartWarmup (chip novo
     // nasce frio). Best-effort: leitura vazia/instável do WAHA é ignorada (não reseta à toa) e uma
     // falha não trava o ciclo — o gate de aquecimento segue com o estado atual.
+    // Ids dos contatos do Círculo de Aquecimento (SEUS números). Carregado sob demanda (1x por ciclo,
+    // no 1º job que precisa) — o círculo é pequeno. Set vazio se não há círculo.
+    private async Task<HashSet<Guid>> LoadCircleContactIdsAsync(CancellationToken ct)
+    {
+        var phones = (await warmupCircle.ListAsync(ct)).Select(m => m.PhoneE164).ToList();
+        return phones.Count == 0
+            ? []
+            : (await contacts.GetByPhonesAsync(phones, ct)).Values.Select(c => c.Id).ToHashSet();
+    }
+
     private async Task TryReconcileWarmupPhoneAsync(string sessionId, CancellationToken ct)
     {
         try

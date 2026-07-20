@@ -158,6 +158,9 @@ public static class DependencyInjection
         // "oi" manual → resposta → "Na fila + Respondeu", sem esperar o reset da meia-noite.
         services.AddScoped<MtrxSys.Core.Application.UseCases.Dispatch.IResponderDispatchEnqueuer,
             MtrxSys.Core.Application.UseCases.Dispatch.ResponderDispatchEnqueuer>();
+        // Monta o lote diário da fase HÍBRIDA (círculo re-enviável + frios novos, intercalado).
+        services.AddScoped<MtrxSys.Core.Application.UseCases.Dispatch.IHybridCycleEnqueuer,
+            MtrxSys.Core.Application.UseCases.Dispatch.HybridCycleEnqueuer>();
 
         // Aquecimento de conversa (pool): estado em memória (singleton), banco de frases, fábrica de
         // clientes WAHA por membro (named HttpClient com handler pooled) e o motor (scoped — usa o

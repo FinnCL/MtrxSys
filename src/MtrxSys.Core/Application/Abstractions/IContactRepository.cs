@@ -30,6 +30,11 @@ public interface IContactRepository
     /// re-disparar pros MESMOS no dia seguinte durante o aquecimento. NÃO toca em quem saiu (opt-out),
     /// descartados, nem nos "Novo" (frios). Retorna quantos foram liberados.</summary>
     Task<int> ClearLastSentForEngagedAsync(CancellationToken ct);
+
+    /// <summary>Zera o LastSentAt SÓ dos telefones dados (o Círculo de Aquecimento escolhido pelo
+    /// operador), pra re-disparar pros MESMOS na fase híbrida — SEM reabrir frios que responderam
+    /// (esses ficam com LastSentAt e o dedup os mantém fora). Retorna quantos foram liberados.</summary>
+    Task<int> ClearLastSentForPhonesAsync(IReadOnlyCollection<string> phonesE164, CancellationToken ct);
 }
 
 public sealed record ContactFilter(

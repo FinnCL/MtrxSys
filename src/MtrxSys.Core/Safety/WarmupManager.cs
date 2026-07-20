@@ -52,6 +52,11 @@ public sealed class WarmupManager(
     private static readonly int[] DefaultCurve =
         [5, 8, 12, 12, 15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
 
+    // Índice (base-0) do PLATÔ: último degrau da curva (onde estabiliza em 200/dia). É o fim do
+    // aquecimento — a fase híbrida vai até aqui. Sem I/O; mesma curva que o snapshot usa (não duplica).
+    public int PlateauDayIndex =>
+        (opts.Value.Curve is { Length: > 0 } configured ? configured : DefaultCurve).Length - 1;
+
     public async Task<bool> CanSendAsync(CancellationToken ct)
     {
         var snap = await GetSnapshotAsync(ct);

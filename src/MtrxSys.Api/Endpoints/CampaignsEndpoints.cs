@@ -374,11 +374,17 @@ public static class CampaignsEndpoints
             // hoje). Mesma definição da trava do disparo — a UI usa pra travar o seletor em "Respondeu".
             var warmingDays = dispatchOpts.Value.WarmingResponderOnlyDays;
             var responderOnlyPhase = WarmingPhase.IsActive(sysState.WarmupStartedOn, s.DayIndex, warmingDays);
+            // Estágio (ResponderOnly/Hybrid/Mature): a UI usa `hybridPhase` pra exibir a fila na ordem
+            // real de envio (intercalada) e mostrar o aviso da fase híbrida.
+            var stage = WarmingPhase.Classify(
+                sysState.WarmupStartedOn, s.DayIndex, warmingDays,
+                warmup.PlateauDayIndex, dispatchOpts.Value.HybridWarmingEnabled);
             return Results.Ok(new
             {
                 phone,
                 startedOn = s.StartedOn,
                 responderOnlyPhase,
+                hybridPhase = stage == WarmingStage.Hybrid,
                 responderOnlyDaysLeft = responderOnlyPhase ? warmingDays - s.DayIndex : 0,
                 // dayIndex é base-0 no domínio; expõe base-1 pra UI ("dia 1 de 7").
                 day = s.DayIndex + 1,

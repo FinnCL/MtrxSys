@@ -64,7 +64,9 @@ public sealed class ResponderDispatchEnqueuerTests
 
     private ResponderDispatchEnqueuer Build() => new(
         _contacts, _jobs, _templates, _systemState, _ledger,
-        new WarmingPhaseService(_counts, _clock, Options.Create(new DispatchOptions { WarmingResponderOnlyDays = 3 })),
+        new WarmingPhaseService(_counts,
+            new WarmupManager(_counts, _systemState, _clock, Options.Create(new WarmupOptions())),
+            _clock, Options.Create(new DispatchOptions { WarmingResponderOnlyDays = 3 })),
         _rng, _clock, _uow, NullLogger<ResponderDispatchEnqueuer>.Instance);
 
     [Fact]

@@ -55,11 +55,12 @@ const STAT_CHIPS: { key: DispatchJobStatus; label: string; cls: string }[] = [
   { key: "Skipped", label: "Puladas", cls: "stat-skipped" },
 ];
 
-// Prioridade de exibição na tabela de resultados: "Enviada" no topo, "Na fila" + "Respondeu" logo
-// depois (público seguro pronto pra sair), e o resto abaixo. Função pura (sem estado) → fica fora do
-// render pra não ser recriada a cada renderização.
+// Grupo de exibição na tabela: 0 = "Enviada" (histórico, topo), 1 = "Na fila" (Pending/Retrying, fila
+// ativa), 2 = resto (Pulada/Falhou). A ordem DENTRO do grupo "Na fila" é decidida no comparador (render):
+// no híbrido segue a ordem REAL de envio (scheduledAt = intercalado); fora dela, "Respondeu" primeiro.
+// Função pura (sem estado) → fica fora do render pra não ser recriada a cada renderização.
 const reportStatusRank = (i: DispatchReportItem) =>
-  i.status === "Sent" ? 0 : i.status === "Pending" && i.engaged ? 1 : 2;
+  i.status === "Sent" ? 0 : i.status === "Pending" || i.status === "Retrying" ? 1 : 2;
 
 export function CampaignsScreen() {
   const [messages, setMessages] = useState<MessageTemplate[]>([]);
@@ -328,17 +329,20 @@ export function CampaignsScreen() {
           (i.name ?? "").toLowerCase().includes(reportQuery),
       )
     : report;
-  // Ordena, em níveis (sort ESTÁVEL → preserva a ordem interna histórico-DESC/fila-FIFO dentro de cada
-  // grupo): 1) PRIORIDADE de status — "Enviada" no topo, logo depois "Na fila" + "Respondeu" (o público
-  // seguro pronto pra sair), e o resto (Pulada/Falhou/etc.) abaixo; 2) RESPONDEU (engajados) antes dos que
-  // não responderam; 3) contatos do CHIP ATUAL antes dos de OUTRO chip (cinza/desabilitados, no fim). O
-  // `?? false` protege backend antigo (sem o campo `engaged`) — aí cai no comportamento anterior.
-  const filteredReport = [...searchedReport].sort(
-    (a, b) =>
-      reportStatusRank(a) - reportStatusRank(b) ||
-      (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0) ||
-      Number(b.fromCurrentChip) - Number(a.fromCurrentChip),
-  );
+  // Ordena por grupo (Enviada > Na fila > resto). Dentro de "Na fila": no HÍBRIDO segue a ordem real de
+  // envio (scheduledAt = a intercalação círculo/frio que o motor vai executar); fora do híbrido, mantém
+  // "Respondeu" primeiro (pedido anterior), depois por horário. Sort estável preserva o resto.
+  const hybrid = warmup?.hybridPhase ?? false;
+  const filteredReport = [...searchedReport].sort((a, b) => {
+    const byRank = reportStatusRank(a) - reportStatusRank(b);
+    if (byRank !== 0) return byRank;
+    if (reportStatusRank(a) === 1) {
+      if (hybrid) return +new Date(a.scheduledAt) - +new Date(b.scheduledAt);
+      const byEngaged = (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0);
+      return byEngaged !== 0 ? byEngaged : +new Date(a.scheduledAt) - +new Date(b.scheduledAt);
+    }
+    return (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0) || Number(b.fromCurrentChip) - Number(a.fromCurrentChip);
+  });
   const reportTotalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
   // Clamp na leitura (sem setState): se o poll de 5s muda o total, a página nunca "estoura".
   const reportCurrentPage = Math.min(reportPage, reportTotalPages);

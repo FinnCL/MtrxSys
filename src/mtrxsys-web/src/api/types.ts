@@ -259,6 +259,9 @@ export interface WarmupStatus {
   // Fase "só quem respondeu": nos primeiros dias ATIVOS do chip, o disparo trava no público
   // "Respondeu" (frio num chip novo derruba). A tela usa pra travar o seletor de público.
   responderOnlyPhase: boolean;
+  // Fase híbrida (dia 4 → platô): mistura círculo re-enviável + frios novos, intercalado. A tela usa
+  // pra exibir a fila "Na fila" na ordem REAL de envio (intercalada), não agrupada por "Respondeu".
+  hybridPhase: boolean;
   responderOnlyDaysLeft: number;
   day: number;
   totalDays: number;

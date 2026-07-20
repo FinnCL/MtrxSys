@@ -77,6 +77,22 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
                 && !ContactStages.NonEngaged.Contains(c.Stage))
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSentAt, (DateTimeOffset?)null), ct);
 
+    // Fase híbrida: libera SÓ os telefones do Círculo escolhido (não reabre frios que responderam).
+    // Não toca em descartados/opt-out (defensivo — o círculo é curado, mas o guard não custa).
+    public Task<int> ClearLastSentForPhonesAsync(IReadOnlyCollection<string> phonesE164, CancellationToken ct)
+    {
+        var arr = phonesE164?.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.Ordinal).ToArray()
+            ?? [];
+        return arr.Length == 0
+            ? Task.FromResult(0)
+            : db.Contacts
+                .Where(c => c.LastSentAt != null
+                    && c.DeletedAt == null
+                    && c.OptOutAt == null
+                    && arr.Contains(c.Phone.E164))
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSentAt, (DateTimeOffset?)null), ct);
+    }
+
     public Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct) =>
         ApplyFilter(db.Contacts.AsQueryable(), filter).CountAsync(ct);
 

@@ -66,4 +66,9 @@ public sealed class DispatchOptions
     // (WarmupStartedOn), então re-parear reinicia a fase. 0 desliga a trava. Ver WarmingDailyResetService,
     // que à meia-noite de Brasília libera os respondedores pra novo disparo enquanto a fase durar.
     public int WarmingResponderOnlyDays { get; set; } = 3;
+
+    // FASE HÍBRIDA: após os N dias de "só respondeu", até o platô da curva (200/dia), o disparo mistura
+    // o Círculo de Aquecimento (contatos SEUS, re-enviáveis) com frios novos, intercalado. true = ligado
+    // (default). false = após os N dias abre direto pra todas as audiências (comportamento anterior).
+    public bool HybridWarmingEnabled { get; set; } = true;
 }

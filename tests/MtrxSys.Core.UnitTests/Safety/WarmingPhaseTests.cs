@@ -32,4 +32,31 @@ public sealed class WarmingPhaseTests
         WarmingPhase.IsActive(Marco, 0, 0).Should().BeFalse();
         WarmingPhase.IsActive(Marco, 0, -1).Should().BeFalse();
     }
+
+    [Theory]
+    [InlineData(2, WarmingStage.ResponderOnly)]  // dia 3 → só respondeu
+    [InlineData(3, WarmingStage.Hybrid)]          // dia 4 → híbrido começa
+    [InlineData(27, WarmingStage.Hybrid)]         // penúltimo degrau (180/dia) → ainda híbrido
+    [InlineData(28, WarmingStage.Mature)]         // platô (200/dia) → maduro
+    [InlineData(40, WarmingStage.Mature)]         // veterano
+    public void Classify_segue_os_estagios_por_dias_ativos(int activeDays, WarmingStage expected)
+    {
+        WarmingPhase.Classify(Marco, activeDays, responderDays: 3, plateauDayIndex: 28, hybridEnabled: true)
+            .Should().Be(expected);
+    }
+
+    [Fact]
+    public void Classify_com_hibrido_desligado_pula_direto_pra_maduro()
+    {
+        WarmingPhase.Classify(Marco, 3, 3, 28, hybridEnabled: false).Should().Be(WarmingStage.Mature);
+        // Antes dos 3 dias ainda é só-respondeu, independente do híbrido.
+        WarmingPhase.Classify(Marco, 1, 3, 28, hybridEnabled: false).Should().Be(WarmingStage.ResponderOnly);
+    }
+
+    [Fact]
+    public void Classify_sem_marco_ou_trava_off_e_maduro()
+    {
+        WarmingPhase.Classify(null, 1, 3, 28, true).Should().Be(WarmingStage.Mature);
+        WarmingPhase.Classify(Marco, 1, 0, 28, true).Should().Be(WarmingStage.Mature);
+    }
 }

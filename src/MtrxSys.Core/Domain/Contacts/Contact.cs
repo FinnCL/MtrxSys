@@ -41,6 +41,22 @@ public sealed class Contact : Entity<Guid>
 
     public void RegisterSend(DateTimeOffset at) => LastSentAt = at;
 
+    /// <summary>Garante que o contato conste como importado por ESTE chip (co-membro dele) — o gate-por-
+    /// chip do disparo (anti-463) PULA quem não bate. Usado pelo aquecimento HÍBRIDO no Círculo: seus
+    /// números são co-membros do próprio chip, mas os criados na Fase Humana nascem SEM ImportedByPhone
+    /// (de propósito, pra o disparo os pular ANTES do híbrido). Retorna true se mudou. Não mexe em nada
+    /// mais (diferente do ReimportInto, que também desfaz descarte/grupo).</summary>
+    public bool EnsureImportedBy(string chipPhoneE164)
+    {
+        if (string.IsNullOrWhiteSpace(chipPhoneE164)
+            || string.Equals(ImportedByPhone, chipPhoneE164, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        ImportedByPhone = chipPhoneE164;
+        return true;
+    }
+
     /// <summary>Libera ESTE contato pra um novo disparo: zera o marcador de "já enviado"
     /// (LastSentAt) — equivalente per-contato do "Renovar lista". Como o filtro de disparo exclui
     /// quem tem LastSentAt, ele volta ao público. Não apaga histórico (o próximo disparo cria um

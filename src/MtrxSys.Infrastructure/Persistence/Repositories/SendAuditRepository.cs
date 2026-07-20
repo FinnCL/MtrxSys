@@ -22,8 +22,12 @@ internal sealed class SendAuditRepository(MtrxDbContext db) : ISendAuditReposito
     {
         // Enviados x entregues numa ÚNICA query (COUNT + SUM condicional) — um round-trip só.
         // AsNoTracking = leitura barata; o índice em occurred_at cobre o filtro da janela.
+        // IGNORA o Círculo de Aquecimento (contatos do próprio operador): eles SEMPRE leem, então
+        // inflariam a taxa entregue/enviado e cegariam o guard de shadow-restriction pros frios REAIS.
+        // Anti-join contra warmup_circle (mesmo banco) — mede só envio a terceiro real.
         var row = await db.SendAuditLog.AsNoTracking()
             .Where(e => e.OccurredAt >= since)
+            .Where(e => !db.WarmupCircle.Any(w => w.PhoneE164 == e.PhoneE164))
             .GroupBy(_ => 1)
             .Select(g => new { Sent = g.Count(), Delivered = g.Sum(e => e.DeliveredAt != null ? 1 : 0) })
             .FirstOrDefaultAsync(ct);

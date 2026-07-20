@@ -23,7 +23,10 @@ public sealed class WarmingPhaseServiceTests
         _clock.UtcNow.Returns(new DateTimeOffset(new DateOnly(2026, 7, 20).ToDateTime(new TimeOnly(12, 0)), TimeSpan.Zero));
 
     private WarmingPhaseService Build(int warmingDays = 3) =>
-        new(_counts, _clock, Options.Create(new DispatchOptions { WarmingResponderOnlyDays = warmingDays }));
+        new(_counts,
+            new WarmupManager(_counts, Substitute.For<ISystemStateRepository>(), _clock, Options.Create(new WarmupOptions())),
+            _clock,
+            Options.Create(new DispatchOptions { WarmingResponderOnlyDays = warmingDays }));
 
     private static SystemStateAggregate StateWithMarco()
     {

@@ -24,12 +24,16 @@ export function ContactsScreen() {
   const [busy, setBusy] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  // Círculo de Aquecimento: telefone (E.164) -> id do membro. Marca quais contatos SEUS re-enviam na
+  // fase híbrida (dia 4+). Persistente — carregado uma vez e alterado pelos checkboxes.
+  const [circle, setCircle] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     void (async () => {
       setLoading(true);
       try {
         setGroups(await api.listContactGroupTags());
+        setCircle(new Map((await api.listWarmupCircle()).map((m) => [m.phone, m.id])));
         setError(null);
       } catch (ex) {
         setError(ex instanceof Error ? ex.message : String(ex));
@@ -38,6 +42,27 @@ export function ContactsScreen() {
       }
     })();
   }, []);
+
+  // Liga/desliga o contato no Círculo de Aquecimento (pool re-enviável da fase híbrida). Persistente:
+  // marca uma vez e fica. Chaveado pelo E.164 do contato (bate com o telefone normalizado do membro).
+  async function toggleCircle(c: Contact) {
+    const existingId = circle.get(c.phoneE164);
+    try {
+      if (existingId) {
+        await api.removeFromWarmupCircle(existingId);
+        setCircle((prev) => {
+          const m = new Map(prev);
+          m.delete(c.phoneE164);
+          return m;
+        });
+      } else {
+        const member = await api.addToWarmupCircle({ phone: c.phoneE164, name: c.name });
+        setCircle((prev) => new Map(prev).set(c.phoneE164, member.id));
+      }
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    }
+  }
 
   // Rebusca os contatos de um grupo e atualiza o cache local (após uma ação que muda um contato).
   async function refreshGroupContacts(tag: string) {
@@ -235,6 +260,7 @@ export function ContactsScreen() {
                             <th>Nome</th>
                             <th>Telefone</th>
                             <th>Status</th>
+                            <th title="Círculo de Aquecimento: na fase híbrida (dia 4+) o robô reenvia a campanha pra estes contatos (seus/de confiança) junto com os frios novos. Marque uma vez e fica.">Aquecer</th>
                             <th>Ações</th>
                           </tr>
                         </thead>
@@ -260,6 +286,15 @@ export function ContactsScreen() {
                               <td>
                                 <StatusBadge contact={c} />
                                 {!c.fromCurrentChip && <span className="other-chip-badge">outro chip</span>}
+                              </td>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  checked={circle.has(c.phoneE164)}
+                                  onChange={() => void toggleCircle(c)}
+                                  disabled={!!c.optOutAt}
+                                  title="Círculo de Aquecimento (reenvio na fase híbrida)"
+                                />
                               </td>
                               <td>
                                 <div className="contact-actions">
