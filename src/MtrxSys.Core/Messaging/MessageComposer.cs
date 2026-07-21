@@ -68,7 +68,8 @@ public sealed partial class MessageComposer(
         return sb.ToString();
     }
 
-    // "Para sair, toque aqui: {baseUrl}/sair?t={token}" com token assinado por contato (validade 90d).
+    // "Para sair, toque aqui:\n{baseUrl}/sair?t={token}" — a URL vai em LINHA PRÓPRIA (mais limpa e
+    // menos "suspeita" que colada no texto), com token assinado por contato (validade 90d).
     // null quando OptOut:PublicBaseUrl está vazio (link desligado — estado localhost).
     private string? BuildOptOutLink(Contact contact)
     {
@@ -78,7 +79,7 @@ public sealed partial class MessageComposer(
             return null;
         }
         var token = optOutSigner.Sign(contact.Id, DateTimeOffset.UtcNow.AddDays(90));
-        return $"Para sair, toque aqui: {baseUrl.TrimEnd('/')}/sair?t={token}";
+        return $"Para sair, toque aqui:\n{baseUrl.TrimEnd('/')}/sair?t={token}";
     }
 
     private static string SubstitutePlaceholders(string text, Contact contact)
