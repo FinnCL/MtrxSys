@@ -1,16 +1,29 @@
 :root {
-  --bg: #0e1218;
-  --bg-2: #161b24;
-  --bg-3: #1d2330;
-  --fg: #e6e9ef;
-  --muted: #8b95a7;
-  --accent: #4a8df4;
-  --accent-2: #2c6cd4;
-  --inbound: #2a2f3a;
-  --outbound: #2c6cd4;
-  --danger: #d9596c;
+  /* Paleta espelhando o WhatsApp Web (tema escuro), aplicada ao sistema TODO via estes tokens. */
+  --bg: #111b21;       /* fundo do app / lista de conversas */
+  --bg-2: #202c33;     /* painéis: topbar, sidebar, cards, modais */
+  --bg-3: #2a3942;     /* hover, input, item ativo, chips */
+  --fg: #e9edef;       /* texto primário */
+  --muted: #8696a0;    /* texto secundário */
+  --accent: #00a884;   /* verde WhatsApp (ações, foco, item ativo) */
+  --accent-strong: #008069; /* verde de AÇÃO mais escuro p/ fundo de botões — contraste AA (~4.9:1) com texto branco */
+  --info: #53bdeb;     /* azul informativo (categorias/"respondeu") — distinto do verde de ação/sucesso */
+  --danger: #f15c6d;
   --warn: #f59e0b;
-  --border: #2a2f3a;
+  --border: #222d34;   /* separadores sutis (estilo WhatsApp) */
+
+  /* Paleta do WhatsApp (tema escuro) — usada só na área de chat pra imitar o app. */
+  --wa-bg: #0b141a;      /* fundo teal-escuro da conversa */
+  --wa-panel: #202c33;   /* barras: header e digitação */
+  --wa-in: #202c33;      /* balão recebido (esquerda) */
+  --wa-out: #005c4b;     /* balão enviado (verde, direita) */
+  --wa-text: #e9edef;    /* texto dos balões */
+  --wa-time: rgba(233,237,239,0.55);
+  --wa-tick: #53bdeb;    /* tique de leitura (azul) + nome do autor em grupo */
+  --wa-send: #00a884;    /* botão enviar (verde-teal) */
+  --wa-send-hover: #06cf9c;
+  --wa-input: #2a3942;   /* caixa de texto + botão desabilitado */
+  --wa-subtle: #8696a0;  /* texto secundário (subtítulo, placeholder) */
 }
 
 * { box-sizing: border-box; }
@@ -37,7 +50,7 @@ button, input, textarea, select {
 }
 
 button {
-  background: var(--accent);
+  background: var(--accent-strong);
   color: #fff;
   border: 0;
   border-radius: 4px;
@@ -45,9 +58,9 @@ button {
   cursor: pointer;
   transition: background-color 140ms ease, box-shadow 140ms ease, transform 80ms ease, filter 140ms ease, opacity 140ms ease;
 }
-button:hover { background: var(--accent-2); }
+button:hover { background: var(--accent); }
 button:active:not(:disabled) { transform: translateY(1px); }
-button:disabled { background: #444; cursor: not-allowed; }
+button:disabled { background: var(--bg-3); color: var(--muted); cursor: not-allowed; }
 
 input, textarea, select {
   background: var(--bg-2);
@@ -59,7 +72,7 @@ input, textarea, select {
 }
 input:focus, textarea:focus, select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(74, 141, 244, 0.15);
+  box-shadow: 0 0 0 3px rgba(0, 168, 132, 0.2);
 }
 select {
   appearance: none;
@@ -269,7 +282,7 @@ input[type="checkbox"], input[type="radio"] {
   font-size: 13px;
 }
 .tab-btn:hover { background: var(--bg-3); color: var(--fg); }
-.tab-btn.active { background: var(--bg-3); color: var(--fg); }
+.tab-btn.active { background: var(--bg-3); color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
 
 .groups-screen {
   flex: 1;
@@ -387,7 +400,7 @@ input[type="checkbox"], input[type="radio"] {
 .stat-failed { background: rgba(217, 89, 108, 0.2); color: var(--danger); }
 .stat-retrying { background: rgba(168, 85, 247, 0.2); color: #a855f7; }
 .stat-skipped { background: var(--bg-3); color: var(--muted); }
-.stat-greeting, .stat-intro, .stat-hook, .stat-optout { background: rgba(74, 141, 244, 0.2); color: var(--accent); }
+.stat-greeting, .stat-intro, .stat-hook, .stat-optout { background: rgba(83, 189, 235, 0.18); color: var(--info); }
 
 .three-col {
   flex: 1;
@@ -444,15 +457,15 @@ input[type="checkbox"], input[type="radio"] {
 .conversation-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex: 1; }
 .conv-item { padding: 10px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .conv-item:hover { background: var(--bg-3); }
-.conv-item.selected { background: var(--bg-3); border-left: 3px solid var(--accent); padding-left: 13px; }
+.conv-item.selected { background: var(--bg-3); }
 .conv-row1 { display: flex; justify-content: space-between; gap: 8px; }
 .conv-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-time { color: var(--muted); font-size: 12px; flex-shrink: 0; }
 .conv-preview { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
 .badge-private {
   display: inline-block;
-  background: rgba(74, 141, 244, 0.15);
-  color: var(--accent);
+  background: rgba(83, 189, 235, 0.15);
+  color: var(--info);
   padding: 1px 6px;
   border-radius: 8px;
   font-size: 10px;
@@ -462,28 +475,61 @@ input[type="checkbox"], input[type="radio"] {
 }
 .conversation-list .empty { padding: 16px; color: var(--muted); }
 
-.chat-thread { display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
-.chat-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 12px; }
-.chat-header h3 { margin: 0; }
-.chat-subtitle { color: var(--muted); font-size: 12px; }
+/* ===== Área de chat estilo WhatsApp (tema escuro) ===== */
+.chat-thread { display: flex; flex-direction: column; min-height: 0; background: var(--wa-bg); }
+/* Header no tom "painel" do WhatsApp (barra de cima), com sombrinha sutil no lugar da borda. */
+.chat-header {
+  padding: 10px 16px; background: var(--wa-panel); color: var(--wa-text);
+  display: flex; align-items: baseline; gap: 12px;
+  /* position+z-index: sem eles o z-index é inerte e a sombra some sob o fundo opaco de .messages. */
+  position: relative; z-index: 1; box-shadow: 0 1px 3px rgba(11,20,26,0.4);
+}
+.chat-header h3 { margin: 0; font-size: 16px; font-weight: 500; }
+.chat-subtitle { color: var(--wa-subtle); font-size: 12px; }
+/* Sem background aqui: .empty-pane é compartilhado com o painel de contatos (App.tsx). O fundo do
+   chat vazio vem de .chat-thread (var --wa-bg); o do painel de contatos, de .contact-panel. */
 .empty-pane { display: flex; align-items: center; justify-content: center; color: var(--muted); }
 
-.messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
-.msg { max-width: 70%; padding: 8px 12px; border-radius: 8px; word-break: break-word; }
-.msg.inbound { background: var(--inbound); align-self: flex-start; }
-.msg.outbound { background: var(--outbound); align-self: flex-end; }
-.msg-author { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+/* Fundo teal-escuro + padrão de rabiscos sutil (SVG inline, ~3,5% de opacidade). O padrão fica
+   FIXO enquanto as mensagens rolam (background-attachment padrão do container que rola). */
+.messages {
+  flex: 1; overflow-y: auto; padding: 14px 6%; display: flex; flex-direction: column; gap: 4px;
+  background-color: var(--wa-bg);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.035' stroke-width='2'%3E%3Cpath d='M24 36h40a7 7 0 0 1 7 7v20a7 7 0 0 1-7 7H40l-12 9v-9h-4a7 7 0 0 1-7-7V43a7 7 0 0 1 7-7z'/%3E%3Cpath d='M186 44c-7-11-25-6-25 7 0 12 25 24 25 24s25-12 25-24c0-13-18-18-25-7z'/%3E%3Ccircle cx='50' cy='170' r='24'/%3E%3Cpath d='M40 176q10 9 20 0'/%3E%3Cpath d='M182 150l5 14 14 5-14 5-5 14-5-14-14-5 14-5z'/%3E%3Ccircle cx='120' cy='214' r='9'/%3E%3C/g%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Ccircle cx='42' cy='163' r='2.4'/%3E%3Ccircle cx='58' cy='163' r='2.4'/%3E%3C/g%3E%3C/svg%3E");
+}
+/* Balão: cantos arredondados 7.5px, com o canto de cima "quebrado" do lado do rabinho (tail). */
+.msg {
+  position: relative; max-width: 65%; padding: 6px 9px 8px; border-radius: 7.5px;
+  word-break: break-word; color: var(--wa-text); font-size: 14.2px; line-height: 1.32;
+  box-shadow: 0 1px 0.5px rgba(11,20,26,0.2);
+}
+.msg.inbound { background: var(--wa-in); align-self: flex-start; border-top-left-radius: 0; }
+.msg.outbound { background: var(--wa-out); align-self: flex-end; border-top-right-radius: 0; }
+/* Rabinho triangular no canto de cima, na cor do balão (recebido à esquerda, enviado à direita). */
+.msg.inbound::before, .msg.outbound::before { content: ""; position: absolute; top: 0; }
+.msg.inbound::before { left: -7px; border-top: 6px solid var(--wa-in); border-left: 7px solid transparent; }
+.msg.outbound::before { right: -7px; border-top: 6px solid var(--wa-out); border-right: 7px solid transparent; }
+.msg-author { font-size: 12.5px; font-weight: 500; color: var(--wa-tick); margin-bottom: 2px; }
 .msg-body { white-space: pre-wrap; }
-.msg-time { font-size: 10px; color: rgba(255,255,255,0.5); margin-top: 4px; text-align: right; }
+.msg-time { font-size: 11px; color: var(--wa-time); margin-top: 2px; text-align: right; }
 /* Selo de entrega (ack) da nossa mensagem. Falha em vermelho e visível — é o sintoma que estava mudo. */
-.msg-ack { margin-left: 6px; }
-.msg-ack.d-pending, .msg-ack.d-sent, .msg-ack.d-delivered { color: rgba(255,255,255,0.5); }
-.msg-ack.d-read { color: #3b82f6; }
+.msg-ack { margin-left: 4px; }
+.msg-ack.d-pending, .msg-ack.d-sent, .msg-ack.d-delivered { color: var(--wa-time); }
+.msg-ack.d-read { color: var(--wa-tick); }
 .msg-ack.d-failed { color: #ef4444; font-weight: 700; }
 
-.composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); background: var(--bg-2); }
-.composer textarea { flex: 1; resize: vertical; min-height: 40px; }
-.composer button { align-self: flex-end; }
+/* Barra de digitação no tom painel; caixa arredondada e botão enviar verde-teal do WhatsApp. */
+.composer { display: flex; gap: 8px; padding: 8px 12px; align-items: flex-end; background: var(--wa-panel); }
+.composer textarea {
+  flex: 1; resize: none; min-height: 42px; max-height: 120px;
+  background: var(--wa-input); border: 0; border-radius: 8px; color: var(--wa-text);
+  padding: 10px 12px;
+}
+.composer textarea:focus { box-shadow: none; }
+.composer textarea::placeholder { color: var(--wa-subtle); }
+.composer button { align-self: flex-end; background: var(--wa-send); border-radius: 8px; min-height: 42px; }
+.composer button:hover:not(:disabled) { background: var(--wa-send-hover); }
+.composer button:disabled { background: var(--wa-input); color: var(--wa-subtle); }
 
 .contact-panel { border-left: 1px solid var(--border); background: var(--bg-2); padding: 16px; overflow-y: auto; }
 .contact-panel h2 { margin: 0 0 4px; }
@@ -628,9 +674,9 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
   font-size: 11px; background: var(--bg-3); color: var(--muted); border: 1px solid var(--border);
   vertical-align: middle; white-space: nowrap;
 }
-/* "Respondeu": mesmo padrão de chip do status "Enviada" (.stat-chip), com cor própria (azul do
-   accent) pra não se confundir com o verde do enviado quando aparecem lado a lado. */
-.stat-engaged { margin-left: 6px; background: rgba(74, 141, 244, 0.2); color: var(--accent); white-space: nowrap; }
+/* "Respondeu": mesmo padrão de chip do status "Enviada" (.stat-chip), com cor própria (azul --info)
+   pra NÃO se confundir com o verde do "Enviado" nem com o verde do accent quando aparecem lado a lado. */
+.stat-engaged { margin-left: 6px; background: rgba(83, 189, 235, 0.18); color: var(--info); white-space: nowrap; }
 .contacts-table .mono { font-family: ui-monospace, monospace; }
 .reactivate-btn { padding: 3px 10px; font-size: 12px; background: var(--bg-3); color: var(--fg); }
 .reactivate-btn:hover { background: var(--accent); }
@@ -968,7 +1014,7 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
   border: 1px solid var(--border);
   white-space: nowrap;
 }
-.chip-added { background: rgba(74, 141, 244, 0.15); color: var(--accent); border-color: transparent; }
+.chip-added { background: rgba(83, 189, 235, 0.15); color: var(--info); border-color: transparent; }
 .chip-corrected { background: rgba(245, 158, 11, 0.15); color: var(--warn); border-color: transparent; }
 .chip-dup { color: var(--muted); }
 .chip-invalid { background: rgba(217, 89, 108, 0.15); color: var(--danger); border-color: transparent; }
