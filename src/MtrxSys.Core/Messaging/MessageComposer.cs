@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
@@ -23,6 +22,13 @@ public sealed partial class MessageComposer(
     [GeneratedRegex(@"\bsair\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex OptOutKeywordRegex();
 
+    // Cópia FIXA do bloco de opt-out anexado quando o link de 1 clique está ligado (prod). Mora no código
+    // de propósito, como fonte única: é texto sensível a ban — o wording certo faz a pessoa responder
+    // "SAIR" em vez de denunciar/bloquear. O DispatchOptions.OptOutFooter (configurável) é só o texto de
+    // fallback pra quando o link está DESLIGADO (sem OptOut:PublicBaseUrl, ex.: localhost).
+    private const string MergedOptOut = "Para não receber mais mensagens, responda SAIR ou toque aqui:";
+    private const string LinkOnlyOptOut = "Para sair, toque aqui:";
+
     public async Task<string> ComposeFromTemplateIdAsync(Guid templateId, Contact contact, CancellationToken ct)
     {
         var template = await templates.GetByIdAsync(templateId, ct)
@@ -37,8 +43,10 @@ public sealed partial class MessageComposer(
         return AppendOptOutIfFirstContact(text, contact);
     }
 
-    // Anexa o rodapé de opt-out só na 1ª mensagem a cada contato (LastSentAt ainda null) e só
+    // Anexa o bloco de opt-out só na 1ª mensagem a cada contato (LastSentAt ainda null) e só
     // se o texto ainda não menciona "sair" (não duplica quando o operador já escreveu no template).
+    // São DOIS caminhos pro mesmo destino: responder "SAIR" (detectado no webhook) e o link de 1 clique.
+    // Quando os dois estão ativos, saem numa FRASE SÓ ligada por "ou" (em vez de dois blocos repetitivos).
     private string AppendOptOutIfFirstContact(string text, Contact contact)
     {
         // Rodapé/link só na 1ª mensagem a cada contato (LastSentAt ainda null).
@@ -46,32 +54,30 @@ public sealed partial class MessageComposer(
         {
             return text;
         }
-        // Rodapé de texto ("responda SAIR"): só se configurado e o template ainda não menciona "sair".
+        // "Oferecer o texto de SAIR?": só se o footer (fallback) está configurado E o template ainda não
+        // menciona "sair" (não duplica quando o operador já escreveu SAIR — que é o caso recomendado na UI).
         var footer = dispatchOptions.Value.OptOutFooter;
-        var appendFooter = !string.IsNullOrWhiteSpace(footer) && !OptOutKeywordRegex().IsMatch(text);
+        var textOptOut = !string.IsNullOrWhiteSpace(footer) && !OptOutKeywordRegex().IsMatch(text);
         // Link de 1 clique: só quando há URL pública (servidor). Em localhost (vazio) fica de fora.
-        var link = BuildOptOutLink(contact);
+        var url = BuildOptOutUrl(contact);
 
-        if (!appendFooter && link is null)
+        var block = (url, textOptOut) switch
         {
-            return text;
-        }
-        var sb = new StringBuilder(text);
-        if (appendFooter)
-        {
-            sb.Append("\n\n").Append(footer);
-        }
-        if (link is not null)
-        {
-            sb.Append("\n\n").Append(link);
-        }
-        return sb.ToString();
+            // Os dois caminhos ativos → uma frase só (cópia fixa), "responda SAIR ou toque aqui: <link>".
+            (not null, true) => $"{MergedOptOut}\n{url}",
+            // Só o link (footer vazio OU o template já menciona "sair") — não repete o "responda SAIR".
+            (not null, false) => $"{LinkOnlyOptOut}\n{url}",
+            // Sem link (localhost): só o rodapé de texto CONFIGURÁVEL (é onde o OptOutFooter tem efeito).
+            (null, true) => footer,
+            _ => null,
+        };
+        return block is null ? text : $"{text}\n\n{block}";
     }
 
-    // "Para sair, toque aqui:\n{baseUrl}/sair?t={token}" — a URL vai em LINHA PRÓPRIA (mais limpa e
-    // menos "suspeita" que colada no texto), com token assinado por contato (validade 90d).
+    // "{baseUrl}/sair?t={token}" com token assinado por contato (validade 90d). A URL sai em LINHA
+    // PRÓPRIA no bloco de opt-out (mais limpa e menos "suspeita" que colada no texto).
     // null quando OptOut:PublicBaseUrl está vazio (link desligado — estado localhost).
-    private string? BuildOptOutLink(Contact contact)
+    private string? BuildOptOutUrl(Contact contact)
     {
         var baseUrl = optOutOptions.Value.PublicBaseUrl;
         if (string.IsNullOrWhiteSpace(baseUrl))
@@ -79,7 +85,7 @@ public sealed partial class MessageComposer(
             return null;
         }
         var token = optOutSigner.Sign(contact.Id, DateTimeOffset.UtcNow.AddDays(90));
-        return $"Para sair, toque aqui:\n{baseUrl.TrimEnd('/')}/sair?t={token}";
+        return $"{baseUrl.TrimEnd('/')}/sair?t={token}";
     }
 
     private static string SubstitutePlaceholders(string text, Contact contact)

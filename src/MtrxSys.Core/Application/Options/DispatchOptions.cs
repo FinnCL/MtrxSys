@@ -14,9 +14,12 @@ public sealed class DispatchOptions
     public int TypingMaxSeconds { get; set; } = 5;
     public double TypingJitter { get; set; } = 0.15;
 
-    // Rodapé de opt-out anexado SÓ na 1ª mensagem a cada contato (quando LastSentAt == null).
+    // Texto de opt-out (fallback) anexado à 1ª mensagem SÓ quando o link de "sair" está DESLIGADO
+    // (OptOut:PublicBaseUrl vazio — ex.: localhost). Com o link LIGADO (prod), a cópia é FIXA no
+    // MessageComposer (MergedOptOut/LinkOnlyOptOut, por ser sensível a ban) e este valor NÃO é usado.
+    // Também não sai quando o template já menciona "sair" (caso recomendado na UI de campanhas).
     // Dá uma saída explícita ("responda SAIR") em vez de a pessoa ir direto no denunciar/bloquear.
-    // String vazia desliga o recurso.
+    // String vazia desliga o texto (o link, se houver PublicBaseUrl, continua).
     public string OptOutFooter { get; set; } = "Se não quiser mais receber mensagens, responda SAIR.";
 
     // Para o ciclo de disparo se a sessão WAHA do chip não estiver "Working" (caiu/deslogou),

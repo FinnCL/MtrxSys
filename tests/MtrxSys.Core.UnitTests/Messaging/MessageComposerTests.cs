@@ -132,6 +132,34 @@ public sealed class MessageComposerTests
     }
 
     [Fact]
+    public void Compose_merges_text_and_link_into_single_optout_sentence()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
+        var c = BuildContact(); // 1ª mensagem, link ligado + footer configurado
+
+        var result = Build("Responda SAIR.", "https://m.test").Compose(t, c);
+
+        // Um bloco só: "responda SAIR ou toque aqui:\n<link>" — sem rodapé de texto separado.
+        result.Should().StartWith(
+            "Oi!\n\nPara não receber mais mensagens, responda SAIR ou toque aqui:\nhttps://m.test/sair?t=");
+        result.Should().NotContain("Responda SAIR.", "o rodapé de texto é absorvido pela frase unificada");
+        result.Should().NotContain("Para sair, toque aqui:", "não sai o bloco só-link quando o texto entra junto");
+    }
+
+    [Fact]
+    public void Compose_link_only_when_template_already_mentions_sair()
+    {
+        var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi! Responda SAIR p/ parar.");
+        var c = BuildContact();
+
+        var result = Build("Responda SAIR.", "https://m.test").Compose(t, c);
+
+        // Template já fala em "sair" → não repete o "responda SAIR", só o link.
+        result.Should().StartWith("Oi! Responda SAIR p/ parar.\n\nPara sair, toque aqui:\nhttps://m.test/sair?t=");
+        result.Should().NotContain("responda SAIR ou toque aqui");
+    }
+
+    [Fact]
     public void Compose_no_link_when_public_base_url_empty()
     {
         var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
