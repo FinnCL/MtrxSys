@@ -26,7 +26,7 @@ public sealed partial class MessageComposer(
     // de propósito, como fonte única: é texto sensível a ban — o wording certo faz a pessoa responder
     // "SAIR" em vez de denunciar/bloquear. O DispatchOptions.OptOutFooter (configurável) é só o texto de
     // fallback pra quando o link está DESLIGADO (sem OptOut:PublicBaseUrl, ex.: localhost).
-    private const string MergedOptOut = "Para não receber mais mensagens, responda SAIR ou toque aqui:";
+    private const string MergedOptOut = "Para não receber mais mensagens, responda *SAIR* ou toque aqui:";
     private const string LinkOnlyOptOut = "Para sair, toque aqui:";
 
     public async Task<string> ComposeFromTemplateIdAsync(Guid templateId, Contact contact, CancellationToken ct)

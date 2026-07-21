@@ -139,9 +139,9 @@ public sealed class MessageComposerTests
 
         var result = Build("Responda SAIR.", "https://m.test").Compose(t, c);
 
-        // Um bloco só: "responda SAIR ou toque aqui:\n<link>" — sem rodapé de texto separado.
+        // Um bloco só: "responda *SAIR* ou toque aqui:\n<link>" — sem rodapé de texto separado.
         result.Should().StartWith(
-            "Oi!\n\nPara não receber mais mensagens, responda SAIR ou toque aqui:\nhttps://m.test/sair?t=");
+            "Oi!\n\nPara não receber mais mensagens, responda *SAIR* ou toque aqui:\nhttps://m.test/sair?t=");
         result.Should().NotContain("Responda SAIR.", "o rodapé de texto é absorvido pela frase unificada");
         result.Should().NotContain("Para sair, toque aqui:", "não sai o bloco só-link quando o texto entra junto");
     }

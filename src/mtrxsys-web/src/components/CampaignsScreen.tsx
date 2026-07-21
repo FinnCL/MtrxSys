@@ -16,10 +16,11 @@ import { ConfirmDialog } from "./ConfirmDialog";
 // pra primeira mensagem da lista.
 const SELECTED_MESSAGE_STORAGE_KEY = "mtrx.campaigns.selectedMessageId";
 
-// Texto inicial do campo: já traz a saudação em spintax e a linha de saída (SAIR),
-// que deve estar sempre presente. O usuário escreve o miolo da mensagem no meio.
+// Texto inicial do campo: saudação em spintax + miolo. NÃO inclui a linha de "SAIR" — o sistema
+// anexa a saída de opt-out (responda SAIR + link de 1 clique, num bloco só) automaticamente na 1ª
+// mensagem a cada contato. Escrever "SAIR" aqui só duplicaria (viraria dois blocos).
 const DEFAULT_DRAFT =
-  "{Oi|Olá|E aí}, {tudo bem|tudo certo}? {Tenho|Surgiu|Apareceu} {uma novidade|uma oferta|uma promoção} {que pode te interessar|que talvez te interesse|especial pra você}.\n\n{Entre no link e saiba mais|Dá uma olhada aqui|Confira os detalhes}: [cole seu link aqui]\n\nResponda SAIR para não receber mais mensagens.";
+  "{Oi|Olá|E aí}, {tudo bem|tudo certo}? {Tenho|Surgiu|Apareceu} {uma novidade|uma oferta|uma promoção} {que pode te interessar|que talvez te interesse|especial pra você}.\n\n{Entre no link e saiba mais|Dá uma olhada aqui|Confira os detalhes}: [cole seu link aqui]";
 
 // Miniatura de uma mensagem com imagem. Busca o blob com auth (o endpoint exige
 // Bearer, então <img src> direto daria 401) e usa um object URL, revogado ao desmontar.
@@ -579,7 +580,8 @@ export function CampaignsScreen() {
             diferentes ("Oi" num, "Olá" noutro): isso manda texto idêntico pra muita gente. Só crie um{" "}
             <strong>2º modelo</strong> quando o <strong>corpo</strong> da mensagem for diferente (outro
             argumento), não pra trocar a saudação. Como seus contatos não têm nome, prefira saudações sem
-            nome. A linha <strong>"SAIR"</strong> já vem pronta no campo: mantenha ela.
+            nome. <strong>Não</strong> escreva a linha de "SAIR": o sistema já anexa a saída
+            (responda <strong>SAIR</strong> ou toque no link, num bloco só) automaticamente na 1ª mensagem.
           </p>
           <p className="muted small">
             <strong>Link:</strong> cole direto no texto que o WhatsApp gera a prévia sozinho. Prefira o{" "}
@@ -630,7 +632,7 @@ export function CampaignsScreen() {
             className="message-box"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Escreva uma mensagem (ex.: {Oi|Olá}! ... responda SAIR pra não receber.)"
+            placeholder="Escreva uma mensagem (ex.: {Oi|Olá}! Confira: [seu link])"
             rows={4}
           />
           <button type="button" onClick={() => void addMessage()} disabled={adding || !draft.trim()}>
