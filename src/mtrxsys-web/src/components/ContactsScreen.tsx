@@ -226,6 +226,11 @@ export function ContactsScreen() {
           Clique numa lista para abrir os contatos salvos dela. Lista é só uma etiqueta pra organizar
           seus contatos aqui, não é o grupo do WhatsApp.
         </p>
+        <p className="muted small">
+          <strong>Aquecer:</strong> na fase híbrida (dia 4+) o robô <strong>reenvia a campanha todo
+          dia</strong> pra estes contatos (frios recebem só 1×). Marque só os <strong>seus números / de
+          confiança</strong> — muitos marcados ocupam o teto do dia e travam o alcance nos frios novos.
+        </p>
       </header>
 
       {error && <p className="error">{error}</p>}
@@ -260,7 +265,7 @@ export function ContactsScreen() {
                             <th>Nome</th>
                             <th>Telefone</th>
                             <th>Status</th>
-                            <th title="Círculo de Aquecimento: na fase híbrida (dia 4+) o robô reenvia a campanha pra estes contatos (seus/de confiança) junto com os frios novos. Marque uma vez e fica.">Aquecer</th>
+                            <th title="Reenvia a campanha pra este contato TODO DIA na fase híbrida (dia 4+); frios recebem só 1×. Marque só os seus números / de confiança.">Aquecer</th>
                             <th>Ações</th>
                           </tr>
                         </thead>
@@ -293,7 +298,7 @@ export function ContactsScreen() {
                                   checked={circle.has(c.phoneE164)}
                                   onChange={() => void toggleCircle(c)}
                                   disabled={!!c.optOutAt}
-                                  title="Círculo de Aquecimento (reenvio na fase híbrida)"
+                                  title="Aquecer: reenvia a campanha pra este contato todo dia na fase híbrida (só pros seus números / de confiança)."
                                 />
                               </td>
                               <td>
@@ -437,6 +442,9 @@ export function ContactsScreen() {
                 const list = await api.listContacts({ groupTag: expanded });
                 setContactsByGroup((prev) => ({ ...prev, [expanded]: list }));
               }
+              // Nos primeiros dias do aquecimento o backend já inscreve os novos no Círculo de
+              // Aquecimento (WarmupSeedEnroller) → recarrega o círculo pra o "Aquecer" já vir marcado.
+              setCircle(new Map((await api.listWarmupCircle()).map((m) => [m.phone, m.id])));
             } catch (ex) {
               // O cadastro já foi salvo; só o refresh da lista falhou. Mostra o erro sem derrubar nada.
               setError(ex instanceof Error ? ex.message : String(ex));

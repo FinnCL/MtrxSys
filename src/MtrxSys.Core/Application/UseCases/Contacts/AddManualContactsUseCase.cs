@@ -15,7 +15,8 @@ public sealed class AddManualContactsUseCase(
     IContactRepository contacts,
     IUnitOfWork uow,
     IClock clock,
-    BrazilPhoneValidator phones)
+    BrazilPhoneValidator phones,
+    WarmupSeedEnroller seed)
 {
     /// <summary>Grupo virtual onde caem os números avulsos (sem grupo do WhatsApp).</summary>
     public const string DefaultGroupTag = "Avulsos";
@@ -69,6 +70,9 @@ public sealed class AddManualContactsUseCase(
         var added = 0;
         var duplicated = 0;
         var corrected = 0;
+        // Telefones dos contatos NOVOS deste lote — pra auto-inscrever no Círculo de Aquecimento se o
+        // chip está nos primeiros dias do aquecimento (ver WarmupSeedEnroller). Manuais entram sem nome.
+        var newlyCreated = new List<(string PhoneE164, string? Name)>();
 
         foreach (var (index, raw, phone, correction) in pending)
         {
@@ -97,6 +101,7 @@ public sealed class AddManualContactsUseCase(
                 optInAt: clock.UtcNow);
             await contacts.AddAsync(contact, ct);
             known[phone.E164] = contact; // número repetido no mesmo lote reaproveita o contato
+            newlyCreated.Add((phone.E164, null));
             added++;
             if (correction is not null)
             {
@@ -109,6 +114,9 @@ public sealed class AddManualContactsUseCase(
             }
         }
 
+        // Semente do Círculo de Aquecimento: contatos introduzidos nos primeiros dias do aquecimento
+        // entram no círculo (persistido junto no commit abaixo). No-op fora da janela ou sem novos.
+        await seed.EnrollIfSeedPhaseAsync(newlyCreated, ct);
         await uow.SaveChangesAsync(ct);
         return new ManualImportResult(
             Total: rawNumbers.Count,

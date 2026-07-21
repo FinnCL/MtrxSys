@@ -1,6 +1,8 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
+using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Validation;
@@ -82,7 +84,9 @@ public sealed class ManualContactsE2ETests : IAsyncLifetime
     {
         var repo = new ContactRepository(_db);
         var uow = new UnitOfWork(_db);
-        var useCase = new AddManualContactsUseCase(repo, uow, new FixedClock(), _phones);
+        var useCase = new AddManualContactsUseCase(repo, uow, new FixedClock(), _phones,
+            new WarmupSeedEnroller(new SystemStateRepository(_db), new WarmupCircleRepository(_db),
+                Options.Create(new DispatchOptions()), new FixedClock()));
         var now = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
         // --- Seed (estado pré-existente no banco) ---
