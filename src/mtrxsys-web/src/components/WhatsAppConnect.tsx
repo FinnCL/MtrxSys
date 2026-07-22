@@ -256,9 +256,12 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
       <div className="status-row">
         <span className={`status-dot status-${status}`} />
         <span>Conexão: {labelFor(status)}</span>
-        {/* Escape hatch manual: aparece quando NÃO está conectado e NÃO está parado (que já tem
-            "Iniciar sessão"). Reinicia sem perder o número — pra quando a conexão trava. */}
-        {status !== "Working" && status !== "Stopped" && (
+        {/* Escape hatch manual: reinicia sem perder o número quando a conexão trava. Escondido quando
+            NÃO faz sentido ou DUPLICARIA um botão do bloco abaixo: conectado (Working), parado (Stopped,
+            já tem "Iniciar sessão"), Failed (o bloco tem "Tentar de novo") e STARTING esgotado (o bloco
+            tem "Reiniciar sessão"). Sobra pra Starting normal / ScanQrCode / Unknown. */}
+        {status !== "Working" && status !== "Stopped" && status !== "Failed"
+          && !(status === "Starting" && startingRestarts >= MAX_STARTING_RESTARTS) && (
           <button
             type="button"
             className="wa-restart-btn"

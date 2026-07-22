@@ -298,29 +298,6 @@ public sealed class DispatchEngine(
                 }
                 var text = composer.Compose(template, contact);
 
-                // ANTI-463 (frio): antes de mandar pra quem NUNCA respondeu, garante o contato na agenda
-                // (Google) do chip — o aparelho primário sincroniza e o companion herda o tctoken. Recém
-                // criado: ADIA o job (grace) pro sync propagar, em vez de mandar já e tomar 463 (que
-                // derruba a sessão). Falha ao salvar: também adia (não arrisca). Engajado/círculo já tem
-                // tctoken → passa direto. Só roda com o provider ligado (AddressBookSync:Enabled).
-                if (addressBook.IsEnabled && !isCircle && !ContactStages.IsEngaged(contact.Stage))
-                {
-                    var saved = await addressBook.EnsureSavedAsync(contact.Phone.E164, contact.Name, ct);
-                    if (saved is AddressBookSaveResult.Created or AddressBookSaveResult.Failed)
-                    {
-                        var reason = saved == AddressBookSaveResult.Created
-                            ? "contato recém-salvo na agenda; aguardando sync p/ evitar 463"
-                            : "falha ao salvar contato na agenda; nova tentativa depois (evita 463)";
-                        job.Defer(clock.UtcNow.AddSeconds(addressBook.GraceSeconds), reason);
-                        await uow.SaveChangesAsync(ct);
-                        retried++;
-                        log.LogInformation(
-                            "Frio {Phone}: {Reason} (adiado {Sec}s).", contact.Phone.E164, reason, addressBook.GraceSeconds);
-                        continue;
-                    }
-                    // AlreadyPresent / NotSupported → já sincronizado (ou inerte): segue pro envio.
-                }
-
                 // Confere se o número EXISTE no WhatsApp — CEDO, antes de gastar typing/delay. Disparar
                 // pra número inexistente falha (erro 463) E é gatilho de ban — foi o que restringiu a
                 // conta no teste. Inexistente → pula (não arrisca o chip). Checagem indisponível (null)
@@ -368,6 +345,30 @@ public sealed class DispatchEngine(
                 // Só chega aqui com Exists=true: usa o chatId CANÔNICO do WhatsApp (resolve o 9º dígito);
                 // se a checagem confirmou existência mas não devolveu chatId, o E164 já foi validado.
                 var sendTarget = numberCheck.ChatId ?? contact.Phone.E164;
+
+                // ANTI-463 (frio): DEPOIS de confirmar que o número existe no WhatsApp, garante o contato
+                // na agenda (Google) do chip — o aparelho primário sincroniza e o companion herda o
+                // tctoken. Recém-criado: ADIA o job (grace) pro sync propagar, em vez de mandar já e tomar
+                // 463 (que derruba a sessão). Falha ao salvar: também adia (não arrisca). Fica DEPOIS do
+                // check-exists de propósito: não polui a agenda com número inexistente nem gasta cota à
+                // toa. Engajado/círculo já tem tctoken → nem entra aqui. Só roda com o provider ligado.
+                if (addressBook.IsEnabled && !isCircle && !ContactStages.IsEngaged(contact.Stage))
+                {
+                    var saved = await addressBook.EnsureSavedAsync(contact.Phone.E164, contact.Name, ct);
+                    if (saved is AddressBookSaveResult.Created or AddressBookSaveResult.Failed)
+                    {
+                        var reason = saved == AddressBookSaveResult.Created
+                            ? "contato recém-salvo na agenda; aguardando sync p/ evitar 463"
+                            : "falha ao salvar contato na agenda; nova tentativa depois (evita 463)";
+                        job.Defer(clock.UtcNow.AddSeconds(addressBook.GraceSeconds), reason);
+                        await uow.SaveChangesAsync(ct);
+                        retried++;
+                        log.LogInformation(
+                            "Frio {Phone}: {Reason} (adiado {Sec}s).", contact.Phone.E164, reason, addressBook.GraceSeconds);
+                        continue;
+                    }
+                    // AlreadyPresent / NotSupported → já sincronizado (ou inerte): segue pro envio.
+                }
 
                 var delayBefore = delay.NextDelay();
                 var typingMs = await typing.SimulateAsync(sessionId, sendTarget, text, ct);
