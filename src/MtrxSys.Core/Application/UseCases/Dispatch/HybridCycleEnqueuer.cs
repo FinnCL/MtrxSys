@@ -136,8 +136,13 @@ public sealed class HybridCycleEnqueuer(
         }
         cold = cold.Take(coldTake).ToList();
 
-        // 5) INTERCALA: abre com círculo, espalha o resto entre os frios (Bresenham — sem bloco).
-        var seq = DispatchInterleave.Interleave(circleContacts, cold);
+        // 5) INTERCALA: o SEED (círculo re-enviável + os engajados "Respondeu" que caíram nos frios) ABRE
+        //    a fila; os frios NÃO-engajados são espalhados no meio (Bresenham). "Respondeu primeiro" é por
+        //    STATUS (igual o Disparar manual), sem depender de estar marcado. O RENOVAR (re-disparo)
+        //    segue sendo SÓ do círculo (o LastSentAt foi zerado só pra ele, no passo 2).
+        var engagedCold = cold.Where(c => ContactStages.IsEngaged(c.Stage)).ToList();
+        var freshCold = cold.Where(c => !ContactStages.IsEngaged(c.Stage)).ToList();
+        var seq = DispatchInterleave.Interleave([.. circleContacts, .. engagedCold], freshCold);
         if (seq.Count == 0)
         {
             log.LogInformation("Híbrido: nada pra enfileirar (sem círculo elegível nem frios).");

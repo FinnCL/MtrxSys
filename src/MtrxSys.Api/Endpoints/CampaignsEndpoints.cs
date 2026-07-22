@@ -124,7 +124,6 @@ public static class CampaignsEndpoints
             ISystemStateRepository state,
             WarmingPhaseService warmingPhase,
             ISharedPhoneLedger ledger,
-            IWarmupCircleRepository circle,
             ILoggerFactory logFactory,
             CancellationToken ct) =>
         {
@@ -203,23 +202,19 @@ public static class CampaignsEndpoints
             // (já enviado/opt-out em OUTRO chip) — evita enfileirar jobs que o motor pularia e mantém a
             // contagem coerente. Fonte única (FilterOutSuppressedAsync); no-op em Observe/Off.
             var targets = await ledger.FilterOutSuppressedAsync(await contacts.ListByFilterAsync(filter, ct), ct);
-            // DIA 4+ (híbrido E maduro): o "seed" (Círculo = quem RESPONDEU, auto-marcado) ABRE a fila e
-            // intercala com os frios (Bresenham, mesma regra do reset diário) → 1º da fila = um do seed.
-            // Nos dias 1-3 (responder-only) não reordena: a fila já é 100% engajado. Círculo vazio ou sem
-            // seed no público → no-op. (Obs.: o RENOVAR diário do círculo é só no híbrido — no maduro o
-            // reset automático fica desligado; aqui é só a ORDEM.)
+            // DIA 4+ (híbrido E maduro): quem RESPONDEU (engajado) ABRE a fila e intercala com os frios
+            // (Bresenham) → 1º da fila = um "Respondeu". Prioriza por STATUS (não pelo círculo/marcação):
+            // ordenar não tem risco de ban, então vale pra TODO responder na hora, sem depender de estar
+            // marcado. Nos dias 1-3 (responder-only) não reordena: a fila já é 100% engajado. Fila 100%
+            // engajado ou 100% fria → no-op. (O RENOVAR diário — re-disparo — segue sendo só do círculo,
+            // no híbrido; aqui é só a ORDEM.)
             if (warming.Stage != WarmingStage.ResponderOnly)
             {
-                var circlePhones = (await circle.ListAsync(ct))
-                    .Select(m => m.PhoneE164).ToHashSet(StringComparer.Ordinal);
-                if (circlePhones.Count > 0)
+                var seed = targets.Where(c => ContactStages.IsEngaged(c.Stage)).ToList();
+                if (seed.Count > 0 && seed.Count < targets.Count)
                 {
-                    var seed = targets.Where(c => circlePhones.Contains(c.Phone.E164)).ToList();
-                    if (seed.Count > 0)
-                    {
-                        var cold = targets.Where(c => !circlePhones.Contains(c.Phone.E164)).ToList();
-                        targets = DispatchInterleave.Interleave(seed, cold);
-                    }
+                    var cold = targets.Where(c => !ContactStages.IsEngaged(c.Stage)).ToList();
+                    targets = DispatchInterleave.Interleave(seed, cold);
                 }
             }
             var now = clock.UtcNow;
