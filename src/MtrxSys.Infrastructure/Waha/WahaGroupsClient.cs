@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -11,40 +12,21 @@ namespace MtrxSys.Infrastructure.Waha;
 /// (decidir participação) — acoplamento explícito, não escondido.</summary>
 internal sealed class WahaGroupsClient(WahaHttp http, WahaSessionClient session, IMemoryCache? cache = null)
 {
+    // Máximo de checagens de /participants EM VOO ao listar grupos: uma conta pode estar em dezenas de
+    // grupos, e disparar todas de uma vez marteleria o WAHA local (timeouts/queda). Poucas-em-paralelo
+    // é o meio-termo entre latência e não sobrecarregar. Cacheado por ~10s por grupo (CachedIsMember).
+    private const int ParticipantCheckConcurrency = 8;
+
     public async Task<IReadOnlyList<WahaGroup>> ListGroupsAsync(string sessionId, CancellationToken ct)
     {
-        using var req = http.NewRequest(HttpMethod.Get, $"api/{WahaHttp.Esc(sessionId)}/groups");
-        using var resp = await http.SendAsync(req, ct);
-        // Sessão desconectada/não-WORKING: o WAHA responde 422. Degrada pra lista vazia (a aba "Grupos"
-        // mostra "nenhum grupo") em vez de estourar 500 — que ainda apareceria no browser como erro de
-        // CORS (o header some na resposta de erro). Mesmo padrão do GetMessagesAsync.
-        if (!resp.IsSuccessStatusCode)
+        var candidates = await ListGroupsRawAsync(sessionId, ct);
+        if (candidates.Count == 0)
         {
             return [];
         }
-        using var stream = await resp.Content.ReadAsStreamAsync(ct);
-        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-        var root = doc.RootElement;
 
-        // Engine NOWEB: /groups devolve um OBJETO indexado por JID ({ "<jid>@g.us": {...} }), com o
-        // nome em `subject` e os `participants` inline — e só lista grupos dos quais ainda sou
-        // membro. Mapeia direto, sem as chamadas extras de /participants que a WEBJS exige pra
-        // decidir a participação. (WEBJS devolvia um ARRAY; tratado no caminho abaixo.)
-        if (root.ValueKind == JsonValueKind.Object)
-        {
-            return root.EnumerateObject()
-                .Select(prop => WahaParsing.MapNowebGroup(prop.Value))
-                .Where(g => !string.IsNullOrEmpty(g.Id))
-                .ToList();
-        }
-
-        var body = root.Deserialize<List<GroupDto>>(WahaHttp.Json) ?? [];
-
-        // Esconde grupos onde o número conectado já não é mais membro (saiu pelo celular). A WAHA
-        // continua listando esse grupo enquanto o chat não for "Apagar conversa" no celular —
-        // sem o filtro, ele aparece aqui como se você ainda participasse. Tudo é melhor-esforço:
-        // se não der pra decidir com certeza, preserva o grupo (preferimos exibir um a mais do
-        // que esconder um real).
+        // Número conectado, pra decidir participação. Sem ele, não dá pra filtrar → devolve cru
+        // (melhor-esforço: preferimos exibir um a mais do que esconder um real).
         string? ownDigits = null;
         try
         {
@@ -58,52 +40,78 @@ internal sealed class WahaGroupsClient(WahaHttp http, WahaSessionClient session,
 #pragma warning disable CA1031
         catch
         {
-            // sessão degradada ou JSON inesperado: cai no fallback "não filtra".
+            // sessão degradada: cai no fallback "não filtra".
         }
 #pragma warning restore CA1031
-
-        // Sem o próprio número (ou nenhum grupo retornado), nada a filtrar — devolve cru.
-        if (string.IsNullOrEmpty(ownDigits) || body.Count == 0)
+        if (string.IsNullOrEmpty(ownDigits))
         {
-            return body
-                .Select(g => new WahaGroup(g.Id?.User ?? g.Id?.Server ?? "", g.Name ?? "", g.Participants?.Count))
-                .ToList();
+            return candidates;
         }
 
-        // A WAHA WEBJS NÃO inclui o array `Participants` no /groups overview (vem null), então
-        // pra decidir se ainda sou membro precisamos consultar /groups/{id}/participants de
-        // cada grupo. Em paralelo pra não serializar latência — uso esperado é localhost com
-        // poucos grupos.
-        var checks = await Task.WhenAll(body.Select(async g =>
-        {
-            var groupKey = g.Id?.User ?? g.Id?.Server ?? "";
-            if (string.IsNullOrEmpty(groupKey))
+        // FILTRO DE PARTICIPAÇÃO — vale pros DOIS engines. Antes o NOWEB PULAVA isto, assumindo que
+        // "/groups só lista grupos dos quais ainda sou membro" — FALSO: o cache de metadados do NOWEB
+        // (Baileys) mantém grupos que você SAIU ou que sumiram do aparelho, e eles voltavam na lista a
+        // cada Atualizar (inclusive DUPLICADOS: JID velho stale + o atual). Esconde quem já não é membro
+        // consultando os /participants ao vivo (lista vazia = saí), ciente de @lid e preservando em
+        // ambiguidade/erro. Cacheado ~10s por grupo pra não estourar o WAHA em Atualizar seguidos.
+        // Concorrência LIMITADA (ver ParticipantCheckConcurrency). A ordem não importa — o endpoint
+        // ordena por nome depois; por isso um ConcurrentBag basta.
+        var kept = new ConcurrentBag<WahaGroup>();
+        await Parallel.ForEachAsync(
+            candidates,
+            new ParallelOptions { MaxDegreeOfParallelism = ParticipantCheckConcurrency, CancellationToken = ct },
+            async (g, token) =>
             {
-                return (Group: g, IsMember: true);
-            }
-            try
-            {
-                var groupJid = WahaParsing.EnsureGroupJid(groupKey);
-                var isMember = await CachedIsMemberAsync(sessionId, groupJid, ownDigits, ct);
-                return (Group: g, IsMember: isMember);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
+                try
+                {
+                    if (await CachedIsMemberAsync(sessionId, WahaParsing.EnsureGroupJid(g.Id), ownDigits, token))
+                    {
+                        kept.Add(g);
+                    }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
 #pragma warning disable CA1031
-            catch
-            {
-                // falha na consulta deste grupo: mantém na lista (preserva comportamento atual)
-                return (Group: g, IsMember: true);
-            }
+                catch
+                {
+                    kept.Add(g); // falha na checagem deste grupo → preserva
+                }
 #pragma warning restore CA1031
-        }));
+            });
 
-        return checks
-            .Where(c => c.IsMember)
-            .Select(c => new WahaGroup(c.Group.Id?.User ?? c.Group.Id?.Server ?? "", c.Group.Name ?? "", c.Group.Participants?.Count))
-            .ToList();
+        return kept.ToList();
+    }
+
+    // Lista CRUA do /groups (os DOIS engines), SEM o filtro de participação. Uso interno onde filtrar
+    // ATRAPALHARIA — em especial resolver o grupo recém-ENTRADO (TryResolveJoinedGroupAsync): logo após
+    // o join você É membro, mas o /participants pode ainda não ter sincronizado; filtrar aqui esconderia
+    // o grupo recém-entrado e o import cairia pra 0 EM SILÊNCIO (quebrando a coleta anti-ban).
+    private async Task<List<WahaGroup>> ListGroupsRawAsync(string sessionId, CancellationToken ct)
+    {
+        using var req = http.NewRequest(HttpMethod.Get, $"api/{WahaHttp.Esc(sessionId)}/groups");
+        using var resp = await http.SendAsync(req, ct);
+        // Sessão desconectada/não-WORKING: o WAHA responde 422. Degrada pra lista vazia (a aba "Grupos"
+        // mostra "nenhum grupo") em vez de estourar 500. Mesmo padrão do GetMessagesAsync.
+        if (!resp.IsSuccessStatusCode)
+        {
+            return [];
+        }
+        using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        var root = doc.RootElement;
+        // Normaliza os DOIS formatos de engine: NOWEB devolve um OBJETO indexado por JID (nome em
+        // `subject`, participants inline); WEBJS devolve um ARRAY (nome em `name`).
+        return root.ValueKind == JsonValueKind.Object
+            ? root.EnumerateObject()
+                .Select(prop => WahaParsing.MapNowebGroup(prop.Value))
+                .Where(g => !string.IsNullOrEmpty(g.Id))
+                .ToList()
+            : (root.Deserialize<List<GroupDto>>(WahaHttp.Json) ?? [])
+                .Select(g => new WahaGroup(g.Id?.User ?? g.Id?.Server ?? "", g.Name ?? "", g.Participants?.Count))
+                .Where(g => !string.IsNullOrEmpty(g.Id))
+                .ToList();
     }
 
     // A checagem de participação é a parte CARA do ListGroups (1 GET /participants por grupo = N+1).
@@ -123,35 +131,51 @@ internal sealed class WahaGroupsClient(WahaHttp http, WahaSessionClient session,
         })!;
     }
 
-    // Decide se o número conectado ainda é participante deste grupo. Lê direto a resposta crua
-    // da WAHA (sem o filtro de @lid que ListGroupParticipantsAsync aplica), pra que o próprio
-    // número, se vier mascarado como LID, ainda detone o fallback ambíguo em vez de marcar como
-    // "não-membro" por engano.
-    // Observado empiricamente na WEBJS: pra um grupo onde você participa, a WAHA devolve a
-    // lista completa (incluindo você); pra um grupo do qual você saiu, devolve LISTA VAZIA
-    // (você não tem mais visibilidade dos membros). Lista vazia = saí.
-    // Só preserva (devolve true) em ambiguidade real: erro HTTP ou lista populada só com LIDs.
+    // Decide se o número conectado ainda é participante deste grupo, pela resposta CRUA do
+    // /participants — parseada com PhoneFromParticipant, que resolve o número REAL nas DUAS engines
+    // (NOWEB expõe em `phoneNumber` mesmo com o id vindo como @lid; WEBJS traz no id). Era exatamente
+    // o buraco que impedia o NOWEB de filtrar: o ParticipantDto tipado não tem `phoneNumber`, então o
+    // próprio número nunca casava e o filtro era inútil lá (por isso o NOWEB pulava o filtro).
+    // Observado: grupo em que você participa devolve a lista (incluindo você); grupo do qual você saiu
+    // devolve LISTA VAZIA (perde a visibilidade). Lista vazia = saí. Preserva (true) em ambiguidade
+    // real: erro HTTP, shape inesperado, ou lista SÓ com @lid (nenhum número decifrável).
     private async Task<bool> IsCurrentMemberOfAsync(string sessionId, string groupJid, string ownDigits, CancellationToken ct)
     {
         using var req = http.NewRequest(HttpMethod.Get, $"api/{WahaHttp.Esc(sessionId)}/groups/{WahaHttp.Esc(groupJid)}/participants");
         using var resp = await http.SendAsync(req, ct);
         if (!resp.IsSuccessStatusCode)
         {
-            return true;
+            return true; // erro de leitura → ambíguo → preserva
         }
-        var body = await resp.Content.ReadFromJsonAsync<List<ParticipantDto>>(WahaHttp.Json, ct) ?? [];
-        if (body.Count == 0)
+        using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
         {
-            return false;
+            return true; // shape inesperado → preserva
         }
-        var hasNonLidParticipant = body.Any(p => p.Id is not null
-            && !string.Equals(p.Id.Server, "lid", StringComparison.OrdinalIgnoreCase)
-            && !(p.Id.RawId?.Contains("@lid", StringComparison.OrdinalIgnoreCase) ?? false));
-        if (!hasNonLidParticipant)
+        var total = 0;
+        var resolvedAnyRealNumber = false;
+        foreach (var p in doc.RootElement.EnumerateArray())
         {
-            return true;
+            total++;
+            var phone = WahaParsing.PhoneFromParticipant(p);
+            if (phone is null)
+            {
+                continue; // @lid / sem número decifrável
+            }
+            resolvedAnyRealNumber = true;
+            if (string.Equals(phone.TrimStart('+'), ownDigits, StringComparison.Ordinal))
+            {
+                return true; // meu número está na lista → sou membro
+            }
         }
-        return body.Any(p => string.Equals(p.Id?.User, ownDigits, StringComparison.Ordinal));
+        if (total == 0)
+        {
+            return false; // lista vazia = saí (perdi a visibilidade dos membros)
+        }
+        // Tem gente mas ninguém decifrável (só @lid) → não dá pra decidir → preserva.
+        // Tem números reais e o meu NÃO está entre eles → já não sou membro (saí / fantasma).
+        return !resolvedAnyRealNumber;
     }
 
     public async Task<IReadOnlyList<WahaParticipant>> ListGroupParticipantsAsync(string sessionId, string groupId, CancellationToken ct)
@@ -267,7 +291,9 @@ internal sealed class WahaGroupsClient(WahaHttp http, WahaSessionClient session,
         }
         try
         {
-            var groups = await ListGroupsAsync(sessionId, ct);
+            // Lista CRUA (sem filtro de participação): logo após o join o /participants pode não ter
+            // sincronizado, e o filtro esconderia o grupo recém-entrado → import 0 em silêncio.
+            var groups = await ListGroupsRawAsync(sessionId, ct);
             var matches = groups
                 .Where(g => !string.IsNullOrEmpty(g.Id)
                     && string.Equals(g.Name?.Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase))
