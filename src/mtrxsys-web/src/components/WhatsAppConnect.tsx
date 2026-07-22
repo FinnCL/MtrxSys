@@ -19,6 +19,14 @@ interface Props {
 const MAX_AUTO_RETRIES = 2;
 // Espaço entre as auto-tentativas. Um reset completo leva segundos; re-vincular a cada 1,5s era churn.
 const AUTO_RETRY_BACKOFF_MS = 15_000;
+// Uma sessão sadia sai de STARTING (vira Working/ScanQrCode) em segundos. Se ficar PRESA em STARTING
+// além disso, a conexão travou — visto em PROD: um envio a contato FRIO tomou 463 (tctoken) e o
+// WhatsApp derrubou o socket; o engine ficou "reconnecting..." em STARTING e nunca voltou. Antes, o
+// front mostrava "Iniciando engine... aguarde" pra sempre (armadilha: esperar não traz conexão).
+// Passado este tempo, faz um RESTART NÃO-DESTRUTIVO (api.wahaStart = EnsureSessionStarted: mantém o
+// número; NÃO é o wahaReset que re-pareia) e avisa. Poucas tentativas (anti-churn), depois pede ação.
+const STARTING_STUCK_MS = 90_000;
+const MAX_STARTING_RESTARTS = 2;
 // Mínimo de dígitos plausível pra um número brasileiro: DDI (55) + DDD (2) + número (≥7).
 const MIN_PHONE_DIGITS = 12;
 // Máximo no input: BR COM o "9 extra" = 55 + DDD(2) + 9 + 8díg = 13. Acima disso é digitação errada.
@@ -37,6 +45,7 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [autoRetries, setAutoRetries] = useState(0);
+  const [startingRestarts, setStartingRestarts] = useState(0);
   const [phoneInput, setPhoneInput] = useState("55");
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [pairingBusy, setPairingBusy] = useState(false);
@@ -89,7 +98,6 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
       return;
     }
     let cancelled = false;
-    let handle: ReturnType<typeof setInterval> | undefined;
     async function loadQr() {
       try {
         const url = await api.wahaQrBlobUrl();
@@ -117,10 +125,10 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
     }
     void loadQr();
     // 5s (era 10s): durante a rotação do QR, refresca mais rápido pro usuário sempre ter um QR válido.
-    handle = setInterval(loadQr, 5_000);
+    const handle = setInterval(loadQr, 5_000);
     return () => {
       cancelled = true;
-      if (handle) clearInterval(handle);
+      clearInterval(handle);
     };
   }, [status, pollStatus]);
 
@@ -148,6 +156,14 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
 
   const startSession = useCallback(() => runWahaAction(api.wahaStart), [runWahaAction]);
   const retrySession = useCallback(() => runWahaAction(api.wahaReset), [runWahaAction]);
+  // Restart MANUAL não-destrutivo (o mesmo que a recuperação automática faz): zera os contadores de
+  // auto-tentativa e reinicia via wahaStart (EnsureSessionStarted — mantém o número; NÃO re-pareia).
+  // Escape hatch pro operador destravar na hora sem esperar os 90s do auto.
+  const manualRestart = useCallback(() => {
+    setAutoRetries(0);
+    setStartingRestarts(0);
+    return runWahaAction(api.wahaStart);
+  }, [runWahaAction]);
 
   const requestPairingCode = useCallback(async () => {
     // Número canônico do WhatsApp: BR sem o 9 extra (o usuário pode digitar com ou sem — normalizamos).
@@ -213,11 +229,46 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
     }
   }, [status, autoRetries]);
 
+  // STARTING preso → restart não-destrutivo. Não interfere num start/reset manual (busy) nem no
+  // pareamento por código (pairingBusy), que já reinicia por conta própria.
+  useEffect(() => {
+    if (status !== "Starting" || busy || pairingBusy || startingRestarts >= MAX_STARTING_RESTARTS) {
+      return;
+    }
+    const handle = setTimeout(() => {
+      setStartingRestarts((n) => n + 1);
+      void startSession();
+    }, STARTING_STUCK_MS);
+    return () => clearTimeout(handle);
+  }, [status, busy, pairingBusy, startingRestarts, startSession]);
+
+  // Zera o contador ao SAIR de STARTING pra um estado bom (conectou ou já pede QR) — libera a
+  // recuperação automática de um travamento futuro. Failed tem seu próprio caminho (autoRetries).
+  useEffect(() => {
+    if ((status === "Working" || status === "ScanQrCode") && startingRestarts !== 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStartingRestarts(0);
+    }
+  }, [status, startingRestarts]);
+
   return (
     <div className="wa-connect">
       <div className="status-row">
         <span className={`status-dot status-${status}`} />
         <span>Conexão: {labelFor(status)}</span>
+        {/* Escape hatch manual: aparece quando NÃO está conectado e NÃO está parado (que já tem
+            "Iniciar sessão"). Reinicia sem perder o número — pra quando a conexão trava. */}
+        {status !== "Working" && status !== "Stopped" && (
+          <button
+            type="button"
+            className="wa-restart-btn"
+            onClick={() => void manualRestart()}
+            disabled={busy}
+            title="Reinicia a conexão sem re-parear (mantém o número)"
+          >
+            {busy ? "Reiniciando..." : "Reiniciar conexão"}
+          </button>
+        )}
       </div>
 
       {error && <p className="error">{error}</p>}
@@ -231,7 +282,19 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
         </>
       )}
 
-      {status === "Starting" && <p className="muted tiny">Iniciando engine... aguarde alguns segundos.</p>}
+      {status === "Starting" &&
+        (startingRestarts >= MAX_STARTING_RESTARTS ? (
+          <>
+            <p className="error">A conexão travou em "iniciando". Reinicie ou gere um QR novo.</p>
+            <button type="button" onClick={() => { setStartingRestarts(0); void startSession(); }} disabled={busy}>
+              Reiniciar sessão
+            </button>
+          </>
+        ) : startingRestarts > 0 ? (
+          <p className="muted tiny">Conexão presa — reiniciando...</p>
+        ) : (
+          <p className="muted tiny">Iniciando engine... aguarde alguns segundos.</p>
+        ))}
 
       {status === "ScanQrCode" && (
         <>

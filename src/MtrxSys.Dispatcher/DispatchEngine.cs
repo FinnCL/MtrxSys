@@ -34,6 +34,7 @@ public sealed class DispatchEngine(
     ISharedPhoneLedger ledger,
     IWarmupCircleRepository warmupCircle,
     DispatchSettleTracker settle,
+    IContactAddressBookSync addressBook,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
 {
@@ -296,6 +297,29 @@ public sealed class DispatchEngine(
                     templateCache[job.TemplateId] = template;
                 }
                 var text = composer.Compose(template, contact);
+
+                // ANTI-463 (frio): antes de mandar pra quem NUNCA respondeu, garante o contato na agenda
+                // (Google) do chip — o aparelho primário sincroniza e o companion herda o tctoken. Recém
+                // criado: ADIA o job (grace) pro sync propagar, em vez de mandar já e tomar 463 (que
+                // derruba a sessão). Falha ao salvar: também adia (não arrisca). Engajado/círculo já tem
+                // tctoken → passa direto. Só roda com o provider ligado (AddressBookSync:Enabled).
+                if (addressBook.IsEnabled && !isCircle && !ContactStages.IsEngaged(contact.Stage))
+                {
+                    var saved = await addressBook.EnsureSavedAsync(contact.Phone.E164, contact.Name, ct);
+                    if (saved is AddressBookSaveResult.Created or AddressBookSaveResult.Failed)
+                    {
+                        var reason = saved == AddressBookSaveResult.Created
+                            ? "contato recém-salvo na agenda; aguardando sync p/ evitar 463"
+                            : "falha ao salvar contato na agenda; nova tentativa depois (evita 463)";
+                        job.Defer(clock.UtcNow.AddSeconds(addressBook.GraceSeconds), reason);
+                        await uow.SaveChangesAsync(ct);
+                        retried++;
+                        log.LogInformation(
+                            "Frio {Phone}: {Reason} (adiado {Sec}s).", contact.Phone.E164, reason, addressBook.GraceSeconds);
+                        continue;
+                    }
+                    // AlreadyPresent / NotSupported → já sincronizado (ou inerte): segue pro envio.
+                }
 
                 // Confere se o número EXISTE no WhatsApp — CEDO, antes de gastar typing/delay. Disparar
                 // pra número inexistente falha (erro 463) E é gatilho de ban — foi o que restringiu a

@@ -112,6 +112,29 @@ public static class DependencyInjection
             services.AddSingleton<IPhoneOrchestrator, MtrxSys.Infrastructure.Phone.DockerCliPhoneOrchestrator>();
         }
 
+        // Salvar+sincronizar contato na agenda (Google) antes de disparar pra FRIO (anti-463). Ver
+        // docs/google-contacts-sync.md. DESLIGADO por padrão → NoOp (nada muda em prod). Só liga o
+        // provider Google com Enabled=true, Provider=Google E um RefreshToken (do chip deste stack).
+        services.AddOptions<AddressBookSyncOptions>().Bind(config.GetSection(AddressBookSyncOptions.SectionName));
+        var abSection = config.GetSection(AddressBookSyncOptions.SectionName);
+        var abEnabled = abSection.GetValue<bool>("Enabled");
+        var abProvider = abSection["Provider"];
+        var abRefreshToken = abSection["Google:RefreshToken"];
+        if (abEnabled
+            && string.Equals(abProvider, "Google", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(abRefreshToken))
+        {
+            services.AddSingleton<IContactAddressBookSync>(sp =>
+                new MtrxSys.Infrastructure.AddressBook.GooglePeopleAddressBookSync(
+                    sp.GetRequiredService<IOptions<AddressBookSyncOptions>>().Value,
+                    sp.GetRequiredService<ILogger<MtrxSys.Infrastructure.AddressBook.GooglePeopleAddressBookSync>>()));
+        }
+        else
+        {
+            services.AddSingleton<IContactAddressBookSync,
+                MtrxSys.Infrastructure.AddressBook.NoOpContactAddressBookSync>();
+        }
+
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IContactRepository, ContactRepository>();
         services.AddScoped<IDispatchJobRepository, DispatchJobRepository>();

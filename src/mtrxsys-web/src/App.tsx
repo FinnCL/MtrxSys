@@ -11,6 +11,7 @@ import { ContactsScreen } from "./components/ContactsScreen";
 import { CampaignsScreen } from "./components/CampaignsScreen";
 import { SettleCountdown } from "./components/SettleCountdown";
 import { LivePhoneScreen } from "./components/LivePhoneScreen";
+import { GoogleSyncGuideScreen } from "./components/GoogleSyncGuideScreen";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { api } from "./api/client";
 import type { Conversation } from "./api/types";
@@ -31,10 +32,10 @@ const PHONE_SERVER_OPTION = import.meta.env.VITE_PHONE_SERVER === "1";
 // LDPlayer), emulator-5556 (2ª)… Configurável por ambiente. Vazio = emulator-5554.
 const EMULATOR_UDID = import.meta.env.VITE_EMULATOR_UDID as string | undefined;
 
-type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns" | "phone";
+type ViewTab = "chat" | "collector" | "groups" | "contacts" | "campaigns" | "phone" | "gsync";
 
 // Persiste a aba ativa pra sobreviver ao F5/atualizar — sem isso, recarregar sempre cai no Chat.
-const VIEW_TABS: ViewTab[] = ["phone", "chat", "collector", "groups", "contacts", "campaigns"];
+const VIEW_TABS: ViewTab[] = ["phone", "chat", "collector", "groups", "contacts", "campaigns", "gsync"];
 function loadView(): ViewTab {
   const v = localStorage.getItem("app.view");
   return VIEW_TABS.includes(v as ViewTab) ? (v as ViewTab) : "chat";
@@ -210,6 +211,13 @@ function Shell() {
             >
               Disparo
             </button>
+            <button
+              type="button"
+              className={`tab-btn${view === "gsync" ? " active" : ""}`}
+              onClick={() => setView("gsync")}
+            >
+              Guia Google
+            </button>
         </nav>
         {wahaWorking === true && (
           <button type="button" onClick={() => void runSync(false)} disabled={syncing} className="sync-btn">
@@ -238,6 +246,8 @@ function Shell() {
         <ContactsScreen />
       ) : view === "campaigns" ? (
         <CampaignsScreen />
+      ) : view === "gsync" ? (
+        <GoogleSyncGuideScreen />
       ) : view === "phone" ? (
         <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} onDisconnect={wahaWorking === true ? () => setConfirmDisconnect(true) : undefined} onOpenConversation={openConversation} />
       ) : (
