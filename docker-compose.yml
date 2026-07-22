@@ -202,6 +202,15 @@ services:
       # O dispatcher não serve HTTP, mas herda a validação de JwtOptions via AddInfrastructure.
       # Sem a chave ele falha no startup (ValidateOnStart) e entra em crash-loop (exit 139).
       Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
+      # ANTI-463: salvar+sincronizar o contato FRIO na agenda Google do chip antes de disparar (ver
+      # docs/google-contacts-sync.md). DESLIGADO por padrão (Enabled vazio→false → provider NoOp): sem
+      # os ADDRBOOK_* no .env.prod, nada muda. Stack A usa vars SEM sufixo (como WAHA_API_KEY).
+      AddressBookSync__Enabled: ${ADDRBOOK_ENABLED:-false}
+      AddressBookSync__Provider: ${ADDRBOOK_PROVIDER:-None}
+      AddressBookSync__GraceSeconds: ${ADDRBOOK_GRACE:-180}
+      AddressBookSync__Google__ClientId: ${ADDRBOOK_GOOGLE_CLIENT_ID:-}
+      AddressBookSync__Google__ClientSecret: ${ADDRBOOK_GOOGLE_CLIENT_SECRET:-}
+      AddressBookSync__Google__RefreshToken: ${ADDRBOOK_GOOGLE_REFRESH_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
