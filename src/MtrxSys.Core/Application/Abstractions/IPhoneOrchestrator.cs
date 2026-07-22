@@ -70,4 +70,13 @@ public interface IPhoneOrchestrator
     /// antes de cada envio: IDEMPOTENTE (não duplica) e best-effort. Default: não suportado.</summary>
     Task<string> SaveContactAsync(string phoneE164, string? name, CancellationToken ct) =>
         Task.FromResult("gravação de contato não suportada neste engine.");
+
+    /// <summary>Envia uma mensagem de WhatsApp DIRETO pela UI do emulador (o PRIMÁRIO), NÃO pelo WAHA.
+    /// É o "Caminho A" anti-463: o companion NOWEB dá 463 em frio; o primário (dono da conta) manda
+    /// normal. Abre o chat com a mensagem já preenchida via intent click-to-chat
+    /// (whatsapp://send?phone=X&amp;text=Y — funciona pra número salvo OU não) e toca "enviar" (coords
+    /// da resolução do emulador, ajustáveis em PhoneOptions). Retorna "ok" ou o erro. Default: não
+    /// suportado. ⚠️ Automação de UI: os coords/tempos precisam de AJUSTE no emulador real.</summary>
+    Task<string> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
+        Task.FromResult("envio pela UI não suportado neste engine.");
 }

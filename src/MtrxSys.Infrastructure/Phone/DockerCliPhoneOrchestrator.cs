@@ -266,6 +266,42 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return rc == 0 ? "ok" : (string.IsNullOrWhiteSpace(err) ? outp : err);
     }
 
+    public async Task<string> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct)
+    {
+        // Caminho A anti-463: envia pela UI do WhatsApp DO EMULADOR (o primário), não pelo WAHA.
+        var digits = new string((phoneE164 ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (digits.Length < 8)
+        {
+            return "phone inválido";
+        }
+        var url = WhatsAppUi.DeepLink(digits, text);
+        if (url.Contains('\'', System.StringComparison.Ordinal))
+        {
+            return "texto gerou aspa simples (não esperado no URL-encode)."; // guarda anti-injeção
+        }
+        // 1) Abre o chat com a mensagem já preenchida (click-to-chat). Aspas simples: o '&'/'#' da URL
+        //    não podem ser interpretados pelo shell do device.
+        var (rc, outp, err) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", $"am start -a android.intent.action.VIEW -d '{url}'");
+        if (rc != 0)
+        {
+            return string.IsNullOrWhiteSpace(err) ? outp : err;
+        }
+        // 2) Espera o WhatsApp abrir o chat antes de tocar.
+        await Task.Delay(Math.Max(500, Opts.WhatsAppOpenWaitMs), ct);
+        // 3) Toca o botão "enviar" (coords da resolução do emulador — AJUSTÁVEIS em PhoneOptions).
+        var (tc, to, te) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "input", "tap",
+            Opts.WhatsAppSendButtonX.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Opts.WhatsAppSendButtonY.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (tc != 0)
+        {
+            return string.IsNullOrWhiteSpace(te) ? to : te;
+        }
+        await Task.Delay(Math.Max(200, Opts.WhatsAppSendWaitMs), ct);
+        return "ok";
+    }
+
     // Maior _id entre as linhas do content query — o raw contact recém-inserido (disparo sequencial).
     private static int MaxRawContactId(string rows)
     {

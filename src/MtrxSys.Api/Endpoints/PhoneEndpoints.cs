@@ -14,6 +14,7 @@ public static class PhoneEndpoints
 {
     public sealed record ProxyRequest(string? Server);
     public sealed record ModeRequest(string? Mode);
+    public sealed record WhatsAppSendRequest(string? Phone, string? Text);
 
     public static IEndpointRouteBuilder MapPhoneEndpoints(this IEndpointRouteBuilder app)
     {
@@ -80,6 +81,19 @@ public static class PhoneEndpoints
         // Digita texto no campo focado do emulador (adb input text) — colar de fora (ex.: código WAHA).
         group.MapPost("/text", async (IPhoneOrchestrator phone, string t, CancellationToken ct) =>
             Results.Ok(new { output = await phone.SendTextAsync(t, ct) }));
+
+        // CAMINHO A anti-463: envia UMA mensagem pela UI do WhatsApp do emulador (o PRIMÁRIO), NÃO pelo
+        // WAHA. Pra TESTAR/ajustar antes de reescrever o disparo em massa: manda pra 1 número e você vê
+        // se saiu (e ajusta WhatsApp:SendButtonX/Y se o toque não cair no botão enviar).
+        group.MapPost("/whatsapp/send", async (IPhoneOrchestrator phone, WhatsAppSendRequest req, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Phone) || string.IsNullOrWhiteSpace(req.Text))
+            {
+                return Results.BadRequest(new { error = "phone e text são obrigatórios." });
+            }
+            var output = await phone.SendWhatsAppMessageAsync(req.Phone, req.Text, ct);
+            return Results.Ok(new { ok = output == "ok", output });
+        });
 
         // Lê o número do WhatsApp registrado no emulador (registration_jid) — auto-preenche o Passo 2.
         group.MapGet("/whatsapp-number", async (IPhoneOrchestrator phone, CancellationToken ct) =>

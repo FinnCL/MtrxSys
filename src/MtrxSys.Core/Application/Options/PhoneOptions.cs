@@ -125,4 +125,22 @@ public sealed class PhoneOptions
     /// <summary>Slot de escalonamento 0-9 (janela do dia em que este stack acorda). -1 = derivar do
     /// ContainerName por hash estável, pra os 10 não acordarem juntos.</summary>
     public int KeepAliveStaggerSlot { get; set; } = -1;
+
+    // ── Envio pela UI do WhatsApp (Caminho A anti-463 — envio pelo PRIMÁRIO, não pelo WAHA) ──────
+    // Automação de UI: abre o chat via intent click-to-chat (mensagem já preenchida) e TOCA o botão
+    // "enviar". As coordenadas do toque dependem da RESOLUÇÃO do emulador (redroid default 720x1280) e
+    // da versão do WhatsApp — por isso são CONFIGURÁVEIS e precisam ser AJUSTADAS no emulador real
+    // (rode uma vez, veja onde cai o toque, acerte). Default: canto inferior direito de 720x1280.
+
+    /// <summary>X do toque no botão "enviar" do WhatsApp (px). Default ~canto inf. direito de 720w.</summary>
+    public int WhatsAppSendButtonX { get; set; } = 680;
+
+    /// <summary>Y do toque no botão "enviar" do WhatsApp (px). Default ~canto inf. direito de 1280h.</summary>
+    public int WhatsAppSendButtonY { get; set; } = 1235;
+
+    /// <summary>Espera (ms) o WhatsApp abrir o chat após o intent, antes de tocar enviar.</summary>
+    public int WhatsAppOpenWaitMs { get; set; } = 4000;
+
+    /// <summary>Espera (ms) após tocar enviar, pra a mensagem sair antes de seguir.</summary>
+    public int WhatsAppSendWaitMs { get; set; } = 1500;
 }
