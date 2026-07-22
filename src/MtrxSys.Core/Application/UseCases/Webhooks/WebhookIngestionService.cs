@@ -5,6 +5,7 @@ using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Dispatch;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
+using MtrxSys.Core.Domain.Warmup;
 using MtrxSys.Core.Safety;
 using MtrxSys.Core.Validation;
 
@@ -14,6 +15,7 @@ public sealed class WebhookIngestionService(
     IConversationRepository conversations,
     IChatMessageRepository messages,
     IContactRepository contacts,
+    IWarmupCircleRepository circle,
     IContactStageChangeRepository stageChanges,
     IWahaClient waha,
     IUnitOfWork uow,
@@ -344,9 +346,26 @@ public sealed class WebhookIngestionService(
         if (contact.Stage == ContactStage.Lead)
         {
             var became = await MoveStageAsync(contact, ContactStage.Qualified, now, ct);
+            if (became)
+            {
+                await AutoMarkWarmupCircleAsync(contact, now, ct);
+            }
             return new InboundOutcome(NewlyOptedOut: false, BecameEngaged: became);
         }
         return new InboundOutcome(false, false);
+    }
+
+    // Auto-marca no CÍRCULO DE AQUECIMENTO o contato que ACABOU DE RESPONDER (Novo → Respondeu). O
+    // círculo é o "seed" que a fase híbrida (dia 4+) coloca no TOPO da fila e RENOVA (re-dispara todo
+    // dia). Só quem respondeu entra — é seguro (contato quente), nunca frio. Idempotente por telefone;
+    // persiste no mesmo commit do webhook. O operador pode DESMARCAR depois (aí para de renovar).
+    private async Task AutoMarkWarmupCircleAsync(Contact contact, DateTimeOffset now, CancellationToken ct)
+    {
+        if (await circle.GetByPhoneAsync(contact.Phone.E164, ct) is not null)
+        {
+            return;
+        }
+        await circle.AddAsync(WarmupCircleMember.Create(Guid.NewGuid(), contact.Phone.E164, contact.Name, now), ct);
     }
 
     // Resultado da classificação de uma resposta: se marcou opt-out agora e/ou se o contato acabou de

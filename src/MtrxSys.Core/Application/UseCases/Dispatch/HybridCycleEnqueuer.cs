@@ -137,7 +137,7 @@ public sealed class HybridCycleEnqueuer(
         cold = cold.Take(coldTake).ToList();
 
         // 5) INTERCALA: abre com círculo, espalha o resto entre os frios (Bresenham — sem bloco).
-        var seq = Interleave(circleContacts, cold);
+        var seq = DispatchInterleave.Interleave(circleContacts, cold);
         if (seq.Count == 0)
         {
             log.LogInformation("Híbrido: nada pra enfileirar (sem círculo elegível nem frios).");
@@ -167,19 +167,4 @@ public sealed class HybridCycleEnqueuer(
         return seq.Count;
     }
 
-    // Intercala CÍRCULO e FRIOS abrindo com o círculo e espalhando o resto uniformemente (Bresenham):
-    // no slot i coloca círculo se ainda há círculo E (frios acabaram OU já "deveríamos" ter colocado
-    // mais um círculo: i*C >= ci*total). Ex.: C=3,N=9 → círculo em 0,4,8. C=0 → só frio; N=0 → só círculo.
-    private static List<Contact> Interleave(List<Contact> circleContacts, List<Contact> cold)
-    {
-        int c = circleContacts.Count, n = cold.Count, total = c + n;
-        var seq = new List<Contact>(total);
-        int ci = 0, coldPos = 0;
-        for (var i = 0; i < total; i++)
-        {
-            var placeCircle = ci < c && (coldPos >= n || (long)i * c >= (long)ci * total);
-            seq.Add(placeCircle ? circleContacts[ci++] : cold[coldPos++]);
-        }
-        return seq;
-    }
 }

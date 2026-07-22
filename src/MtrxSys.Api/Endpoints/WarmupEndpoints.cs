@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.Warmup;
+using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
 using MtrxSys.Core.Domain.Warmup;
 using MtrxSys.Core.Safety;
@@ -185,14 +186,26 @@ public static class WarmupEndpoints
         });
 
         group.MapPost("/circle", async (
-            AddCircleMemberRequest req, IWarmupCircleRepository circle,
+            AddCircleMemberRequest req, IWarmupCircleRepository circle, IContactRepository contacts,
             IClock clock, IUnitOfWork uow, CancellationToken ct) =>
         {
-            // Normalização mínima, SEM o BrazilPhoneValidator de propósito: o número vem da agenda
-            // do próprio aparelho, já em E.164, e a validação de celular BR rejeitaria um contato
-            // estrangeiro legítimo. Aqui não há risco a cobrir — o círculo é só um marcador, nunca
-            // entra no disparo (ver WarmupCircleMember). O disparo tem os próprios gates.
-            if (BrazilPhoneValidator.NormalizeTypedE164(req.Phone) is not { } e164)
+            // Acha o contato do CRM por trás deste número (se houver — o checkbox/disparo mandam o E.164
+            // EXATO do contato). GUARD ANTI-BAN: se É um contato do CRM e ainda NÃO respondeu (frio), NÃO
+            // deixa marcar — o círculo RENOVA o disparo, e remensagear frio todo dia é ban. Já números da
+            // AGENDA/DIGITADOS na Fase Humana (dias 1-3, ainda SEM contato no CRM) seguem permitidos: são
+            // o seed que o operador conversa à mão até responderem — bloqueá-los quebraria o HumanPhaseCard.
+            var contact = await contacts.GetByPhoneAsync(req.Phone, ct);
+            if (contact is not null && !ContactStages.IsEngaged(contact.Stage))
+            {
+                return Results.BadRequest(new
+                {
+                    error = "Só contatos que já responderam podem ser aquecidos — o Aquecer renova o disparo, e frio não pode renovar.",
+                });
+            }
+            // E.164 no círculo: se é contato do CRM, a forma EXATA dele — bate com o disparo E com o
+            // auto-mark do webhook (que grava contact.Phone.E164), sem o descasamento do legado BR sem o
+            // 9º dígito. Sem contato (agenda/digitado), normaliza o número informado.
+            if ((contact?.Phone.E164 ?? BrazilPhoneValidator.NormalizeTypedE164(req.Phone)) is not { } e164)
             {
                 return Results.BadRequest(new { error = "Número inválido: informe em E.164 (ex.: +5571999998888)." });
             }

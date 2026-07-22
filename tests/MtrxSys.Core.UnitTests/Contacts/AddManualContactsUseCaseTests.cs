@@ -1,7 +1,5 @@
 using FluentAssertions;
-using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
-using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Validation;
@@ -21,10 +19,7 @@ public sealed class AddManualContactsUseCaseTests
         var byPhone = existing.ToDictionary(c => c.Phone.E164, c => c, StringComparer.Ordinal);
         _contacts.GetByPhonesAsync(Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns((IReadOnlyDictionary<string, Contact>)byPhone);
-        return new AddManualContactsUseCase(_contacts, _uow, _clock, new BrazilPhoneValidator(),
-            new WarmupSeedEnroller(
-                Substitute.For<ISystemStateRepository>(), Substitute.For<IWarmupCircleRepository>(),
-                Options.Create(new DispatchOptions()), _clock));
+        return new AddManualContactsUseCase(_contacts, _uow, _clock, new BrazilPhoneValidator());
     }
 
     [Fact]

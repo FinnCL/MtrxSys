@@ -330,15 +330,15 @@ export function CampaignsScreen() {
           (i.name ?? "").toLowerCase().includes(reportQuery),
       )
     : report;
-  // Ordena por grupo (Enviada > Na fila > resto). Dentro de "Na fila": no HÍBRIDO segue a ordem real de
-  // envio (scheduledAt = a intercalação círculo/frio que o motor vai executar); fora do híbrido, mantém
-  // "Respondeu" primeiro (pedido anterior), depois por horário. Sort estável preserva o resto.
-  const hybrid = warmup?.hybridPhase ?? false;
+  // Ordena por grupo (Enviada > Na fila > resto). Dentro de "Na fila": do DIA 4+ (híbrido/maduro) segue
+  // a ordem real de envio (scheduledAt = a intercalação seed/frio que o motor vai executar); nos dias
+  // 1-3 (responder-only) mantém "Respondeu" primeiro. Sort estável preserva o resto.
+  const dayFourPlus = warmup ? !warmup.responderOnlyPhase : false;
   const filteredReport = [...searchedReport].sort((a, b) => {
     const byRank = reportStatusRank(a) - reportStatusRank(b);
     if (byRank !== 0) return byRank;
     if (reportStatusRank(a) === 1) {
-      if (hybrid) return +new Date(a.scheduledAt) - +new Date(b.scheduledAt);
+      if (dayFourPlus) return +new Date(a.scheduledAt) - +new Date(b.scheduledAt);
       const byEngaged = (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0);
       return byEngaged !== 0 ? byEngaged : +new Date(a.scheduledAt) - +new Date(b.scheduledAt);
     }

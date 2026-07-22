@@ -61,6 +61,7 @@ public sealed class WebhookOptOutE2ETests : IAsyncLifetime
         new(new ConversationRepository(_db),
             new ChatMessageRepository(_db),
             new ContactRepository(_db),
+            new WarmupCircleRepository(_db),
             new ContactStageChangeRepository(_db),
             _waha,
             new UnitOfWork(_db),

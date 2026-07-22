@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Application.UseCases.Dispatch;
 using MtrxSys.Core.Application.UseCases.Webhooks;
 using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.Contacts;
@@ -123,6 +124,7 @@ public static class CampaignsEndpoints
             ISystemStateRepository state,
             WarmingPhaseService warmingPhase,
             ISharedPhoneLedger ledger,
+            IWarmupCircleRepository circle,
             ILoggerFactory logFactory,
             CancellationToken ct) =>
         {
@@ -201,6 +203,25 @@ public static class CampaignsEndpoints
             // (já enviado/opt-out em OUTRO chip) — evita enfileirar jobs que o motor pularia e mantém a
             // contagem coerente. Fonte única (FilterOutSuppressedAsync); no-op em Observe/Off.
             var targets = await ledger.FilterOutSuppressedAsync(await contacts.ListByFilterAsync(filter, ct), ct);
+            // DIA 4+ (híbrido E maduro): o "seed" (Círculo = quem RESPONDEU, auto-marcado) ABRE a fila e
+            // intercala com os frios (Bresenham, mesma regra do reset diário) → 1º da fila = um do seed.
+            // Nos dias 1-3 (responder-only) não reordena: a fila já é 100% engajado. Círculo vazio ou sem
+            // seed no público → no-op. (Obs.: o RENOVAR diário do círculo é só no híbrido — no maduro o
+            // reset automático fica desligado; aqui é só a ORDEM.)
+            if (warming.Stage != WarmingStage.ResponderOnly)
+            {
+                var circlePhones = (await circle.ListAsync(ct))
+                    .Select(m => m.PhoneE164).ToHashSet(StringComparer.Ordinal);
+                if (circlePhones.Count > 0)
+                {
+                    var seed = targets.Where(c => circlePhones.Contains(c.Phone.E164)).ToList();
+                    if (seed.Count > 0)
+                    {
+                        var cold = targets.Where(c => !circlePhones.Contains(c.Phone.E164)).ToList();
+                        targets = DispatchInterleave.Interleave(seed, cold);
+                    }
+                }
+            }
             var now = clock.UtcNow;
             // NOVOS IMPORTADOS NO TOPO DA FILA: DequeueNextPending ordena por ScheduledAt ASC, então
             // pra os recém-adicionados saírem PRIMEIRO eles precisam de ScheduledAt anterior ao mais

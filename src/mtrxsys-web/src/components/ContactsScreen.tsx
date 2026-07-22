@@ -227,9 +227,10 @@ export function ContactsScreen() {
           seus contatos aqui, não é o grupo do WhatsApp.
         </p>
         <p className="muted small">
-          <strong>Aquecer:</strong> na fase híbrida (dia 4+) o robô <strong>reenvia a campanha todo
-          dia</strong> pra estes contatos (frios recebem só 1×). Marque só os <strong>seus números / de
-          confiança</strong> — muitos marcados ocupam o teto do dia e travam o alcance nos frios novos.
+          <strong>Aquecer:</strong> na fase híbrida (dia 4+), quem <strong>respondeu</strong> vai pra
+          frente da fila e é <strong>renovado</strong> (re-disparado). É <strong>auto-marcado</strong> quando
+          o contato responde — só quem respondeu pode ser marcado; frio nunca renova (1× só). Desmarque um
+          se quiser que ele pare de renovar.
         </p>
       </header>
 
@@ -265,7 +266,7 @@ export function ContactsScreen() {
                             <th>Nome</th>
                             <th>Telefone</th>
                             <th>Status</th>
-                            <th title="Reenvia a campanha pra este contato TODO DIA na fase híbrida (dia 4+); frios recebem só 1×. Marque só os seus números / de confiança.">Aquecer</th>
+                            <th title="Quem respondeu vai pra frente da fila e é renovado (re-disparado) na fase híbrida (dia 4+). Auto-marcado ao responder; frio não pode ser marcado (1× só).">Aquecer</th>
                             <th>Ações</th>
                           </tr>
                         </thead>
@@ -297,8 +298,12 @@ export function ContactsScreen() {
                                   type="checkbox"
                                   checked={circle.has(c.phoneE164)}
                                   onChange={() => void toggleCircle(c)}
-                                  disabled={!!c.optOutAt}
-                                  title="Aquecer: reenvia a campanha pra este contato todo dia na fase híbrida (só pros seus números / de confiança)."
+                                  disabled={!!c.optOutAt || c.stage === "Lead" || c.stage === "Lost"}
+                                  title={
+                                    c.stage === "Lead" || c.stage === "Lost"
+                                      ? "Só quem já respondeu pode ser aquecido (o Aquecer renova o disparo; frio não renova)."
+                                      : "Aquecer: prioriza e renova este contato na fase híbrida (dia 4+). Auto-marcado quando responde; desmarque pra parar de renovar."
+                                  }
                                 />
                               </td>
                               <td>
@@ -442,9 +447,6 @@ export function ContactsScreen() {
                 const list = await api.listContacts({ groupTag: expanded });
                 setContactsByGroup((prev) => ({ ...prev, [expanded]: list }));
               }
-              // Nos primeiros dias do aquecimento o backend já inscreve os novos no Círculo de
-              // Aquecimento (WarmupSeedEnroller) → recarrega o círculo pra o "Aquecer" já vir marcado.
-              setCircle(new Map((await api.listWarmupCircle()).map((m) => [m.phone, m.id])));
             } catch (ex) {
               // O cadastro já foi salvo; só o refresh da lista falhou. Mostra o erro sem derrubar nada.
               setError(ex instanceof Error ? ex.message : String(ex));

@@ -7,6 +7,7 @@ using MtrxSys.Core.Application.UseCases.Dispatch;
 using MtrxSys.Core.Application.UseCases.Webhooks;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
+using MtrxSys.Core.Domain.Warmup;
 using NSubstitute;
 
 namespace MtrxSys.Core.UnitTests.Webhooks;
@@ -23,6 +24,7 @@ public sealed class WebhookIngestionServiceTests
     private readonly ISharedPhoneLedger _ledger = Substitute.For<ISharedPhoneLedger>();
     private readonly ISendAuditRepository _audit = Substitute.For<ISendAuditRepository>();
     private readonly IResponderDispatchEnqueuer _enqueuer = Substitute.For<IResponderDispatchEnqueuer>();
+    private readonly IWarmupCircleRepository _circle = Substitute.For<IWarmupCircleRepository>();
 
     private WebhookIngestionService BuildService()
     {
@@ -32,6 +34,7 @@ public sealed class WebhookIngestionServiceTests
             _conversations,
             _messages,
             _contacts,
+            _circle,
             _stageChanges,
             _waha,
             _uow,
@@ -89,6 +92,45 @@ public sealed class WebhookIngestionServiceTests
 
         await _messages.DidNotReceive().AddAsync(Arg.Any<ChatMessage>(), Arg.Any<CancellationToken>());
         await _uow.DidNotReceive().SaveChangesAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Ingest_auto_marca_no_circulo_quem_acabou_de_responder()
+    {
+        var svc = BuildService();
+        _messages.GetByWaMessageIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((ChatMessage?)null);
+        _contacts.GetByPhoneAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Contact?)null);
+        _conversations.GetByWaChatIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Conversation?)null);
+
+        var evt = new WahaWebhookEvent(
+            "message", "default",
+            new WahaMessagePayload("wa-r", 1700000000, "5511999998888@c.us", null, false, "opa, tenho interesse", false, null, null));
+
+        await svc.IngestAsync(evt, CancellationToken.None);
+
+        // Novo → Respondeu (engajou AGORA) → entra no Círculo de Aquecimento (o seed que a fase híbrida
+        // prioriza e renova). Só quem responde é auto-marcado.
+        await _circle.Received(1).AddAsync(
+            Arg.Is<WarmupCircleMember>(m => m.PhoneE164 == "+5511999998888"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Ingest_NAO_marca_no_circulo_quando_a_resposta_e_SAIR()
+    {
+        var svc = BuildService();
+        _messages.GetByWaMessageIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((ChatMessage?)null);
+        _contacts.GetByPhoneAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Contact?)null);
+        _conversations.GetByWaChatIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((Conversation?)null);
+
+        var evt = new WahaWebhookEvent(
+            "message", "default",
+            new WahaMessagePayload("wa-s", 1700000000, "5511999998888@c.us", null, false, "SAIR", false, null, null));
+
+        await svc.IngestAsync(evt, CancellationToken.None);
+
+        // "SAIR" vai pra Descartado (Lost), não engaja → NÃO entra no círculo (não renova quem saiu).
+        await _circle.DidNotReceive().AddAsync(Arg.Any<WarmupCircleMember>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

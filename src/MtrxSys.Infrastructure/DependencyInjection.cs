@@ -135,7 +135,6 @@ public static class DependencyInjection
         // SessionHealthWatch escreve, os caminhos de envio leem. Ver SessionReadinessTracker.
         services.AddSingleton<MtrxSys.Core.Safety.SessionReadinessTracker>();
 
-        services.AddScoped<WarmupSeedEnroller>();
         services.AddScoped<ImportGroupMembersUseCase>();
         services.AddScoped<AddManualContactsUseCase>();
         services.AddScoped<MarkContactOptOutUseCase>();
