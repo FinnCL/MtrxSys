@@ -32,11 +32,28 @@ public static class GroupsEndpoints
             IOptions<DispatchOptions> dispatch,
             CancellationToken ct) =>
         {
-            var members = await waha.ListGroupParticipantsAsync(dispatch.Value.SessionId, groupId, ct);
-            return Results.Ok(members
-                .Select(m => new GroupMemberDto(m.PhoneE164, m.Name, m.IsAdmin))
-                .OrderBy(m => m.Name ?? m.Phone, StringComparer.OrdinalIgnoreCase)
-                .ToList());
+            // "Ver membros" DEGRADA em vez de estourar 500 no browser: um grupo-fantasma (que o WAHA já
+            // não acha via getChatById, mesmo com o @g.us) ou a sessão fora fazem o /participants do WAHA
+            // responder erro. Sem isto o 500 aparece no console (e o header CORS some na resposta de erro).
+            // O IMPORT (ação, endpoint à parte) SEGUE estourando alto — não pode importar 0 em silêncio.
+            try
+            {
+                var members = await waha.ListGroupParticipantsAsync(dispatch.Value.SessionId, groupId, ct);
+                return Results.Ok(members
+                    .Select(m => new GroupMemberDto(m.PhoneE164, m.Name, m.IsAdmin))
+                    .OrderBy(m => m.Name ?? m.Phone, StringComparer.OrdinalIgnoreCase)
+                    .ToList());
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+#pragma warning disable CA1031
+            catch
+            {
+                return Results.Ok(Array.Empty<GroupMemberDto>());
+            }
+#pragma warning restore CA1031
         });
 
         group.MapPost("/{groupId}/import", async (
