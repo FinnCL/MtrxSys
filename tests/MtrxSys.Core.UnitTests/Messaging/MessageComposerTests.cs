@@ -128,7 +128,7 @@ public sealed class MessageComposerTests
         var result = Build("Responda SAIR.", "https://m.test").Compose(t, c);
 
         result.Should().StartWith("Oi!");
-        result.Should().Contain("https://m.test/sair?t=");
+        result.Should().Contain("https://m.test/s/"); // caminho CURTO (era /sair?t=)
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public sealed class MessageComposerTests
         // depende do companion WAHA vinculado — quando ele cai, a resposta não chega a lugar nenhum e
         // a pessoa acha que se descadastrou. Quem tenta sair e não consegue denuncia, e denúncia é o
         // que mata a conta. (A DETECÇÃO de "SAIR" segue ativa no OptOutDetector; só não prometemos.)
-        result.Should().StartWith("Oi!\n\nPara não receber mais mensagens, toque aqui:\nhttps://m.test/sair?t=");
+        result.Should().StartWith("Oi!\n\nPara não receber mais mensagens, toque aqui:\nhttps://m.test/s/");
         result.Should().NotContain("Responda SAIR.", "o rodapé de texto não acompanha o link");
         result.Should().NotContain("responda *SAIR*", "não pedimos mais pra digitar SAIR");
     }
@@ -158,7 +158,7 @@ public sealed class MessageComposerTests
 
         // Template já fala em "sair" → mesmo bloco só-link (o texto do operador fica como está).
         result.Should().StartWith(
-            "Oi! Responda SAIR p/ parar.\n\nPara não receber mais mensagens, toque aqui:\nhttps://m.test/sair?t=");
+            "Oi! Responda SAIR p/ parar.\n\nPara não receber mais mensagens, toque aqui:\nhttps://m.test/s/");
         result.Should().NotContain("responda SAIR ou toque aqui");
     }
 
@@ -168,7 +168,7 @@ public sealed class MessageComposerTests
         var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
         var c = BuildContact();
 
-        Build("Responda SAIR.", "").Compose(t, c).Should().NotContain("/sair?t=");
+        Build("Responda SAIR.", "").Compose(t, c).Should().NotContain("/s/");
     }
 
     [Fact]
@@ -178,6 +178,6 @@ public sealed class MessageComposerTests
         var c = BuildContact();
         c.RegisterSend(DateTimeOffset.UtcNow); // não é 1ª mensagem
 
-        Build("Responda SAIR.", "https://m.test").Compose(t, c).Should().NotContain("/sair?t=");
+        Build("Responda SAIR.", "https://m.test").Compose(t, c).Should().NotContain("/s/");
     }
 }

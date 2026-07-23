@@ -10,26 +10,27 @@ namespace MtrxSys.Api.Endpoints;
 // IMPORTANTE: o GET NÃO desinscreve. O WhatsApp faz fetch do link pra gerar o preview no envio;
 // se o GET já marcasse opt-out, todo mundo "sairia" sozinho na hora do disparo. Só o POST (clique
 // real do usuário) executa.
+//
+// DOIS caminhos GET pro MESMO destino:
+//   • /s/{t}       — formato CURTO (novo), o que vai nas mensagens: link menor e menos suspeito, e
+//                    quando servido num subdomínio da marca não expõe o nome do sistema.
+//   • /sair?t={t}  — formato ANTIGO, mantido vivo pros links de 90d já enviados. NÃO remover até todos
+//                    expirarem: quem tentar sair por um link velho tem que conseguir (senão, LGPD).
+// Os dois renderizam a MESMA página; o form dá POST em /sair/confirm — o único que executa o opt-out.
 public static class OptOutPublicEndpoints
 {
     public static IEndpointRouteBuilder MapOptOutPublicEndpoints(this IEndpointRouteBuilder app)
     {
+        // Formato CURTO (novo): /s/{token}. O token é um único segmento base64url (só A-Za-z0-9-_ e '.',
+        // sem '/'), então casa em {t} sem precisar de catch-all nem de decode.
+        app.MapGet("/s/{t}", (string t, OptOutLinkSigner signer, IClock clock) =>
+            ConfirmPageOrInvalid(t, signer, clock)).AllowAnonymous();
+
         var group = app.MapGroup("/sair").AllowAnonymous();
 
+        // Formato ANTIGO: /sair?t={token} — mantido pros links de 90d já enviados no formato antigo.
         group.MapGet("", (string? t, OptOutLinkSigner signer, IClock clock) =>
-        {
-            if (!signer.TryVerify(t, clock.UtcNow, out _))
-            {
-                return InvalidPage();
-            }
-            var body =
-                "<p>Deseja parar de receber nossas mensagens?</p>"
-                + "<form method=\"post\" action=\"/sair/confirm\">"
-                + $"<input type=\"hidden\" name=\"t\" value=\"{WebUtility.HtmlEncode(t)}\" />"
-                + "<button type=\"submit\">Confirmar saída</button>"
-                + "</form>";
-            return Html(Page("Confirmar saída", body));
-        });
+            ConfirmPageOrInvalid(t, signer, clock));
 
         group.MapPost("/confirm", async (
             HttpContext http,
@@ -56,6 +57,24 @@ public static class OptOutPublicEndpoints
         });
 
         return app;
+    }
+
+    // Página de confirmação (form → POST /sair/confirm). Token inválido/expirado → página de "inválido".
+    // O form posta SEMPRE no caminho absoluto /sair/confirm, então funciona igual venha o GET de /s/{t}
+    // ou de /sair?t= — e mesmo quando o link está num subdomínio da marca, o POST resolve no mesmo host.
+    private static IResult ConfirmPageOrInvalid(string? t, OptOutLinkSigner signer, IClock clock)
+    {
+        if (!signer.TryVerify(t, clock.UtcNow, out _))
+        {
+            return InvalidPage();
+        }
+        var body =
+            "<p>Deseja parar de receber nossas mensagens?</p>"
+            + "<form method=\"post\" action=\"/sair/confirm\">"
+            + $"<input type=\"hidden\" name=\"t\" value=\"{WebUtility.HtmlEncode(t)}\" />"
+            + "<button type=\"submit\">Confirmar saída</button>"
+            + "</form>";
+        return Html(Page("Confirmar saída", body));
     }
 
     private static IResult InvalidPage() =>

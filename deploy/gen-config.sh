@@ -10,6 +10,9 @@ cd "$(dirname "$0")"
 # Lê um valor LITERAL do .env.prod (sem expandir — o hash bcrypt tem '$').
 getenv() { grep -E "^$1=" .env.prod | head -1 | cut -d= -f2-; }
 MTRX_DOMAIN=$(getenv MTRX_DOMAIN)
+# Domínio (da marca) usado SÓ no link de opt-out das mensagens, pra mascarar o nome do sistema pro
+# destinatário. Opcional: se vazio, o link continua saindo no domínio do próprio stack (<letra>.<MTRX_DOMAIN>).
+MTRX_OPTOUT_DOMAIN=$(getenv MTRX_OPTOUT_DOMAIN)
 MTRX_TLS_EMAIL=$(getenv MTRX_TLS_EMAIL)
 MTRX_PHONE_BASIC_USER=$(getenv MTRX_PHONE_BASIC_USER)
 MTRX_PHONE_BASIC_HASH=$(getenv MTRX_PHONE_BASIC_HASH)
@@ -56,7 +59,7 @@ fauth() {
     echo "${L}.${MTRX_DOMAIN} {"
     echo "    @preflight method OPTIONS"
     echo "    @api path /api/* /webhooks/* /health*"
-    echo "    @optout path /sair*"
+    echo "    @optout path /sair* /s/*"
     echo "    # Preflight CORS: responde direto (sem portão), senão o forward_auth daria 302 no OPTIONS."
     echo "    handle @preflight {"
     echo "        header Access-Control-Allow-Origin \"https://app.${MTRX_DOMAIN}\""
@@ -93,6 +96,22 @@ fauth() {
     fauth
     echo "    reverse_proxy 127.0.0.1:${PHONE_PORT}"
     echo "}"
+    # Subdomínio da MARCA pro link de opt-out (mascara o nome do sistema pro destinatário). Serve SÓ o
+    # descadastro (/sair e /s) deste stack, roteado pra api dele; qualquer outro caminho → 404 (nada de
+    # app/login exposto aqui). Guardado por MTRX_OPTOUT_DOMAIN: sem ele, nada é gerado e o link continua
+    # saindo em <letra>.<MTRX_DOMAIN>. O token é por-stack, então cada letra bate na api do seu stack.
+    if [ -n "$MTRX_OPTOUT_DOMAIN" ]; then
+      echo "# Opt-out da marca — SÓ o link de descadastro deste stack (sem app, sem login)."
+      echo "${L}.${MTRX_OPTOUT_DOMAIN} {"
+      echo "    @optout path /sair* /s/*"
+      echo "    handle @optout {"
+      echo "        reverse_proxy 127.0.0.1:${API_PORTS[$i]}"
+      echo "    }"
+      echo "    handle {"
+      echo "        respond 404"
+      echo "    }"
+      echo "}"
+    fi
   done
 
   # ── HOMOLOGAÇÃO (staging) — mesmo padrão dos ambientes, apontando pro stack ISOLADO mtrxhml
@@ -103,7 +122,7 @@ fauth() {
   echo "hml.${MTRX_DOMAIN} {"
   echo "    @preflight method OPTIONS"
   echo "    @api path /api/* /webhooks/* /health*"
-  echo "    @optout path /sair*"
+  echo "    @optout path /sair* /s/*"
   echo "    handle @preflight {"
   echo "        header Access-Control-Allow-Origin \"https://app.${MTRX_DOMAIN}\""
   echo "        header Access-Control-Allow-Credentials \"true\""

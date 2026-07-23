@@ -80,8 +80,11 @@ public sealed partial class MessageComposer(
         return block is null ? text : $"{text}\n\n{block}";
     }
 
-    // "{baseUrl}/sair?t={token}" com token assinado por contato (validade 90d). A URL sai em LINHA
-    // PRÓPRIA no bloco de opt-out (mais limpa e menos "suspeita" que colada no texto).
+    // "{baseUrl}/s/{token}" com token assinado por contato (validade 90d). Caminho CURTO ("/s/" em vez
+    // de "/sair?t=") + o domínio de opt-out (subdomínio da marca, quando configurado via OptOut:PublicBaseUrl)
+    // deixam o link o mais curto e menos "suspeito" possível: o destinatário não vê o nome do sistema. O
+    // token já é curto (contactId+HMAC truncado; ver OptOutLinkSigner). A URL sai em LINHA PRÓPRIA no
+    // bloco de opt-out. O endpoint ANTIGO "/sair?t=" segue vivo na api pros links de 90d já enviados.
     // null quando OptOut:PublicBaseUrl está vazio (link desligado — estado localhost).
     private string? BuildOptOutUrl(Contact contact)
     {
@@ -91,7 +94,7 @@ public sealed partial class MessageComposer(
             return null;
         }
         var token = optOutSigner.Sign(contact.Id, DateTimeOffset.UtcNow.AddDays(90));
-        return $"{baseUrl.TrimEnd('/')}/sair?t={token}";
+        return $"{baseUrl.TrimEnd('/')}/s/{token}";
     }
 
     private static string SubstitutePlaceholders(string text, Contact contact)

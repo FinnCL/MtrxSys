@@ -19,6 +19,10 @@ ENV_FILE=deploy/.env.prod
 getenv() { grep -E "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- || true; }
 MTRX_DOMAIN=$(getenv MTRX_DOMAIN)
 [ -n "$MTRX_DOMAIN" ] || { echo "ERRO: defina MTRX_DOMAIN no $ENV_FILE"; exit 1; }
+# Domínio (da marca) SÓ pro link de opt-out — mascara o nome do sistema pro destinatário. Opcional:
+# vazio = link continua saindo em <letra>.<MTRX_DOMAIN>. Precisa casar com gen-config.sh (o Caddy só
+# atende <letra>.<MTRX_OPTOUT_DOMAIN> se este estiver setado lá também) + DNS de <a..j> apontado pro servidor.
+MTRX_OPTOUT_DOMAIN=$(getenv MTRX_OPTOUT_DOMAIN)
 
 # ── Guard de segredos (fail-closed) ──────────────────────────────────────────
 # Os composes têm defaults FRACOS pra dev (PG=mtrx, WAHA dash admin/admin, api-key
@@ -98,7 +102,14 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   # cliente certo o recorte deixou de existir: a tela cabe inteira e acompanha o tamanho do painel.
   if [ "$n" = "1" ]; then export WEB_EMULATOR_URL="https://phone-${L}.${MTRX_DOMAIN}/vnc_lite.html?scale=true"; else export WEB_EMULATOR_URL=""; fi
   export "PHONE_VIEW_URL_${n}=https://phone-${L}.${MTRX_DOMAIN}"
-  export "OPTOUT_PUBLIC_URL_${n}=https://${L}.${MTRX_DOMAIN}"
+  # Base do link de opt-out: subdomínio da MARCA quando MTRX_OPTOUT_DOMAIN está setado (mascara o nome
+  # do sistema pro destinatário), senão o próprio domínio do stack. O token é por-stack, então cada
+  # letra tem que bater na api do seu stack — daí o subdomínio por letra (a.<marca>, b.<marca>…).
+  if [ -n "$MTRX_OPTOUT_DOMAIN" ]; then
+    export "OPTOUT_PUBLIC_URL_${n}=https://${L}.${MTRX_OPTOUT_DOMAIN}"
+  else
+    export "OPTOUT_PUBLIC_URL_${n}=https://${L}.${MTRX_DOMAIN}"
+  fi
   # Token do webhook por-stack no header X-Webhook-Token (via deploy/docker-compose.hookfix.yml). Sem
   # ele, o webhook GLOBAL do WAHA POSTa os eventos SEM o header e a api recusa 401 (fail-closed) — nada
   # aparece no Chat. Stack 1 = WAHA_HOOK_TOKEN; demais = WAHA<n>_HOOK_TOKEN.
