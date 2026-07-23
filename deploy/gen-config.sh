@@ -7,8 +7,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 [ -f .env.prod ] || { echo "ERRO: deploy/.env.prod não existe (rode gen-secrets.sh)."; exit 1; }
-# Lê um valor LITERAL do .env.prod (sem expandir — o hash bcrypt tem '$').
-getenv() { grep -E "^$1=" .env.prod | head -1 | cut -d= -f2-; }
+# Lê um valor LITERAL do .env.prod (sem expandir — o hash bcrypt tem '$'). O `|| true` é ESSENCIAL sob
+# `set -euo pipefail`: uma variável AUSENTE faz o grep sair 1 (sem match), o pipefail propaga e o set -e
+# abortaria o script inteiro. Variáveis OPCIONAIS (ex.: MTRX_OPTOUT_DOMAIN) têm que virar string vazia,
+# não derrubar o deploy. As obrigatórias são cobertas pelos checks `[ -n "$VAR" ]` logo abaixo.
+getenv() { grep -E "^$1=" .env.prod | head -1 | cut -d= -f2- || true; }
 MTRX_DOMAIN=$(getenv MTRX_DOMAIN)
 # Domínio (da marca) usado SÓ no link de opt-out das mensagens, pra mascarar o nome do sistema pro
 # destinatário. Opcional: se vazio, o link continua saindo no domínio do próprio stack (<letra>.<MTRX_DOMAIN>).
