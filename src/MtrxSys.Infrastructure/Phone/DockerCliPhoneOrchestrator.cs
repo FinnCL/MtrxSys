@@ -287,19 +287,82 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         {
             return string.IsNullOrWhiteSpace(err) ? outp : err;
         }
-        // 2) Espera o WhatsApp abrir o chat antes de tocar.
+        // 2) Espera o WhatsApp abrir o chat.
         await Task.Delay(Math.Max(500, Opts.WhatsAppOpenWaitMs), ct);
-        // 3) Toca o botão "enviar" (coords da resolução do emulador — AJUSTÁVEIS em PhoneOptions).
+        // 3) Acha o botão ENVIAR por resource-id (ROBUSTO — não depende de coords fixas por resolução/
+        //    versão; provado em prod: id/send aparece quando há texto no campo) e TOCA nele.
+        var send = await FindNodeCenterAsync("com.whatsapp:id/send", ct);
+        if (send is null)
+        {
+            return "botão enviar não encontrado (o chat não abriu ou o texto não preencheu).";
+        }
         var (tc, to, te) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "input", "tap",
-            Opts.WhatsAppSendButtonX.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Opts.WhatsAppSendButtonY.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            send.Value.X.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            send.Value.Y.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (tc != 0)
         {
             return string.IsNullOrWhiteSpace(te) ? to : te;
         }
         await Task.Delay(Math.Max(200, Opts.WhatsAppSendWaitMs), ct);
-        return "ok";
+        // 4) Lê o status de ENTREGA da última mensagem (mata o "ack cego": Enviada/Entregue/Lida).
+        return await ReadLastMessageStatusAsync(ct) ?? "ok";
+    }
+
+    // Dump da árvore de UI do WhatsApp (uiautomator) → o XML. null se falhar.
+    private async Task<string?> DumpUiAsync(CancellationToken ct)
+    {
+        await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "uiautomator", "dump", "/sdcard/mtrx_ui.xml");
+        var (rc, xml, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "cat", "/sdcard/mtrx_ui.xml");
+        return rc == 0 && !string.IsNullOrWhiteSpace(xml) ? xml : null;
+    }
+
+    // Centro (x,y) do ÚLTIMO nó com este resource-id (resource-id vem antes de bounds no mesmo nó).
+    private async Task<(int X, int Y)?> FindNodeCenterAsync(string resourceId, CancellationToken ct)
+    {
+        var xml = await DumpUiAsync(ct);
+        if (xml is null)
+        {
+            return null;
+        }
+        var rx = new System.Text.RegularExpressions.Regex(
+            "resource-id=\"" + System.Text.RegularExpressions.Regex.Escape(resourceId)
+            + "\"[^>]*?bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"");
+        System.Text.RegularExpressions.Match? last = null;
+        foreach (System.Text.RegularExpressions.Match m in rx.Matches(xml))
+        {
+            last = m;
+        }
+        if (last is null)
+        {
+            return null;
+        }
+        var ic = System.Globalization.CultureInfo.InvariantCulture;
+        var x1 = int.Parse(last.Groups[1].Value, ic);
+        var y1 = int.Parse(last.Groups[2].Value, ic);
+        var x2 = int.Parse(last.Groups[3].Value, ic);
+        var y2 = int.Parse(last.Groups[4].Value, ic);
+        return ((x1 + x2) / 2, (y1 + y2) / 2);
+    }
+
+    // content-desc do ÚLTIMO id/status (Enviada/Entregue/Lida) — a entrega da msg recém-enviada.
+    private async Task<string?> ReadLastMessageStatusAsync(CancellationToken ct)
+    {
+        var xml = await DumpUiAsync(ct);
+        if (xml is null)
+        {
+            return null;
+        }
+        var rx = new System.Text.RegularExpressions.Regex(
+            "resource-id=\"com.whatsapp:id/status\"[^>]*?content-desc=\"([^\"]*)\"");
+        string? last = null;
+        foreach (System.Text.RegularExpressions.Match m in rx.Matches(xml))
+        {
+            last = m.Groups[1].Value;
+        }
+        return string.IsNullOrWhiteSpace(last) ? null : last;
     }
 
     // Maior _id entre as linhas do content query — o raw contact recém-inserido (disparo sequencial).
