@@ -9,11 +9,19 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
 {
     public Task<DispatchJob?> DequeueNextPendingAsync(DateTimeOffset until, CancellationToken ct) =>
         db.DispatchJobs
-            // Retrying = falhou e voltou pro fim da fila; é processado igual a Pending. Como o
-            // reenvio grava ScheduledAt = agora, ele naturalmente sai depois dos Pending antigos.
+            // TERMINA o que já começou antes de começar coisa nova: entre um Retrying JÁ VENCIDO e um
+            // Pending, o vencido vem primeiro. Retrying é trabalho com investimento feito e JANELA —
+            // no modo emulador o job é adiado depois de salvar o contato na agenda, esperando o
+            // WhatsApp reconhecê-lo. Ordenando só por ScheduledAt, esse job caía atrás de TODA a fila
+            // Pending (que costuma estar agendada no passado, no instante em que foi criada): com 125
+            // contatos a 90-240s cada, o primeiro envio só aconteceria de 3 a 8 HORAS depois — o
+            // preparo nunca se pagava e o operador via horas de "adiado" sem uma única mensagem.
+            // Não starva a fila: o Retrying volta a vencer só depois da janela dele, e nesse intervalo
+            // os Pending seguem sendo processados normalmente.
             .Where(j => (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)
                 && j.ScheduledAt <= until)
-            .OrderBy(j => j.ScheduledAt)
+            .OrderBy(j => j.Status == DispatchStatus.Retrying ? 0 : 1)
+            .ThenBy(j => j.ScheduledAt)
             .FirstOrDefaultAsync(ct);
 
     public async Task<DateTimeOffset?> GetEarliestPendingScheduledAtAsync(CancellationToken ct) =>
