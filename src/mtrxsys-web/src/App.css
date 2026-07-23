@@ -1100,6 +1100,13 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
 /* Os cards da aba nasceram pra uma coluna de 390px (width: min(390px, 95vw)) e ESTOURAVAM a faixa
    lateral, criando barra de rolagem horizontal e cortando texto ("onectar o WhatsApp"). Dentro da
    faixa eles passam a acompanhar a largura dela. */
+/* Legenda + ações da tela: uma coisa por linha, centralizado e compacto. Como coluna, o botão e o
+   link nunca são arrastados pra dentro do texto quando a faixa estreita (era o que quebrava). */
+.phone-screen-actions { display: flex; flex-direction: column; align-items: center; gap: 6px;
+  text-align: center; }
+.phone-screen-actions .phone-off-hint { margin: 0; }
+.phone-screen-link { font-size: 12px; color: var(--accent, #00a884); text-decoration: none; }
+.phone-screen-link:hover { text-decoration: underline; }
 .phone-side > *,
 .phone-side .phone-steps,
 .phone-side .phone-step-toggle,

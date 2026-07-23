@@ -43,8 +43,12 @@ export function WarmupCard({ active = true }: { active?: boolean }) {
     }
   }, [status, load]);
 
-  if (!status) {
-    return null; // enquanto carrega, não pisca card vazio
+  // Some por completo quando o aquecimento está DESLIGADO por config (o caso normal hoje). Antes o
+  // card ficava na tela só pra dizer "desligado, configure o pool no servidor" — ruído permanente
+  // numa aba onde cada linha custa altura da tela do emulador. Se um dia o pool for configurado
+  // (WarmupEngine:Enabled=true), o card volta sozinho, sem precisar mexer no código.
+  if (!status || !status.featureEnabled) {
+    return null;
   }
 
   const canStart = status.featureEnabled && status.memberCount >= 2;
@@ -60,14 +64,8 @@ export function WarmupCard({ active = true }: { active?: boolean }) {
         )}
       </p>
 
-      {!status.featureEnabled ? (
-        <p className="phone-off-hint">
-          Desligado por config (<code>WarmupEngine:Enabled=false</code>). Configure o pool no servidor
-          (<code>WarmupEngine:Members</code>) pra habilitar.
-        </p>
-      ) : (
-        <>
-          <p className="phone-off-hint">
+      {/* Sem o ramo "desligado por config": o componente inteiro devolve null nesse caso (acima). */}
+      <p className="phone-off-hint">
             O pool conversa de mão dupla + entra em grupos legítimos — as conversas aparecem no WhatsApp
             da conta acima. Dá reputação antes do disparo frio.
           </p>
@@ -103,8 +101,6 @@ export function WarmupCard({ active = true }: { active?: boolean }) {
               ))}
             </ul>
           )}
-        </>
-      )}
       {error && (
         <p className="phone-off-hint" style={{ color: "var(--danger)" }}>{error}</p>
       )}
