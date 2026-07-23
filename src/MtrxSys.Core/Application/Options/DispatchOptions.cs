@@ -68,7 +68,14 @@ public sealed class DispatchOptions
     // ban. Depois de N dias ativos, abre pra todas as audiências. Conta a partir do marco do chip
     // (WarmupStartedOn), então re-parear reinicia a fase. 0 desliga a trava. Ver WarmingDailyResetService,
     // que à meia-noite de Brasília libera os respondedores pra novo disparo enquanto a fase durar.
-    public int WarmingResponderOnlyDays { get; set; } = 3;
+    //
+    // DESLIGADO (0, o default do int — deixado SEM inicializador explícito por CA1805) por decisão
+    // operacional 2026-07-23: o chip dispara pra FRIO "Na fila" desde o dia 0, sem a janela de
+    // só-respondedores. O gatilho de 463 que a trava evitava é endereçado agora por OUTRO caminho —
+    // envio pela UI do app oficial + contato salvo/sincronizado na agenda + IP residencial (ver
+    // DockerCliPhoneOrchestrator). A trava era defesa do caminho WAHA, que não é mais o de envio. Pra
+    // religar num stack específico, sete Dispatch:WarmingResponderOnlyDays > 0 no .env dele.
+    public int WarmingResponderOnlyDays { get; set; }
 
     // FASE HÍBRIDA: após os N dias de "só respondeu", até o platô da curva (200/dia), o disparo mistura
     // o Círculo de Aquecimento (contatos SEUS, re-enviáveis) com frios novos, intercalado. true = ligado

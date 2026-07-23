@@ -49,8 +49,13 @@ public sealed class WarmupManager(
     // primeiro tiro frio herdar o mesmo volume do dia anterior: transição PLANA, sem degrau, que é o
     // padrão mais consistente (o WhatsApp lê volume errático como sinal). A partir do índice 4 retoma
     // o ramp. Esta curva DEVE ser idêntica à dos appsettings (Api + Dispatcher) — ver nota acima.
+    // Curva 2026-07-23: platô 400/dia (2x o antigo 200), início ~60% maior, crescimento LISO ~1,23x/dia.
+    // A constância (nenhum degrau > ~1,3x) é a defesa anti-ban — volume errático sinaliza robô mais que
+    // volume alto (o antigo 15-como-SALTO restringiu um chip). 400 é o teto ALCANÇÁVEL: com o delay de
+    // 90-240s, o máximo físico é ~480/dia, então acima disso o cap seria decorativo. DEVE ser idêntica
+    // à dos appsettings (Api + Dispatcher) — os três são a MESMA curva, a UI mostra e o motor aplica.
     private static readonly int[] DefaultCurve =
-        [5, 8, 12, 12, 15, 15, 20, 20, 25, 25, 30, 35, 35, 45, 45, 55, 55, 70, 70, 85, 85, 100, 100, 120, 120, 150, 150, 180, 200];
+        [8, 11, 14, 18, 22, 28, 35, 44, 55, 68, 84, 104, 128, 158, 195, 240, 295, 355, 400, 400];
 
     // Índice (base-0) do PLATÔ: último degrau da curva (onde estabiliza em 200/dia). É o fim do
     // aquecimento — a fase híbrida vai até aqui. Sem I/O; mesma curva que o snapshot usa (não duplica).
