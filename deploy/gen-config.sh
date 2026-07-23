@@ -82,11 +82,12 @@ fauth() {
     echo "        reverse_proxy 127.0.0.1:${WEB_PORTS[$i]}"
     echo "    }"
     echo "}"
-    # Porta da tela do Android: noVNC (docker-android) por padrão; o stack A é o PILOTO redroid,
-    # cuja tela vem do ws-scrcpy na 8000 (ver deploy/docker-compose.scrcpy-a.yml). Some quando o
-    # redroid virar o default dos 10 (aí todos apontam pro ws-scrcpy).
+    # Porta da tela do Android (noVNC do docker-android). O stack A usa o docker-android como PRIMÁRIO
+    # (docker-compose.emulator-a.yml), cujo noVNC publica no host 6090 (não no 6080 do array, pra não
+    # colidir com o base). Os demais stacks usam NOVNC_PORTS[i] (6080-6089). O 8000 do ws-scrcpy era do
+    # experimento redroid (abandonado: bug de foco de input) — não usar.
     PHONE_PORT=${NOVNC_PORTS[$i]}
-    [ "$i" = "0" ] && PHONE_PORT=8000
+    [ "$i" = "0" ] && PHONE_PORT=6090
     echo "# Tela do Android (noVNC/ws-scrcpy) — atrás do portão."
     echo "phone-${L}.${MTRX_DOMAIN} {"
     fauth

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ChipIdentity, type PhoneMode } from "../api/client";
+import { api, type ChipIdentity, type PhoneMode, type PhoneStatus } from "../api/client";
 import { WhatsAppConnect } from "./WhatsAppConnect";
 import { WarmupCard } from "./WarmupCard";
 import { HumanPhaseCard } from "./HumanPhaseCard";
 
-// Aba "Celular" — RECONSTRUÍDA DO ZERO, passo a passo.
-// Baseline (passo 1): o toggle de modo (PERSISTIDO no banco) + o mundo "WAHA + aparelho real físico"
-// (conexão do chip por QR / identidade). O mundo "Com emulador" (tela do Android, pareamento pelo
-// emulador, setup do container) será reconstruído nos próximos passos — aqui ele é só um placeholder.
+// Aba "Celular" — dois mundos, alternados pelo toggle de modo (PERSISTIDO no banco):
+//  • "Sem emulador" (WahaOnly): conexão do chip por QR / identidade (WAHA + aparelho real físico).
+//  • "Com emulador" (Emulator): a TELA do Android (noVNC do docker-android) embutida na moldura de
+//    celular — o emulador é o PRIMÁRIO e o disparo a frio sai por ele (mata o 463). Barra de navegação
+//    Android + ligar/recarregar a tela. Só aparece onde há viewer configurado (VITE_EMULATOR_URL).
 // O backend (endpoints, orquestrador, /api/phone/mode) segue intacto; isto é só a camada de tela.
 interface LivePhoneScreenProps {
   url: string; // viewer do emulador (ws-scrcpy/noVNC). Vazio = host sem emulador → sempre WAHA+físico.
@@ -32,6 +33,10 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
   const [modeBusy, setModeBusy] = useState(false);
   // Saúde de entrega (sensor anti-shadow-restriction) — dos envios das últimas 24h, quantos entregaram.
   const [delivery, setDelivery] = useState<{ sent: number; delivered: number; rate: number | null } | null>(null);
+  // Status do container do emulador (running/booted) — só no modo emulador, pra saber se a tela sobe.
+  const [phoneStatus, setPhoneStatus] = useState<PhoneStatus | null>(null);
+  // Recarrega o iframe da tela (botão "recarregar") sem F5 na página inteira.
+  const [frameKey, setFrameKey] = useState(0);
 
   const refreshIdent = useCallback(async () => {
     try {
@@ -71,11 +76,12 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
   const connected = ident?.status === "Working";
 
   // Troca o modo (o toggle único). Persiste no banco e reconcilia o container do emulador ("Emulator"
-  // liga, "WahaOnly" desliga). TRAVA de EXCLUSÃO MÚTUA: enquanto houver chip CONECTADO, não deixa
-  // trocar — WAHA+físico e emulador+WAHA são mutuamente exclusivos por ambiente (a sessão WAHA vincula
-  // a um aparelho só). Pra alternar, desconecte antes.
+  // liga, "WahaOnly" desliga). NÃO trava mais com o chip conectado: no Caminho A o emulador é o PRIMÁRIO
+  // e o WAHA é o COMPANION do MESMO número — coexistem, não são mutuamente exclusivos. Trocar de modo é
+  // livre (só bloqueia durante a própria troca, modeBusy). Alternar Emulator↔WahaOnly liga/desliga o
+  // container do emulador; a sessão WAHA segue de pé.
   const selectMode = async (next: PhoneMode) => {
-    if (modeBusy || connected || mode === next) return;
+    if (modeBusy || mode === next) return;
     setModeBusy(true);
     try {
       await api.phoneSetMode(next);
@@ -92,8 +98,9 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
   };
 
   const emulatorMode = mode === "Emulator" && !!url;
-  // Toggle travado quando conectado (não pode usar os dois modos ao mesmo tempo) ou durante a troca.
-  const modeLocked = connected || modeBusy;
+  // Toggle só bloqueia durante a própria troca (modeBusy). Antes travava com o chip conectado; no
+  // Caminho A emulador+WAHA coexistem, então trocar é livre.
+  const modeLocked = modeBusy;
 
   // Saúde de entrega — só quando conectado (é o chip que dispara). Poll leve; falha silenciosa.
   useEffect(() => {
@@ -115,6 +122,27 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
     };
   }, [connected]);
 
+  // Status do container do emulador — só no modo emulador. Diz se a tela (noVNC) tem o que embutir:
+  // running=false → mostra "Ligar emulador"; unavailable → host sem docker/emulador. Poll leve.
+  useEffect(() => {
+    if (!emulatorMode) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const s = await api.phoneStatus();
+        if (alive) setPhoneStatus(s);
+      } catch {
+        /* ignora — a tela otimista embute mesmo assim */
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 8000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [emulatorMode]);
+
   return (
     <section className="live-phone">
       {/* Proxy REALMENTE aplicado na sessão WAHA do chip (verde) ou saída pelo IP da máquina (cinza). */}
@@ -130,7 +158,7 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
       {/* TOGGLE ÚNICO de modo (persistido no banco). Só aparece onde há emulador disponível (url). */}
       {url && mode !== null && (
         <div className="phone-mode-wrap">
-          <div className={`phone-mode${connected ? " locked" : ""}`} role="group" aria-label="Modo de disparo" aria-busy={modeBusy}>
+          <div className="phone-mode" role="group" aria-label="Modo de disparo" aria-busy={modeBusy}>
             <button
               type="button"
               className={`phone-mode-opt${mode === "WahaOnly" ? " active" : ""}`}
@@ -151,13 +179,11 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
             </button>
           </div>
           <p className="phone-off-hint phone-mode-hint">
-            {connected
-              ? "Conectado, desconecte para trocar de modo"
-              : modeBusy
-                ? "Alternando…"
-                : mode === "Emulator"
-                  ? "Disparo pelo emulador + WAHA"
-                  : "WAHA + aparelho real físico"}
+            {modeBusy
+              ? "Alternando…"
+              : mode === "Emulator"
+                ? "Disparo pela UI do emulador (primário) + WAHA companion"
+                : "WAHA + aparelho real físico"}
           </p>
         </div>
       )}
@@ -221,16 +247,59 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
         <HumanPhaseCard onOpenConversation={onOpenConversation} onBlockingChange={setHumanPhaseBlocking} />
       )}
 
-      {/* Placeholder honesto: o mundo "Com emulador" ainda não foi reconstruído neste baseline. */}
+      {/* Modo "Com emulador": a TELA do Android (noVNC do docker-android) embutida na moldura de celular.
+          O disparo a frio sai por ESTE aparelho (o primário) — é o que mata o 463. Barra de navegação
+          Android (adb keyevent) + recarregar/abrir a tela. Desligado → botão pra ligar o container. */}
       {emulatorMode && (
-        <p className="phone-off-hint" style={{ textAlign: "center", maxWidth: 390 }}>
-          Modo <b>Com emulador</b> em construção. A tela do Android e o pareamento pelo emulador
-          voltam no próximo passo. O disparo já funciona pelo WAHA.
-        </p>
-      )}
+        <>
+          {phoneStatus && !phoneStatus.running ? (
+            <div className="phone-steps">
+              <p className="phone-off-hint" style={{ textAlign: "center" }}>
+                {phoneStatus.state === "unavailable"
+                  ? "Emulador indisponível neste host (sem docker/KVM)."
+                  : "O emulador está desligado. Ligue para ver a tela e disparar por ele."}
+              </p>
+              {phoneStatus.state !== "unavailable" && (
+                <button type="button" className="phone-activate" onClick={() => void api.phoneStart()}>
+                  Ligar emulador
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="phone-device phone-device--embed">
+                <div className="phone-notch" />
+                <iframe
+                  key={frameKey}
+                  className="phone-stage"
+                  src={url}
+                  title="Tela do emulador Android (WhatsApp primário)"
+                  allow="clipboard-read; clipboard-write"
+                />
+              </div>
+              {/* Navegação do Android (◁ ○ ▢) via adb keyevent — pra operar a tela quando o mouse do
+                  noVNC não basta (ex.: voltar de um menu). */}
+              <div className="phone-navbar">
+                <button type="button" className="phone-nav-btn" title="Voltar" onClick={() => void api.phoneKey("back")}>◁</button>
+                <button type="button" className="phone-nav-btn" title="Início" onClick={() => void api.phoneKey("home")}>○</button>
+                <button type="button" className="phone-nav-btn" title="Recentes" onClick={() => void api.phoneKey("recents")}>▢</button>
+              </div>
+              <p className="phone-off-hint" style={{ textAlign: "center", maxWidth: 390 }}>
+                Tela do Android (emulador-primário). O disparo a frio sai por aqui — sem 463.{" "}
+                <button type="button" className="phone-reload" onClick={() => setFrameKey((k) => k + 1)}>
+                  Recarregar tela
+                </button>{" "}
+                <a href={url} target="_blank" rel="noreferrer" style={{ color: "var(--accent, #00a884)" }}>
+                  abrir em nova aba
+                </a>
+              </p>
+            </>
+          )}
 
-      {/* Aquecimento de conversa (pool) — só no modo Com emulador; fora da área WAHA + físico. */}
-      {emulatorMode && <WarmupCard />}
+          {/* Aquecimento de conversa (pool) — só no modo Com emulador; fora da área WAHA + físico. */}
+          <WarmupCard />
+        </>
+      )}
     </section>
   );
 }

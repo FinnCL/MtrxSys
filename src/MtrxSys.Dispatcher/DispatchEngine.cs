@@ -58,10 +58,12 @@ public sealed class DispatchEngine(
         // Em WahaOnly (aparelho físico) o emulador NÃO é o aparelho em uso — salvar lá seria ~5 docker
         // exec INÚTEIS por envio (falham/são no-op, com latência e spam de log). Lido 1x por ciclo.
         var sysStateSnapshot = await systemState.GetAsync(ct);
-        var saveContactsToEmulator = sysStateSnapshot.DispatchMode == PhoneDispatchMode.Emulator;
-        // FASE 3 (Caminho A): envia pela UI do EMULADOR-primário (não pelo WAHA) — mata o 463 do frio.
-        // Lido 1x por ciclo. Mantém check-exists (WAHA valida o número), mas pula typing e usa a UI.
-        var sendViaEmulator = dispatchOpts.Value.SendViaEmulator;
+        // MODO EMULADOR (Caminho A anti-463): o toggle "Com emulador" (PhoneDispatchMode, persistido no
+        // banco) comanda TUDO no emulador — salva o contato na agenda do primário E ENVIA pela UI dele
+        // (não pelo WAHA), o que mata o 463 do frio. WahaOnly (default dos 9 stacks) = envio pelo WAHA,
+        // intacto. FONTE ÚNICA: sem env flag separada — o toggle da aba Celular controla o disparo. O
+        // modo mantém o check-exists (WAHA valida o número), mas pula o typing e usa a UI. Lido 1x/ciclo.
+        var emulatorMode = sysStateSnapshot.DispatchMode == PhoneDispatchMode.Emulator;
         // Número do chip CONECTADO agora (reconciliado logo acima). O gate-por-chip usa isto pra só
         // disparar pros contatos que ESTE chip importou (co-membros dele). Lido 1x por ciclo.
         var connectedPhone = sysStateSnapshot.WarmupPhone;
@@ -129,7 +131,7 @@ public sealed class DispatchEngine(
             // a cada job; acks atrasados recuperam a taxa e o ciclo volta sozinho.
             // No modo emulador o guard baseia-se em ack async do WAHA, que não existe (envio pela UI):
             // desliga aqui pra não pausar o ciclo à toa. A confirmação de envio da própria UI é o sinal.
-            if (!sendViaEmulator && dispatchOpts.Value.DeliveryHealthGuardEnabled
+            if (!emulatorMode && dispatchOpts.Value.DeliveryHealthGuardEnabled
                 && await IsDeliveryUnhealthyAsync(ct) is { } bad)
             {
                 metrics.RecordWarmupBlocked();
@@ -379,7 +381,7 @@ public sealed class DispatchEngine(
                 // No modo emulador NÃO simula "digitando" pelo WAHA: o typing sairia da conta do
                 // COMPANION (WAHA), diferente de quem envia (o primário do emulador) — inconsistente e
                 // com cara de bot. O intent click-to-chat já abre o chat de forma natural.
-                var typingMs = sendViaEmulator ? 0 : await typing.SimulateAsync(sessionId, sendTarget, text, ct);
+                var typingMs = emulatorMode ? 0 : await typing.SimulateAsync(sessionId, sendTarget, text, ct);
 
                 // 2º freio de mão: se o operador clicou "Parar envios" enquanto a gente simulava
                 // o typing (2-5s), o envio ainda não saiu. Checa de novo aqui pra abortar ANTES
@@ -413,7 +415,7 @@ public sealed class DispatchEngine(
                 // Grava o contato na agenda do EMULADOR ANTES do envio (perfil menos-robô, ajuda
                 // anti-ban) — SÓ no modo Emulator (no físico o emulador não é o aparelho em uso).
                 // Best-effort e idempotente: uma falha aqui é só logada e NÃO impede o envio.
-                if (saveContactsToEmulator)
+                if (emulatorMode)
                 {
                     await TrySaveContactAsync(contact, ct);
                 }
@@ -422,7 +424,7 @@ public sealed class DispatchEngine(
                 // tenha imagem. Evita rejeição do WAHA (422 por mimetype/dados) e mantém o envio
                 // simples e estável. (O texto composto preserva spintax, placeholders e o "SAIR".)
                 string waMessageId;
-                if (sendViaEmulator)
+                if (emulatorMode)
                 {
                     // FASE 3 (Caminho A): envia pela UI do EMULADOR-primário — entrega pra FRIO sem 463
                     // (o WAHA/companion daria 463). !Sent → throw pro tratamento de falha (retry/fail)
@@ -449,7 +451,7 @@ public sealed class DispatchEngine(
                 // Era exatamente o estado da produção em 2026-07-15 — 100% dos envios sem id, e nada
                 // no log. Aviso alto: se isto aparecer, o guard está cego e alguém precisa saber.
                 // No modo emulador o id vazio é ESPERADO (não há ack async do WAHA) — não é anomalia.
-                if (!sendViaEmulator && string.IsNullOrWhiteSpace(waMessageId))
+                if (!emulatorMode && string.IsNullOrWhiteSpace(waMessageId))
                 {
                     log.LogWarning(
                         "Envio para {Phone} não devolveu id de mensagem. A mensagem SAIU, mas o sensor "
@@ -538,7 +540,7 @@ public sealed class DispatchEngine(
                 // Estes dois checks são específicos do WAHA (sessão inalcançável / fora de WORKING). No
                 // modo emulador não há sessão WAHA no caminho de envio: a falha vai direto pro
                 // tratamento de falha-do-número (retry até o teto, senão Failed) mais abaixo.
-                if (!sendViaEmulator && IsSessionDownFailure(ex))
+                if (!emulatorMode && IsSessionDownFailure(ex))
                 {
                     log.LogWarning(ex,
                         "WAHA inalcançável ao enviar o job {JobId}; ciclo parado (job segue Pending).", job.Id);
@@ -551,7 +553,7 @@ public sealed class DispatchEngine(
                 // degradada (risco de ban). Só cai no tratamento de falha-do-número se a sessão SEGUE
                 // WORKING. Se não der pra ler o status (blip), NÃO afirma que caiu — o gate de lista-
                 // branca no topo do próximo ciclo é o backstop.
-                if (!sendViaEmulator && await IsSessionNotWorkingAsync(sessionId, ct))
+                if (!emulatorMode && await IsSessionNotWorkingAsync(sessionId, ct))
                 {
                     log.LogWarning(ex,
                         "Envio do job {JobId} falhou e a sessão NÃO está WORKING; ciclo parado (job segue Pending).", job.Id);

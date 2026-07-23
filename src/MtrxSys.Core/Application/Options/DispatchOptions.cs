@@ -75,11 +75,7 @@ public sealed class DispatchOptions
     // (default). false = após os N dias abre direto pra todas as audiências (comportamento anterior).
     public bool HybridWarmingEnabled { get; set; } = true;
 
-    // FASE 3 (Caminho A anti-463): envia pela UI do EMULADOR (docker-android), NÃO pelo WAHA. O
-    // emulador-primário entrega pra FRIO sem 463 (o companion WAHA/NOWEB dá 463). Nesse modo o envio
-    // PULA o check-exists/typing do WAHA e usa phone.SendWhatsAppMessageAsync (uiautomator, com status
-    // de entrega). MANTÉM os delays anti-ban, o teto de tentativas e o guard de entrega — a UI mata só
-    // o 463, NÃO o risco de ban de spam. false = envia pelo WAHA (default; os 9 stacks WAHA intactos).
-    // Ligar POR STACK (Dispatch__SendViaEmulator=true) só onde há emulador pareado. Ver docs.
-    public bool SendViaEmulator { get; set; }
+    // NOTA (Caminho A anti-463): NÃO há flag de "enviar pelo emulador" aqui. O disparo pela UI do
+    // emulador é comandado pelo TOGGLE "Com emulador" (PhoneDispatchMode.Emulator, persistido no banco
+    // e visível na aba Celular), não por config de deploy — fonte única. Ver DispatchEngine.emulatorMode.
 }
