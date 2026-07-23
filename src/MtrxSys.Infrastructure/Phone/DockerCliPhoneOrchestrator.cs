@@ -15,7 +15,14 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
     // Quanto tempo o WhatsApp pode levar pra reconhecer um contato novo da agenda. MEDIDO em produção
     // (2026-07-23): o Google subiu em ~90s e o espelho `com.whatsapp` apareceu entre ~2,5 e ~7 min.
     // Só depois desta janela a AUSÊNCIA do espelho vira prova de que o número não tem WhatsApp.
-    private static readonly TimeSpan MirrorSyncGrace = TimeSpan.FromMinutes(8);
+    //
+    // TEM QUE SER BEM MAIOR que o intervalo com que o motor re-pergunta (DispatchEngine.
+    // EmulatorSyncGraceSeconds, hoje 8 min). Os dois já foram IGUAIS: o job voltava exatamente quando
+    // a janela vencia, então um espelho um pouco mais lento que a média virava veredito "não tem
+    // WhatsApp" — que é TERMINAL (MarkSkipped) — na PRIMEIRA tentativa, sem segunda chance. Com 20
+    // min o contato é re-perguntado ~2 vezes antes de qualquer descarte, e a medição de 7 min ganha
+    // quase 3x de folga. Se mexer no intervalo do motor, mexa aqui junto.
+    private static readonly TimeSpan MirrorSyncGrace = TimeSpan.FromMinutes(20);
 
     private PhoneOptions Opts => opts.Value;
     // Serializa as operações de UI (o emulador não roda 2 uiautomator dump ao mesmo tempo, e o dump usa
@@ -334,33 +341,70 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
             return "já existe";
         }
 
-        // 2) Cria o raw contact (conta LOCAL: account_type/name vazios → some com pm clear na troca de chip).
-        await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+        // 2) Cria o raw contact. Conta VAZIA de propósito: num aparelho COM conta Google o Android
+        //    atribui o contato à conta PADRÃO sozinho (medido: o registro nasce em com.google e
+        //    sincroniza); sem conta nenhuma ele fica local e some no pm clear da troca de chip.
+        //    O rc É verificado: sem isso, uma falha de infra (container errado, socket ausente, adb
+        //    fora) seguia adiante e só aparecia no passo 3 como "falha ao obter raw_contact_id" —
+        //    sintoma que aponta pro lugar errado e custou uma hora de diagnóstico em produção.
+        var (ic, io, ie) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "content", "insert", "--uri", "content://com.android.contacts/raw_contacts",
             "--bind", "account_type:s:", "--bind", "account_name:s:");
+        if (ic != 0)
+        {
+            return $"não criei o contato: {Detail(io, ie)}";
+        }
 
         // 3) Pega o _id recém-criado. O disparo é SEQUENCIAL (um envio por vez), então o MAIOR _id é o
         //    nosso — sem corrida. (content insert não devolve o id, daí a leitura.)
-        var (_, rows, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+        var (qc, rows, qe) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "content", "query",
             "--uri", "content://com.android.contacts/raw_contacts", "--projection", "_id");
+        if (qc != 0)
+        {
+            return $"não consegui ler a agenda: {Detail(rows, qe)}";
+        }
         var rid = MaxRawContactId(rows);
         if (rid <= 0)
         {
-            return "falha ao obter raw_contact_id";
+            // A agenda respondeu, mas sem nenhum _id: aí sim é o dado que está estranho, não a infra.
+            return "a agenda respondeu sem nenhum _id";
         }
 
         // 4) Nome (sanitizado: só alfanumérico — espaço/aspas quebrariam no re-split do adb shell) + telefone.
+        //    O nome falhar deixaria um contato SEM NOME mas com telefone (ainda serve pro WhatsApp);
+        //    o TELEFONE falhar deixa um contato ÓRFÃO, inútil e invisível na agenda. Por isso os dois
+        //    são verificados, e o do telefone diz explicitamente que sobrou lixo.
         var safeName = SanitizeContactName(name, digits);
-        await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+        var (nc, no, ne) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "content", "insert", "--uri", "content://com.android.contacts/data",
             "--bind", $"raw_contact_id:i:{rid}", "--bind", "mimetype:s:vnd.android.cursor.item/name",
             "--bind", $"data1:s:{safeName}");
+        if (nc != 0)
+        {
+            return $"não gravei o nome do contato {rid}: {Detail(no, ne)}";
+        }
         var (rc, outp, err) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "content", "insert", "--uri", "content://com.android.contacts/data",
             "--bind", $"raw_contact_id:i:{rid}", "--bind", "mimetype:s:vnd.android.cursor.item/phone_v2",
             "--bind", $"data1:s:{digits}");
-        return rc == 0 ? "ok" : (string.IsNullOrWhiteSpace(err) ? outp : err);
+        return rc == 0
+            ? "ok"
+            : $"não gravei o telefone (contato {rid} ficou órfão na agenda): {Detail(outp, err)}";
+    }
+
+    // Erro do CLI em uma linha: prefere o stderr; cai no stdout quando ele vem vazio (o `content`
+    // do Android imprime a mensagem de uso no stdout). Trunca porque isso vai pro log a cada job.
+    private static string Detail(string? outp, string? err)
+    {
+        var raw = string.IsNullOrWhiteSpace(err) ? outp : err;
+        var flat = (raw ?? string.Empty).Replace('\n', ' ').Replace('\r', ' ').Trim();
+        return flat.Length switch
+        {
+            0 => "(sem detalhe)",
+            > 200 => flat[..200] + "…",
+            _ => flat,
+        };
     }
 
     public async Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct)

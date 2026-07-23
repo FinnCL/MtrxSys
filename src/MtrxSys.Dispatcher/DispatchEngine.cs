@@ -762,10 +762,13 @@ public sealed class DispatchEngine(
     // contato não esperar demais quando o check voltar.
     private const int NumberCheckDeferSeconds = 60;
 
-    // Espera até o WhatsApp reconhecer um contato recém-salvo na agenda do emulador. MEDIDO em
+    // De quanto em quanto tempo re-perguntamos ao aparelho se ele já reconhece o contato. MEDIDO em
     // produção (2026-07-23): Google sobe em ~90s e o espelho `com.whatsapp` aparece entre ~2,5 e ~7min.
-    // Um pouco acima do teto observado: adiar de novo custa um ciclo, mas responder cedo demais faz o
-    // aparelho dizer "não tem WhatsApp" sobre quem só não sincronizou ainda.
+    // É só a CADÊNCIA da re-pergunta — quem decide se já dá pra desistir é a janela do orquestrador
+    // (DockerCliPhoneOrchestrator.MirrorSyncGrace, 20 min), que PRECISA ser bem maior que isto: com as
+    // duas iguais, o job voltava no instante em que a janela vencia e um sync um pouco mais lento
+    // virava descarte TERMINAL na primeira tentativa. Nesta proporção o contato é re-perguntado ~2
+    // vezes antes de qualquer veredito negativo.
     private const int EmulatorSyncGraceSeconds = 480;
 
     // Falha definitiva = a que não melhora reenviando: respostas 4xx do WAHA (request inválido,
