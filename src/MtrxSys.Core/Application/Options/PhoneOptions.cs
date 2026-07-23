@@ -127,20 +127,14 @@ public sealed class PhoneOptions
     public int KeepAliveStaggerSlot { get; set; } = -1;
 
     // ── Envio pela UI do WhatsApp (Caminho A anti-463 — envio pelo PRIMÁRIO, não pelo WAHA) ──────
-    // Automação de UI: abre o chat via intent click-to-chat (mensagem já preenchida) e TOCA o botão
-    // "enviar". As coordenadas do toque dependem da RESOLUÇÃO do emulador (redroid default 720x1280) e
-    // da versão do WhatsApp — por isso são CONFIGURÁVEIS e precisam ser AJUSTADAS no emulador real
-    // (rode uma vez, veja onde cai o toque, acerte). Default: canto inferior direito de 720x1280.
+    // Automação de UI (docker-android): abre o chat via intent click-to-chat (mensagem já preenchida),
+    // acha o botão "enviar" por resource-id via uiautomator (ROBUSTO — sem coords fixas), toca, e
+    // confirma o envio pelo campo de texto esvaziar. Estes são TIMEOUTS de poll, não sleeps fixos.
 
-    /// <summary>X do toque no botão "enviar" do WhatsApp (px). Default ~canto inf. direito de 720w.</summary>
-    public int WhatsAppSendButtonX { get; set; } = 680;
+    /// <summary>Timeout (ms) do poll pelo botão "enviar" aparecer após abrir o chat. Chat lento
+    /// (cold start / proxy) precisa de folga; poll re-tenta até aqui em vez de abortar num sleep fixo.</summary>
+    public int WhatsAppOpenWaitMs { get; set; } = 6000;
 
-    /// <summary>Y do toque no botão "enviar" do WhatsApp (px). Default ~canto inf. direito de 1280h.</summary>
-    public int WhatsAppSendButtonY { get; set; } = 1235;
-
-    /// <summary>Espera (ms) o WhatsApp abrir o chat após o intent, antes de tocar enviar.</summary>
-    public int WhatsAppOpenWaitMs { get; set; } = 4000;
-
-    /// <summary>Espera (ms) após tocar enviar, pra a mensagem sair antes de seguir.</summary>
-    public int WhatsAppSendWaitMs { get; set; } = 1500;
+    /// <summary>Timeout (ms) do poll de CONFIRMAÇÃO do envio (o campo de texto esvaziar) após tocar enviar.</summary>
+    public int WhatsAppSendWaitMs { get; set; } = 3000;
 }

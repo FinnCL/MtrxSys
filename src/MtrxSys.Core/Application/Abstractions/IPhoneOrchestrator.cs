@@ -74,9 +74,21 @@ public interface IPhoneOrchestrator
     /// <summary>Envia uma mensagem de WhatsApp DIRETO pela UI do emulador (o PRIMÁRIO), NÃO pelo WAHA.
     /// É o "Caminho A" anti-463: o companion NOWEB dá 463 em frio; o primário (dono da conta) manda
     /// normal. Abre o chat com a mensagem já preenchida via intent click-to-chat
-    /// (whatsapp://send?phone=X&amp;text=Y — funciona pra número salvo OU não) e toca "enviar" (coords
-    /// da resolução do emulador, ajustáveis em PhoneOptions). Retorna "ok" ou o erro. Default: não
-    /// suportado. ⚠️ Automação de UI: os coords/tempos precisam de AJUSTE no emulador real.</summary>
-    Task<string> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
-        Task.FromResult("envio pela UI não suportado neste engine.");
+    /// (whatsapp://send?phone=X&amp;text=Y — funciona pra número salvo OU não), acha o botão "enviar" por
+    /// resource-id (uiautomator, robusto) e toca. Retorna resultado ESTRUTURADO (enviou? entrega? erro?).
+    /// Default: não suportado.</summary>
+    Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
+        Task.FromResult(WhatsAppSendResult.Fail("envio pela UI não suportado neste engine."));
+}
+
+/// <summary>Resultado do envio pela UI do WhatsApp (Caminho A). Contrato claro em vez de uma string
+/// que misturava status/ok/erro (que invertia o "ok" no sucesso).</summary>
+/// <param name="Sent">A mensagem SAIU (botão tocado + campo esvaziou). false = não enviou.</param>
+/// <param name="DeliveryStatus">Entrega NORMALIZADA (locale-independente): "sent" | "delivered" |
+/// "read" | null (não lido ainda). Mata o "ack cego" do WAHA.</param>
+/// <param name="Error">Motivo da falha quando <paramref name="Sent"/> = false; null no sucesso.</param>
+public sealed record WhatsAppSendResult(bool Sent, string? DeliveryStatus, string? Error)
+{
+    public static WhatsAppSendResult Ok(string? deliveryStatus) => new(true, deliveryStatus, null);
+    public static WhatsAppSendResult Fail(string error) => new(false, null, error);
 }

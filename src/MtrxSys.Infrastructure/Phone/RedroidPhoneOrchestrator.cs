@@ -156,41 +156,9 @@ internal sealed class RedroidPhoneOrchestrator(IOptions<PhoneOptions> opts, IHtt
         return string.IsNullOrWhiteSpace(result) ? $"http_proxy = {value}" : result;
     }
 
-    public async Task<string> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct)
-    {
-        // Caminho A anti-463: envia pela UI do WhatsApp DO EMULADOR (o primário), não pelo WAHA.
-        var digits = new string((phoneE164 ?? string.Empty).Where(char.IsDigit).ToArray());
-        if (digits.Length < 8)
-        {
-            return "phone inválido";
-        }
-        var url = WhatsAppUi.DeepLink(digits, text);
-        if (url.Contains('\'', StringComparison.Ordinal))
-        {
-            return "texto gerou aspa simples (não esperado no URL-encode).";
-        }
-        await AdbConnectAsync(ct);
-        // 1) Abre o chat com a mensagem já preenchida (click-to-chat).
-        var (rc, outp, err) = await DockerCli.RunAsync("adb", ct,
-            "-s", Serial, "shell", $"am start -a android.intent.action.VIEW -d '{url}'");
-        if (rc != 0)
-        {
-            return string.IsNullOrWhiteSpace(err) ? outp : err;
-        }
-        // 2) Espera abrir o chat.
-        await Task.Delay(Math.Max(500, Opts.WhatsAppOpenWaitMs), ct);
-        // 3) Toca o botão "enviar" (coords AJUSTÁVEIS em PhoneOptions — dependem da resolução/versão).
-        var (tc, to, te) = await DockerCli.RunAsync("adb", ct,
-            "-s", Serial, "shell", "input", "tap",
-            Opts.WhatsAppSendButtonX.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Opts.WhatsAppSendButtonY.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        if (tc != 0)
-        {
-            return string.IsNullOrWhiteSpace(te) ? to : te;
-        }
-        await Task.Delay(Math.Max(200, Opts.WhatsAppSendWaitMs), ct);
-        return "ok";
-    }
+    // NB: NÃO implementa SendWhatsAppMessageAsync — o redroid tem bug de foco de input (mCurrentFocus=
+    // null → nenhum toque/texto chega a lugar nenhum), então o envio pela UI é impossível aqui. Usa o
+    // default da interface ("não suportado neste engine"). O engine que envia é o docker-android.
 
     // Garante a conexão adb-TCP antes de cada operação de device. `adb connect` é idempotente (se já
     // conectado, é no-op); best-effort — se falhar, o comando seguinte devolve o erro real.

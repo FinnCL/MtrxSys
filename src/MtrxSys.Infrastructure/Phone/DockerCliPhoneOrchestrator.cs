@@ -10,9 +10,14 @@ namespace MtrxSys.Infrastructure.Phone;
 /// forma limpa. Exige um host com /dev/kvm (servidor Linux) pra o Android de fato bootar. Os helpers
 /// de processo/download ficam em <see cref="DockerCli"/> (compartilhados com o engine redroid).</summary>
 internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IHttpClientFactory http)
-    : IPhoneOrchestrator
+    : IPhoneOrchestrator, IDisposable
 {
     private PhoneOptions Opts => opts.Value;
+    // Serializa as operações de UI (o emulador não roda 2 uiautomator dump ao mesmo tempo, e o dump usa
+    // um arquivo fixo). O provider é singleton; garante 1 envio por vez por emulador. Ver SendWhatsApp.
+    private readonly SemaphoreSlim _uiLock = new(1, 1);
+
+    public void Dispose() => _uiLock.Dispose();
 
     public async Task<PhoneStatus> GetStatusAsync(CancellationToken ct)
     {
@@ -266,50 +271,64 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return rc == 0 ? "ok" : (string.IsNullOrWhiteSpace(err) ? outp : err);
     }
 
-    public async Task<string> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct)
+    public async Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct)
     {
         // Caminho A anti-463: envia pela UI do WhatsApp DO EMULADOR (o primário), não pelo WAHA.
         var digits = new string((phoneE164 ?? string.Empty).Where(char.IsDigit).ToArray());
         if (digits.Length < 8)
         {
-            return "phone inválido";
+            return WhatsAppSendResult.Fail("phone inválido");
         }
         var url = WhatsAppUi.DeepLink(digits, text);
         if (url.Contains('\'', System.StringComparison.Ordinal))
         {
-            return "texto gerou aspa simples (não esperado no URL-encode)."; // guarda anti-injeção
+            return WhatsAppSendResult.Fail("texto gerou aspa simples (não esperado no URL-encode)."); // anti-injeção
         }
-        // 1) Abre o chat com a mensagem já preenchida (click-to-chat). Aspas simples: o '&'/'#' da URL
-        //    não podem ser interpretados pelo shell do device.
-        var (rc, outp, err) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
-            "adb", "shell", $"am start -a android.intent.action.VIEW -d '{url}'");
-        if (rc != 0)
+        // Um envio por vez por emulador (uiautomator dump não roda concorrente e usa arquivo fixo).
+        await _uiLock.WaitAsync(ct);
+        try
         {
-            return string.IsNullOrWhiteSpace(err) ? outp : err;
+            // 1) Abre o chat com a mensagem já preenchida (click-to-chat). Aspas simples: o '&'/'#' da URL
+            //    não podem ser interpretados pelo shell do device.
+            var (rc, outp, err) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+                "adb", "shell", $"am start -a android.intent.action.VIEW -d '{url}'");
+            if (rc != 0)
+            {
+                return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
+            }
+            // 2) POLL o botão ENVIAR aparecer (id/send surge quando há texto no campo) — não um sleep fixo:
+            //    chat lento (cold start / proxy) abriria depois dos 4s e o envio seria abortado à toa.
+            var send = await PollNodeCenterAsync("com.whatsapp:id/send", Opts.WhatsAppOpenWaitMs, ct);
+            if (send is null)
+            {
+                return WhatsAppSendResult.Fail("botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
+            }
+            // 3) Toca enviar.
+            var (tc, to, te) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+                "adb", "shell", "input", "tap",
+                send.Value.X.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                send.Value.Y.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (tc != 0)
+            {
+                return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(te) ? to : te);
+            }
+            // 4) CONFIRMA o envio: o campo de texto ESVAZIA quando a msg sai (correlação confiável — se o
+            //    tap errou o botão, o texto fica no campo e sabemos que NÃO enviou).
+            if (!await PollEntryClearedAsync(Opts.WhatsAppSendWaitMs, ct))
+            {
+                return WhatsAppSendResult.Fail("toquei enviar mas o campo não esvaziou — envio não confirmado.");
+            }
+            // 5) Status de ENTREGA (normalizado sent/delivered/read, locale-independente) — best-effort.
+            return WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(ct));
         }
-        // 2) Espera o WhatsApp abrir o chat.
-        await Task.Delay(Math.Max(500, Opts.WhatsAppOpenWaitMs), ct);
-        // 3) Acha o botão ENVIAR por resource-id (ROBUSTO — não depende de coords fixas por resolução/
-        //    versão; provado em prod: id/send aparece quando há texto no campo) e TOCA nele.
-        var send = await FindNodeCenterAsync("com.whatsapp:id/send", ct);
-        if (send is null)
+        finally
         {
-            return "botão enviar não encontrado (o chat não abriu ou o texto não preencheu).";
+            _uiLock.Release();
         }
-        var (tc, to, te) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
-            "adb", "shell", "input", "tap",
-            send.Value.X.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            send.Value.Y.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        if (tc != 0)
-        {
-            return string.IsNullOrWhiteSpace(te) ? to : te;
-        }
-        await Task.Delay(Math.Max(200, Opts.WhatsAppSendWaitMs), ct);
-        // 4) Lê o status de ENTREGA da última mensagem (mata o "ack cego": Enviada/Entregue/Lida).
-        return await ReadLastMessageStatusAsync(ct) ?? "ok";
     }
 
-    // Dump da árvore de UI do WhatsApp (uiautomator) → o XML. null se falhar.
+    // Dump da árvore de UI do WhatsApp (uiautomator) → o XML. null se falhar. Arquivo fixo é seguro:
+    // as operações de UI são serializadas por _uiLock.
     private async Task<string?> DumpUiAsync(CancellationToken ct)
     {
         await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
@@ -319,35 +338,70 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return rc == 0 && !string.IsNullOrWhiteSpace(xml) ? xml : null;
     }
 
-    // Centro (x,y) do ÚLTIMO nó com este resource-id (resource-id vem antes de bounds no mesmo nó).
-    private async Task<(int X, int Y)?> FindNodeCenterAsync(string resourceId, CancellationToken ct)
+    // Dump + centro (x,y) do ÚLTIMO nó com este resource-id, repetindo até timeoutMs (não um sleep fixo).
+    private async Task<(int X, int Y)?> PollNodeCenterAsync(string resourceId, int timeoutMs, CancellationToken ct)
     {
-        var xml = await DumpUiAsync(ct);
-        if (xml is null)
+        var attempts = Math.Max(1, timeoutMs / 700);
+        for (var i = 0; i <= attempts; i++)
         {
-            return null;
+            var xml = await DumpUiAsync(ct);
+            var center = xml is null ? null : FindNodeCenter(xml, resourceId);
+            if (center is not null)
+            {
+                return center;
+            }
+            if (i < attempts)
+            {
+                await Task.Delay(700, ct);
+            }
         }
+        return null;
+    }
+
+    // Centro (x,y) do ÚLTIMO nó com este resource-id no XML (resource-id vem antes de bounds no nó).
+    private static (int X, int Y)? FindNodeCenter(string xml, string resourceId)
+    {
         var rx = new System.Text.RegularExpressions.Regex(
             "resource-id=\"" + System.Text.RegularExpressions.Regex.Escape(resourceId)
             + "\"[^>]*?bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"");
-        System.Text.RegularExpressions.Match? last = null;
-        foreach (System.Text.RegularExpressions.Match m in rx.Matches(xml))
-        {
-            last = m;
-        }
-        if (last is null)
+        var m = rx.Matches(xml).Cast<System.Text.RegularExpressions.Match>().LastOrDefault();
+        if (m is null)
         {
             return null;
         }
         var ic = System.Globalization.CultureInfo.InvariantCulture;
-        var x1 = int.Parse(last.Groups[1].Value, ic);
-        var y1 = int.Parse(last.Groups[2].Value, ic);
-        var x2 = int.Parse(last.Groups[3].Value, ic);
-        var y2 = int.Parse(last.Groups[4].Value, ic);
+        var x1 = int.Parse(m.Groups[1].Value, ic);
+        var y1 = int.Parse(m.Groups[2].Value, ic);
+        var x2 = int.Parse(m.Groups[3].Value, ic);
+        var y2 = int.Parse(m.Groups[4].Value, ic);
         return ((x1 + x2) / 2, (y1 + y2) / 2);
     }
 
-    // content-desc do ÚLTIMO id/status (Enviada/Entregue/Lida) — a entrega da msg recém-enviada.
+    // O campo de texto (id/entry) esvaziou = a msg saiu. Repete até timeoutMs.
+    private async Task<bool> PollEntryClearedAsync(int timeoutMs, CancellationToken ct)
+    {
+        var rx = new System.Text.RegularExpressions.Regex("com.whatsapp:id/entry\"[^>]*?text=\"([^\"]*)\"");
+        var attempts = Math.Max(1, timeoutMs / 500);
+        for (var i = 0; i <= attempts; i++)
+        {
+            var xml = await DumpUiAsync(ct);
+            if (xml is not null)
+            {
+                var m = rx.Match(xml);
+                if (!m.Success || string.IsNullOrEmpty(m.Groups[1].Value)) // sem campo (fechou) ou vazio = enviou
+                {
+                    return true;
+                }
+            }
+            if (i < attempts)
+            {
+                await Task.Delay(500, ct);
+            }
+        }
+        return false;
+    }
+
+    // content-desc do ÚLTIMO id/status, NORMALIZADO (locale-independente): sent/delivered/read/null.
     private async Task<string?> ReadLastMessageStatusAsync(CancellationToken ct)
     {
         var xml = await DumpUiAsync(ct);
@@ -357,12 +411,16 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         }
         var rx = new System.Text.RegularExpressions.Regex(
             "resource-id=\"com.whatsapp:id/status\"[^>]*?content-desc=\"([^\"]*)\"");
-        string? last = null;
-        foreach (System.Text.RegularExpressions.Match m in rx.Matches(xml))
+        var raw = rx.Matches(xml).Cast<System.Text.RegularExpressions.Match>().LastOrDefault()?.Groups[1].Value;
+        if (string.IsNullOrWhiteSpace(raw))
         {
-            last = m.Groups[1].Value;
+            return null;
         }
-        return string.IsNullOrWhiteSpace(last) ? null : last;
+        var r = raw.ToLowerInvariant();
+        if (r.Contains("entreg") || r.Contains("deliver")) return "delivered";
+        if (r.Contains("lida") || r.Contains("lido") || r.Contains("read")) return "read";
+        if (r.Contains("enviad") || r.Contains("sent")) return "sent";
+        return null; // desconhecido → não inventa entrega
     }
 
     // Maior _id entre as linhas do content query — o raw contact recém-inserido (disparo sequencial).

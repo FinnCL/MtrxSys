@@ -91,8 +91,8 @@ public static class PhoneEndpoints
             {
                 return Results.BadRequest(new { error = "phone e text são obrigatórios." });
             }
-            var output = await phone.SendWhatsAppMessageAsync(req.Phone, req.Text, ct);
-            return Results.Ok(new { ok = output == "ok", output });
+            var r = await phone.SendWhatsAppMessageAsync(req.Phone, req.Text, ct);
+            return Results.Ok(new { ok = r.Sent, delivery = r.DeliveryStatus, error = r.Error });
         });
 
         // Lê o número do WhatsApp registrado no emulador (registration_jid) — auto-preenche o Passo 2.
