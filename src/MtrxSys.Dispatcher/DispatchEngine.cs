@@ -354,8 +354,11 @@ public sealed class DispatchEngine(
                         job.Defer(clock.UtcNow.AddSeconds(EmulatorSyncGraceSeconds), "contato salvo; aguardando o WhatsApp reconhecê-lo");
                         await uow.SaveChangesAsync(ct);
                         retried++;
+                        // NÃO afirma que salvou: quem sabe disso é o TrySaveContactAsync, que avisa
+                        // quando falha. Aqui só relatamos o que é FATO — o aparelho ainda não reconhece
+                        // este número, então esperamos.
                         log.LogInformation(
-                            "Emulador: {Phone} salvo na agenda; adiado {Sec}s até o WhatsApp reconhecer (sem WAHA pra checar).",
+                            "Emulador: {Phone} ainda não reconhecido pelo WhatsApp; adiado {Sec}s (sem WAHA pra checar).",
                             contact.Phone.E164, EmulatorSyncGraceSeconds);
                         // Espaça como um ENVIO (90-240s), não como um check-exists (8-21s). Salvar um
                         // contato aqui não é uma consulta: é uma ESCRITA que sobe pro Google e faz o
@@ -725,7 +728,19 @@ public sealed class DispatchEngine(
     {
         try
         {
-            await phone.SaveContactAsync(contact.Phone.E164, contact.Name, ct);
+            // O orquestrador NÃO lança quando o adb falha: devolve o motivo como STRING ("já existe",
+            // "ok", ou o erro). Descartar esse retorno tornava a falha INVISÍVEL — foi o que escondeu
+            // o socket do docker faltando no dispatcher: o log dizia "salvo na agenda" e nada era
+            // gravado. Só "ok"/"já existe" são sucesso; o resto vira aviso com o motivo real.
+            var result = await phone.SaveContactAsync(contact.Phone.E164, contact.Name, ct);
+            if (!string.Equals(result, "ok", StringComparison.Ordinal)
+                && !string.Equals(result, "já existe", StringComparison.Ordinal))
+            {
+                log.LogWarning(
+                    "Não gravei o contato {Phone} na agenda do emulador: {Motivo}. O contato NÃO vai "
+                    + "sincronizar, então a checagem local não terá o que responder.",
+                    contact.Phone.E164, result);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
