@@ -15,11 +15,11 @@ public sealed class DispatchOptions
     public double TypingJitter { get; set; } = 0.15;
 
     // Texto de opt-out (fallback) anexado à 1ª mensagem SÓ quando o link de "sair" está DESLIGADO
-    // (OptOut:PublicBaseUrl vazio — ex.: localhost). Com o link LIGADO (prod), a cópia é FIXA no
-    // MessageComposer (MergedOptOut/LinkOnlyOptOut, por ser sensível a ban) e este valor NÃO é usado.
-    // Também não sai quando o template já menciona "sair" (caso recomendado na UI de campanhas).
-    // Dá uma saída explícita ("responda SAIR") em vez de a pessoa ir direto no denunciar/bloquear.
-    // String vazia desliga o texto (o link, se houver PublicBaseUrl, continua).
+    // (OptOut:PublicBaseUrl vazio — ex.: localhost). Com o link LIGADO (prod, o caso normal) a cópia é
+    // FIXA no MessageComposer (LinkOnlyOptOut, por ser sensível a ban) e este valor NÃO é usado.
+    // Ele pede pra RESPONDER "SAIR", o que só chega até nós com o companion WAHA vinculado (inbound) —
+    // por isso é fallback de ambiente sem link, e não uma alternativa a ele. Dá uma saída explícita
+    // em vez de a pessoa ir direto no denunciar/bloquear. String vazia desliga o texto.
     public string OptOutFooter { get; set; } = "Se não quiser mais receber mensagens, responda SAIR.";
 
     // Para o ciclo de disparo se a sessão WAHA do chip não estiver "Working" (caiu/deslogou),

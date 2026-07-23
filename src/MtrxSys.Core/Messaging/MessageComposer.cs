@@ -23,11 +23,17 @@ public sealed partial class MessageComposer(
     private static partial Regex OptOutKeywordRegex();
 
     // Cópia FIXA do bloco de opt-out anexado quando o link de 1 clique está ligado (prod). Mora no código
-    // de propósito, como fonte única: é texto sensível a ban — o wording certo faz a pessoa responder
-    // "SAIR" em vez de denunciar/bloquear. O DispatchOptions.OptOutFooter (configurável) é só o texto de
-    // fallback pra quando o link está DESLIGADO (sem OptOut:PublicBaseUrl, ex.: localhost).
-    private const string MergedOptOut = "Para não receber mais mensagens, responda *SAIR* ou toque aqui:";
-    private const string LinkOnlyOptOut = "Para sair, toque aqui:";
+    // de propósito, como fonte única: é texto sensível a ban — o wording certo faz a pessoa se
+    // descadastrar em vez de denunciar/bloquear. O DispatchOptions.OptOutFooter (configurável) é só o
+    // texto de fallback pra quando o link está DESLIGADO (sem OptOut:PublicBaseUrl, ex.: localhost).
+    //
+    // SÓ O LINK: não pedimos mais "responda *SAIR*". Responder depende do inbound, que depende do
+    // companion WAHA estar vinculado — quando ele cai, a resposta não chega a lugar nenhum e a pessoa
+    // fica achando que se descadastrou. Prometer um caminho que pode não existir é pior que não
+    // prometer: quem tenta sair e não consegue denuncia. O link bate direto na nossa API e funciona
+    // sempre. Isto NÃO desliga a detecção de "SAIR" por texto — o OptOutDetector segue ativo e honra
+    // quem responder assim mesmo; apenas paramos de ANUNCIAR esse caminho.
+    private const string LinkOnlyOptOut = "Para não receber mais mensagens, toque aqui:";
 
     public async Task<string> ComposeFromTemplateIdAsync(Guid templateId, Contact contact, CancellationToken ct)
     {
@@ -63,10 +69,10 @@ public sealed partial class MessageComposer(
 
         var block = (url, textOptOut) switch
         {
-            // Os dois caminhos ativos → uma frase só (cópia fixa), "responda SAIR ou toque aqui: <link>".
-            (not null, true) => $"{MergedOptOut}\n{url}",
-            // Só o link (footer vazio OU o template já menciona "sair") — não repete o "responda SAIR".
-            (not null, false) => $"{LinkOnlyOptOut}\n{url}",
+            // COM link: ele é o único caminho anunciado (ver LinkOnlyOptOut). O footer de texto não
+            // entra junto — dois pedidos de descadastro na mesma mensagem só poluem, e um deles
+            // dependeria do inbound.
+            (not null, _) => $"{LinkOnlyOptOut}\n{url}",
             // Sem link (localhost): só o rodapé de texto CONFIGURÁVEL (é onde o OptOutFooter tem efeito).
             (null, true) => footer,
             _ => null,

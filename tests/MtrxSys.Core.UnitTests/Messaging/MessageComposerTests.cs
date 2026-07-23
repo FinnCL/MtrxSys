@@ -132,18 +132,20 @@ public sealed class MessageComposerTests
     }
 
     [Fact]
-    public void Compose_merges_text_and_link_into_single_optout_sentence()
+    public void Compose_anuncia_so_o_link_mesmo_com_footer_de_texto_configurado()
     {
         var t = MessageTemplate.Create(Guid.NewGuid(), MessageSlot.Greeting, "Oi!");
         var c = BuildContact(); // 1ª mensagem, link ligado + footer configurado
 
         var result = Build("Responda SAIR.", "https://m.test").Compose(t, c);
 
-        // Um bloco só: "responda *SAIR* ou toque aqui:\n<link>" — sem rodapé de texto separado.
-        result.Should().StartWith(
-            "Oi!\n\nPara não receber mais mensagens, responda *SAIR* ou toque aqui:\nhttps://m.test/sair?t=");
-        result.Should().NotContain("Responda SAIR.", "o rodapé de texto é absorvido pela frase unificada");
-        result.Should().NotContain("Para sair, toque aqui:", "não sai o bloco só-link quando o texto entra junto");
+        // Havendo link, ele é o ÚNICO caminho ANUNCIADO. Responder "SAIR" depende do inbound, que
+        // depende do companion WAHA vinculado — quando ele cai, a resposta não chega a lugar nenhum e
+        // a pessoa acha que se descadastrou. Quem tenta sair e não consegue denuncia, e denúncia é o
+        // que mata a conta. (A DETECÇÃO de "SAIR" segue ativa no OptOutDetector; só não prometemos.)
+        result.Should().StartWith("Oi!\n\nPara não receber mais mensagens, toque aqui:\nhttps://m.test/sair?t=");
+        result.Should().NotContain("Responda SAIR.", "o rodapé de texto não acompanha o link");
+        result.Should().NotContain("responda *SAIR*", "não pedimos mais pra digitar SAIR");
     }
 
     [Fact]
@@ -154,8 +156,9 @@ public sealed class MessageComposerTests
 
         var result = Build("Responda SAIR.", "https://m.test").Compose(t, c);
 
-        // Template já fala em "sair" → não repete o "responda SAIR", só o link.
-        result.Should().StartWith("Oi! Responda SAIR p/ parar.\n\nPara sair, toque aqui:\nhttps://m.test/sair?t=");
+        // Template já fala em "sair" → mesmo bloco só-link (o texto do operador fica como está).
+        result.Should().StartWith(
+            "Oi! Responda SAIR p/ parar.\n\nPara não receber mais mensagens, toque aqui:\nhttps://m.test/sair?t=");
         result.Should().NotContain("responda SAIR ou toque aqui");
     }
 
