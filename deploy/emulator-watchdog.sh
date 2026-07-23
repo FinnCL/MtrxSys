@@ -49,6 +49,67 @@ clean_screen() {
 # "Desligar emulador"). Nesse caso o watchdog NÃO religa — só religa em CRASH real. O Start remove a flag.
 is_off() { docker volume inspect mtrx-dandroid-off >/dev/null 2>&1; }
 
+# ── PROXY TRANSPARENTE (anti-ban): garante que TODO TCP do emulador sai pelo residencial BR ────────
+# POR QUE aqui e não no compose: as regras de iptables vivem na NETNS do container do emulador e
+# somem a cada restart — e este watchdog é justamente quem reinicia o emulador em crash. Sem esta
+# reaplicação, a primeira queda devolvia o disparo pro IP do datacenter (Montreal) EM SILENCIO. Foi o
+# que aconteceu em 18/07: o proxy sumiu e ninguem notou por 5 dias.
+#
+# POR QUE iptables e nao o http_proxy do Android: aquele e uma SUGESTAO que cada app decide seguir.
+# Chrome/Play seguem; o socket de mensagens do WhatsApp (porta 5222) IGNORA e vai direto. O REDIRECT
+# desvia o TCP antes de sair, sem o app saber.
+#
+# nsenter usa o iptables DO HOST dentro da netns do container: nao precisa de NET_ADMIN no emulador
+# (habilitar exigiria RECRIAR o container = PERDER A CONTA pareada) nem de subir alpine+apk a cada ciclo.
+TP_PORT=12345
+ensure_proxy() {
+  # Upstream do .env.prod: MESMA fonte do WAHA deste stack, pra os dois nunca divergirem de IP.
+  local env=/home/ubuntu/MtrxSys/deploy/.env.prod
+  local hostport user pass upstream pid
+  hostport=$(grep -E '^WAHA_PROXY_1=' "$env" 2>/dev/null | cut -d= -f2-)
+  user=$(grep -E '^WAHA_PROXY_1_USER=' "$env" 2>/dev/null | cut -d= -f2-)
+  pass=$(grep -E '^WAHA_PROXY_1_PASS=' "$env" 2>/dev/null | cut -d= -f2-)
+  [ -n "$hostport" ] && [ -n "$user" ] || return 0   # sem proxy configurado: nao mexe em nada
+  upstream="http://${user}:${pass}@${hostport}"
+
+  pid=$(docker inspect -f '{{.State.Pid}}' mtrx-dandroid 2>/dev/null)
+  [ -n "$pid" ] && [ "$pid" != "0" ] || return 0
+
+  # 1) SAUDE POR ALCANCE DA PORTA, nao por "o container existe". Quando o emulador reinicia, a netns
+  #    muda e o gost-tp fica ORFAO num laco de restart: `docker ps` ainda mostra o nome, mas nada
+  #    responde. Testar a porta DENTRO da netns cobre os tres casos (parado, reiniciando, orfao).
+  if ! nsenter -t "$pid" -n timeout 3 bash -c "</dev/tcp/127.0.0.1/${TP_PORT}" 2>/dev/null; then
+    docker rm -f mtrx-gost-tp >/dev/null 2>&1
+    docker run -d --name mtrx-gost-tp --restart unless-stopped \
+      --network "container:mtrx-dandroid" --cap-add NET_ADMIN \
+      gogost/gost -L "red://:${TP_PORT}" -F "$upstream" >/dev/null 2>&1
+    sleep 4
+    # ORDEM CRITICA: so aplica as regras com o proxy RESPONDENDO. Redirecionar pra um gost morto
+    # deixaria o emulador SEM REDE NENHUMA — pior que sair pelo IP errado, e mudo no log.
+    nsenter -t "$pid" -n timeout 3 bash -c "</dev/tcp/127.0.0.1/${TP_PORT}" 2>/dev/null || return 0
+  fi
+
+  # 2) Regras na netns. SENTINELA: as quatro nascem juntas, entao basta checar o REDIRECT — evita 4
+  #    nsenter por ciclo no caso comum (tudo certo), que e o de 99% das voltas.
+  nsenter -t "$pid" -n iptables -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports "${TP_PORT}" 2>/dev/null && return 0
+
+  #    Os RETURN vem ANTES do REDIRECT e sao obrigatorios: sem excluir o proprio proxy, o gost
+  #    redirecionaria a propria conexao de saida pra si mesmo (laco infinito); sem excluir a rede do
+  #    docker e o loopback, o emulador perderia adb/noVNC/api.
+  #    Subnet LIDA do docker: fixar "172.19.0.0/16" quebraria silenciosamente se a rede fosse recriada
+  #    noutra faixa — o mesmo tipo de armadilha do IP fixo que derrubou o proxy anterior.
+  local proxy_ip=${hostport%%:*} subnet
+  subnet=$(docker network inspect mtrxsys_default -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null)
+  subnet=${subnet:-172.19.0.0/16}
+  for r in "-d 127.0.0.0/8 -j RETURN" \
+           "-d ${subnet} -j RETURN" \
+           "-d ${proxy_ip} -j RETURN" \
+           "-j REDIRECT --to-ports ${TP_PORT}"; do
+    # shellcheck disable=SC2086
+    nsenter -t "$pid" -n iptables -t nat -A OUTPUT -p tcp $r 2>/dev/null
+  done
+}
+
 while true; do
   status=$(docker ps -a --filter name=mtrx-dandroid --format '{{.Status}}' 2>/dev/null)
   case "$status" in
@@ -57,6 +118,7 @@ while true; do
       if [ "$B" = "1" ]; then
         down=0
         ensure_tools
+        ensure_proxy
         clean_screen
       else
         down=$((down + 1))
