@@ -1,15 +1,23 @@
 # Override do stack A (produção): usa o EMULADOR docker-android como PRIMÁRIO controlável (envia pela
 # UI do app oficial, mata o 463 do frio) no lugar do WAHA/redroid. Aplicado POR CIMA dos composes do A.
 # NOTA: o nome do arquivo é legado ("redroid-a") mas o conteúdo é docker-android. NÃO toca no base.
+# FONTE ÚNICA do aparelho do stack A. api e dispatcher PRECISAM apontar pro MESMO container: a api
+# provisiona/liga e mostra a tela; o dispatcher grava contato, checa e ENVIA pela UI. Estavam
+# declarados separados e o dispatcher ficou sem nenhum — caiu no default "mtrx-android", mirou um
+# container inexistente, e o disparo não saía (o log culpava "falha ao obter raw_contact_id").
+# Com a âncora, mudar o container é UM lugar; divergir vira impossível.
+x-phone-a: &phone-a
+  # docker-android (budtmo) como PRIMÁRIO do A: Phone:Engine != "redroid" → DockerCliPhoneOrchestrator,
+  # que controla o emulador via `docker exec <container> adb`. O redroid NÃO serve (bug de foco de
+  # input, mCurrentFocus=null); o docker-android tem foco real e ENTREGA.
+  Phone__Engine: docker-android
+  # Container do emulador do stack A (docker-android, noVNC embutido em 6080→host 6090).
+  Phone__ContainerName: mtrx-dandroid
+
 services:
   api:
     environment:
-      # docker-android (budtmo) como PRIMÁRIO do A: Phone:Engine != "redroid" → DockerCliPhoneOrchestrator,
-      # que controla o emulador via `docker exec <container> adb` (a api tem docker.sock + CLI). O redroid
-      # NÃO serve (bug de foco de input, mCurrentFocus=null); o docker-android tem foco real e ENTREGA.
-      Phone__Engine: docker-android
-      # Container do emulador do stack A (docker-android, noVNC embutido em 6080→host 6090).
-      Phone__ContainerName: mtrx-dandroid
+      <<: *phone-a
       Phone__VolumeName: android-data
       # URL do APK do WhatsApp pro botão "Instalar WhatsApp" — APK OFICIAL (138MB, bem < 400MB do teto).
       # O botão baixa por HTTP (no container da api) e faz adb install. Hardcoded aqui pra o botão
@@ -23,5 +31,10 @@ services:
     # host-gateway: mantido por segurança (a api usa docker exec pro docker-android, mas isto não atrapalha).
     extra_hosts:
       - "host.docker.internal:host-gateway"
+  # No modo Emulator é o DISPATCHER quem fala com o aparelho (grava contato, checa, envia pela UI) —
+  # mesma âncora da api, então os dois nunca divergem.
+  dispatcher:
+    environment:
+      <<: *phone-a
   # Aba Celular do A: SEM override de scrcpy — usa o default do prod (VITE_EMULATOR_KIND="" = noVNC),
   # que é a tela nativa do docker-android (servida via phone-a → 127.0.0.1:6090).

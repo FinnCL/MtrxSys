@@ -211,6 +211,14 @@ services:
       AddressBookSync__Google__ClientId: ${ADDRBOOK_GOOGLE_CLIENT_ID:-}
       AddressBookSync__Google__ClientSecret: ${ADDRBOOK_GOOGLE_CLIENT_SECRET:-}
       AddressBookSync__Google__RefreshToken: ${ADDRBOOK_GOOGLE_REFRESH_TOKEN:-}
+      # APARELHO VIRTUAL — OBRIGATÓRIO no modo Emulator, e as MESMAS variáveis da api (mesmo default).
+      # No modo Emulator é o DISPATCHER que fala com o aparelho: grava o contato na agenda, checa se o
+      # número tem WhatsApp e ENVIA pela UI, tudo via `docker exec <ContainerName> adb ...`. Sem estas
+      # vars ele caía no default "mtrx-android" e mirava um container INEXISTENTE — todo comando
+      # falhava e o disparo nunca saía, com o sintoma enganoso "falha ao obter raw_contact_id".
+      Phone__Engine: ${PHONE_ENGINE_1:-docker-android}
+      Phone__ContainerName: ${PHONE_CONTAINER_1:-mtrx-android}
+      Phone__AdbPort: ${PHONE_ADB_PORT_1:-5555}
     volumes:
       # OBRIGATÓRIO no modo Emulator: TODO o caminho do emulador (salvar contato na agenda, checar se o
       # número tem WhatsApp, e o PRÓPRIO ENVIO pela UI) roda via `docker exec <container> adb ...`.
