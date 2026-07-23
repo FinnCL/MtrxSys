@@ -154,6 +154,14 @@ echo "   ✓ Gate no ar."
 echo "== [5/5] Caddy (HTTPS) =="
 bash deploy/gen-config.sh
 docker compose -f deploy/docker-compose.caddy.yml up -d
+# RELOAD explícito: o `up -d` acima NÃO recarrega o Caddy quando só o CONTEÚDO do Caddyfile muda — o
+# arquivo é bind mount (:ro) e o Compose não vê mudança no serviço, então não recria o container, e o
+# Caddy só relê o config no boot ou num reload. Sem isto, toda mudança no Caddyfile gerado (ex.: a rota
+# /s/* do opt-out) fica no disco mas NUNCA entra em vigor. O reload é gracioso (zero downtime) e VALIDA
+# o config: Caddyfile com erro → reload falha → o Caddy mantém o anterior e o set -e aborta o deploy
+# loud (fail-closed, melhor que aplicar config quebrado). Se o container acabou de subir no `up -d`, o
+# reload relê o mesmo arquivo — inofensivo.
+docker exec mtrx-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 
 cat <<EOF
 
