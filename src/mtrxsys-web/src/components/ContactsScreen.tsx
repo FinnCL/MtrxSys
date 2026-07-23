@@ -228,9 +228,8 @@ export function ContactsScreen() {
         </p>
         <p className="muted small">
           <strong>Aquecer:</strong> na fase híbrida (dia 4+), quem <strong>respondeu</strong> vai pra
-          frente da fila e é <strong>renovado</strong> (re-disparado). É <strong>auto-marcado</strong> quando
-          o contato responde — só quem respondeu pode ser marcado; frio nunca renova (1× só). Desmarque um
-          se quiser que ele pare de renovar.
+          frente da fila e é <strong>renovado</strong> (re-disparado). A marca é automática ao responder.
+          Contato frio nunca renova (envia 1× só). Desmarque para parar de renovar.
         </p>
       </header>
 

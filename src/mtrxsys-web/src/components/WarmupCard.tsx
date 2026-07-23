@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { api } from "../api/client";
+import { usePoll } from "../hooks/usePoll";
 
 type WarmupEngineStatus = Awaited<ReturnType<typeof api.warmupEngineStatus>>;
 
@@ -22,11 +23,7 @@ export function WarmupCard() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const id = setInterval(() => void load(), 5_000);
-    return () => clearInterval(id);
-  }, [load]);
+  usePoll(load, 5_000);
 
   const onToggle = useCallback(async () => {
     if (!status) return;

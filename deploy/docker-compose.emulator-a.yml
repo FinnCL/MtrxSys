@@ -19,7 +19,8 @@ services:
       EMULATOR_NO_SKIN: "true"
       # Display do noVNC = largura do DEVICE (Galaxy S10 renderiza ~402px na altura 850). Antes 500 ->
       # sobravam ~98px de desktop (o "ANDROID") = bezel lateral. 404 = device + 2px de folga -> o device
-      # PREENCHE o molde (aspect-ratio 404/850 no .phone-device). O watchdog centraliza + escurece a folga.
+      # PREENCHE a caixa de recorte da tela (.phone-screen no App.css, que hoje NAO desenha moldura de
+      # celular: so mantem o aspect-ratio e corta a barra do noVNC). O watchdog centraliza + escurece a folga.
       SCREEN_WIDTH: "404"
       SCREEN_HEIGHT: "850"
       SCREEN_DEPTH: "24"

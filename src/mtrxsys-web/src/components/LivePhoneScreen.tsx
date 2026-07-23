@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { api, type ChipIdentity, type PhoneMode, type PhoneStatus } from "../api/client";
+import { usePoll } from "../hooks/usePoll";
 import { WhatsAppConnect } from "./WhatsAppConnect";
 import { WarmupCard } from "./WarmupCard";
 import { HumanPhaseCard } from "./HumanPhaseCard";
 
 // Aba "Celular" — dois mundos, alternados pelo toggle de modo (PERSISTIDO no banco):
 //  • "Sem emulador" (WahaOnly): conexão do chip por QR / identidade (WAHA + aparelho real físico).
-//  • "Com emulador" (Emulator): a TELA do Android (noVNC do docker-android) embutida na moldura de
-//    celular — o emulador é o PRIMÁRIO e o disparo a frio sai por ele (mata o 463). Barra de navegação
+//  • "Com emulador" (Emulator): a TELA do Android (noVNC do docker-android) embutida direto na página,
+//    sem moldura — o emulador é o PRIMÁRIO e o disparo a frio sai por ele (mata o 463). Barra de navegação
 //    Android + ligar/recarregar a tela. Só aparece onde há viewer configurado (VITE_EMULATOR_URL).
 // O backend (endpoints, orquestrador, /api/phone/mode) segue intacto; isto é só a camada de tela.
 interface LivePhoneScreenProps {
@@ -46,32 +47,17 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
     }
   }, []);
 
-  useEffect(() => {
-    void refreshIdent();
-    const id = setInterval(() => void refreshIdent(), 5000);
-    return () => clearInterval(id);
-  }, [refreshIdent]);
+  usePoll(refreshIdent, 5000);
 
   // Lê o modo persistido e mantém em sincronia. Só faz sentido onde há emulador disponível (url);
   // sem url a aba é sempre WAHA + físico (não há o que alternar). Falha silenciosa preserva o valor.
-  useEffect(() => {
-    if (!url) return;
-    let alive = true;
-    const tick = async () => {
-      try {
-        const m = (await api.phoneMode()).mode;
-        if (alive) setMode(m);
-      } catch {
-        /* mantém o valor atual */
-      }
-    };
-    void tick();
-    const id = setInterval(() => void tick(), 6000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [url]);
+  usePoll(async () => {
+    try {
+      setMode((await api.phoneMode()).mode);
+    } catch {
+      /* mantém o valor atual */
+    }
+  }, 6000, !!url);
 
   const connected = ident?.status === "Working";
 
@@ -103,45 +89,23 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
   const modeLocked = modeBusy;
 
   // Saúde de entrega — só quando conectado (é o chip que dispara). Poll leve; falha silenciosa.
-  useEffect(() => {
-    if (!connected) return;
-    let alive = true;
-    const tick = async () => {
-      try {
-        const d = await api.deliveryHealth();
-        if (alive) setDelivery(d);
-      } catch {
-        /* ignora */
-      }
-    };
-    void tick();
-    const id = setInterval(() => void tick(), 30000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [connected]);
+  usePoll(async () => {
+    try {
+      setDelivery(await api.deliveryHealth());
+    } catch {
+      /* ignora */
+    }
+  }, 30000, connected);
 
   // Status do container do emulador — só no modo emulador. Diz se a tela (noVNC) tem o que embutir:
   // running=false → mostra "Ligar emulador"; unavailable → host sem docker/emulador. Poll leve.
-  useEffect(() => {
-    if (!emulatorMode) return;
-    let alive = true;
-    const tick = async () => {
-      try {
-        const s = await api.phoneStatus();
-        if (alive) setPhoneStatus(s);
-      } catch {
-        /* ignora — a tela otimista embute mesmo assim */
-      }
-    };
-    void tick();
-    const id = setInterval(() => void tick(), 8000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [emulatorMode]);
+  usePoll(async () => {
+    try {
+      setPhoneStatus(await api.phoneStatus());
+    } catch {
+      /* ignora — a tela otimista embute mesmo assim */
+    }
+  }, 8000, emulatorMode);
 
   return (
     <section className="live-phone">
@@ -247,7 +211,7 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
         <HumanPhaseCard onOpenConversation={onOpenConversation} onBlockingChange={setHumanPhaseBlocking} />
       )}
 
-      {/* Modo "Com emulador": a TELA do Android (noVNC do docker-android) embutida na moldura de celular.
+      {/* Modo "Com emulador": a TELA do Android (noVNC do docker-android) embutida direto, sem moldura.
           O disparo a frio sai por ESTE aparelho (o primário) — é o que mata o 463. Barra de navegação
           Android (adb keyevent) + recarregar/abrir a tela. Desligado → botão pra ligar o container. */}
       {emulatorMode && (
@@ -267,8 +231,9 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
             </div>
           ) : (
             <>
-              <div className="phone-device phone-device--embed">
-                <div className="phone-notch" />
+              {/* Sem moldura de celular: só a tela. O wrapper existe apenas pra manter o aspect-ratio
+                  do display e o recorte (overflow) do noVNC — nada de bezel/notch desenhado. */}
+              <div className="phone-screen">
                 <iframe
                   key={frameKey}
                   className="phone-stage"
@@ -280,9 +245,10 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
               {/* Navegação do Android (◁ ○ ▢) via adb keyevent — pra operar a tela quando o mouse do
                   noVNC não basta (ex.: voltar de um menu). */}
               <div className="phone-navbar">
-                <button type="button" className="phone-nav-btn" title="Voltar" onClick={() => void api.phoneKey("back")}>◁</button>
-                <button type="button" className="phone-nav-btn" title="Início" onClick={() => void api.phoneKey("home")}>○</button>
-                <button type="button" className="phone-nav-btn" title="Recentes" onClick={() => void api.phoneKey("recents")}>▢</button>
+                {/* aria-label além do title: sem ele o leitor de tela anuncia só o glifo ("◁"). */}
+                <button type="button" className="phone-nav-btn" title="Voltar" aria-label="Voltar" onClick={() => void api.phoneKey("back")}>◁</button>
+                <button type="button" className="phone-nav-btn" title="Início" aria-label="Início" onClick={() => void api.phoneKey("home")}>○</button>
+                <button type="button" className="phone-nav-btn" title="Recentes" aria-label="Recentes" onClick={() => void api.phoneKey("recents")}>▢</button>
               </div>
               <p className="phone-off-hint" style={{ textAlign: "center", maxWidth: 390 }}>
                 Tela do Android (emulador-primário). O disparo a frio sai por aqui — sem 463.{" "}

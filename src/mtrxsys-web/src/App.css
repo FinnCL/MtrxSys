@@ -142,28 +142,23 @@ input[type="checkbox"], input[type="radio"] {
 .password-toggle:hover { color: var(--fg); background: transparent; }
 
 .app-shell { display: flex; flex-direction: column; height: 100%; }
-/* Aba "Celular": um MODELO DE CELULAR centralizado, com a tela embutida (iframe) na própria página. */
+/* Aba "Celular": a tela do emulador embutida (iframe) direto na página, SEM moldura de aparelho.
+   gap/padding aqui já são os valores finais — antes viviam em duas declarações a ~950 linhas de
+   distância, e só lendo as duas dava pra saber o efetivo. */
 .live-phone { flex: 1; min-height: 0; background: var(--bg); display: flex; flex-direction: column;
-  align-items: center; justify-content: safe center; gap: 12px; padding: 16px; overflow: auto; }
-.phone-device { position: relative;
-  /* MOLDE ADAPTADO À TELA DO EMULADOR: aspect-ratio = a do display do noVNC (404×850, = a largura do
-     DEVICE). Com resize=scale, o conteúdo PREENCHE o molde sem tarja/letterbox E o device preenche o
-     molde (o display foi reduzido de 500→404 pra bater com o device, fim do bezel lateral).
-     flex:1 1 0 preenche a altura disponível e ENCOLHE pra caber os outros elementos → sem scroll externo.
-     Se o SCREEN_WIDTH do emulador mudar, é só ajustar este aspect-ratio — o molde se adequa ao emulador. */
-  flex: 1 1 0; min-height: 0; aspect-ratio: 404 / 850; width: auto; max-width: 96vw;
-  background: #0d0d0d; border-radius: 44px; padding: 12px;
-  box-shadow: 0 18px 50px rgba(0,0,0,.55), inset 0 0 0 2px #2c2c2c; }
-/* Desconectado: a conexão (QR) vai DENTRO da tela do aparelho (imersivo). A tela rola internamente,
-   e o painel de conexão fica sem borda própria — ele É a tela do "celular". */
-.phone-connect-screen { overflow-y: auto; justify-content: flex-start; padding: 18px 12px; }
-.phone-connect-screen .wa-connect { width: 100%; background: transparent; border: 0; padding: 0; }
-.phone-notch { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-  width: 130px; height: 22px; background: #0d0d0d; border-radius: 0 0 16px 16px; z-index: 2; }
-.phone-stage { width: 100%; height: 100%; border: 0; border-radius: 32px; display: block; background: #fff; }
-.phone-off { display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 10px; text-align: center; padding: 24px; background: #111b21; color: var(--fg); }
-.phone-off-title { font-size: 16px; font-weight: 600; margin: 0; }
+  align-items: center; justify-content: safe center; gap: 8px; padding: 12px 12px 8px; overflow: auto; }
+/* Caixa de RECORTE da tela do emulador — não é moldura: sem fundo, sombra ou cantos. Existe só pra
+   (1) fixar o aspect-ratio do display do emulador (1440×3040; se o SCREEN_WIDTH mudar, ajuste aqui)
+   e (2) cortar, via overflow, o que o transform do .phone-stage empurra pra fora.
+   flex:1 1 0 ocupa a altura que sobra e ENCOLHE pra não gerar scroll externo — como é retrato, a
+   largura sai da altura: quem manda no tamanho é o espaço vertical, não o max-width. */
+.phone-screen { position: relative; flex: 1 1 0; min-height: 0; height: auto;
+  aspect-ratio: 1440 / 3040; width: auto; max-width: 100%; overflow: hidden; }
+/* O iframe é MAIOR que a caixa e deslocado, escondendo a barra de controle do noVNC: corta 20% à
+   esquerda, ~15,6% à direita, 14,1% no topo e ~5,9% embaixo. Números medidos na tela do viewer —
+   os quatro andam juntos (mexer em um sem os outros desalinha o recorte). */
+.phone-screen .phone-stage { width: 155.3%; height: 125%; border: 0; display: block; background: #fff;
+  transform: translate(-20%, -14.1%); transform-origin: top left; }
 .phone-off-hint { font-size: 12px; color: var(--muted); margin: 0 8px; line-height: 1.5; }
 .phone-activate { margin-top: 8px; background: var(--accent, #00a884); color: #fff; border: 0;
   border-radius: 10px; padding: 11px 20px; font-size: 14px; font-weight: 700; cursor: pointer; }
@@ -174,17 +169,16 @@ input[type="checkbox"], input[type="radio"] {
 .phone-reload:disabled { opacity: .5; cursor: default; }
 .phone-activate:disabled { opacity: .5; cursor: default; }
 .phone-footer { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-/* Barra de navegação do Android (voltar ◁ / home ○ / recentes ▢) abaixo do aparelho — reconstruída
-   (era server-only). Envia keyevent via adb (/api/phone/key). */
+/* Barra de navegação do Android (voltar ◁ / home ○ / recentes ▢) abaixo da tela. Envia keyevent via
+   adb (/api/phone/key). Tamanho já é o efetivo — havia uma 2ª declaração de .phone-nav-btn no fim do
+   arquivo sobrescrevendo altura/fonte daqui; as duas viraram esta. */
 .phone-navbar { display: flex; gap: 22px; justify-content: center; padding: 2px 0; }
 .phone-nav-btn { background: transparent; color: var(--muted); border: 1px solid var(--border, #2a3942);
-  border-radius: 8px; width: 54px; height: 34px; font-size: 17px; line-height: 1; cursor: pointer;
+  border-radius: 8px; width: 54px; height: 32px; font-size: 16px; line-height: 1; cursor: pointer;
   display: flex; align-items: center; justify-content: center; }
 .phone-nav-btn:hover { color: var(--fg); background: rgba(255,255,255,.06); }
 .phone-nav-btn:active { transform: scale(.94); }
 .phone-steps { width: min(390px, 95vw); display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.phone-proxy-input { background: #0b141a; color: var(--fg); border: 1px solid var(--border, #2a3942);
-  border-radius: 8px; padding: 6px 10px; font-size: 12px; min-width: 150px; }
 .phone-ident-name { margin: 4px 0 0; font-size: 15px; font-weight: 600; color: var(--fg); }
 .phone-ident-phone { margin: 2px 0 6px; font-size: 13px; color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -200,8 +194,6 @@ input[type="checkbox"], input[type="radio"] {
 .phone-mode-opt.active { background: var(--accent, #00a884); color: #fff; }
 .phone-mode-opt:disabled { cursor: default; }
 .phone-mode[aria-busy="true"] { opacity: .6; }
-/* Travado (chip conectado): não dá pra usar os dois modos ao mesmo tempo — desconecte pra alternar. */
-.phone-mode.locked { cursor: not-allowed; }
 .phone-mode-hint { margin: 0; text-align: center; }
 /* Etapa em acordeão: um botão que DESLIZA pra baixo revelando o conteúdo. O corpo é montado só ao
    abrir (perf: o WhatsAppConnect e seu poll de status/QR nem existem enquanto fechado). */
@@ -220,7 +212,6 @@ input[type="checkbox"], input[type="radio"] {
 .phone-badge { font-size: 11px; padding: 2px 10px; border-radius: 6px; }
 .phone-badge.ok { background: rgba(37,211,102,.15); color: #25d366; }
 .phone-badge.off { background: rgba(150,150,150,.15); color: var(--muted); }
-.phone-explain { max-width: 390px; text-align: center; }
 .phone-disconnect { margin-top: 12px; }
 .phone-server { width: min(390px, 95vw); display: flex; flex-direction: column; gap: 8px;
   align-items: center; border-top: 1px solid var(--border, #2a3942); padding-top: 12px; margin-top: 4px; }
@@ -240,13 +231,6 @@ input[type="checkbox"], input[type="radio"] {
 .prov-wait .prov-dot { color: #34b7f1; }
 .prov-cta { align-self: flex-start; margin-top: 2px; }
 .prov-link-qr { width: 150px; height: 150px; border-radius: 8px; background: #fff; padding: 6px; margin-top: 2px; }
-
-.phone-logs { width: min(390px, 95vw); background: #0b141a; border: 1px solid var(--border, #2a3942);
-  border-radius: 10px; overflow: hidden; }
-.phone-logs-head { display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border, #2a3942); }
-.phone-logs pre { margin: 0; padding: 10px; max-height: 220px; overflow: auto; font-size: 11px;
-  line-height: 1.4; color: var(--fg); white-space: pre-wrap; word-break: break-word; }
 
 /* Painel de conexão do WhatsApp embutido na aba "Celular" (QR + código de pareamento). */
 .wa-connect {
@@ -1085,56 +1069,12 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
   .manual-result-list { max-height: 40vh; }
 }
 
-/* Embed do emulador (noVNC) na aba Celular: a moldura ABRACA so a tela do device (crop do desktop
-   do Xvfb), FLEXA pra caber SEM SCROLL em qualquer altura (todos os breakpoints), e a largura sai
-   do aspecto. Calibrado ao Xvfb 500x850 do docker-android: tela em x[95,430] y[125,800]. */
-.phone-device.phone-device--embed {
-  flex: 1 1 0; min-height: 0; height: auto;
-  aspect-ratio: 1440 / 3040; width: auto; max-width: 94vw;
-  overflow: hidden; padding: 0; border-radius: 18px;
-}
-.phone-device.phone-device--embed .phone-notch { display: none; }
-.phone-device.phone-device--embed .phone-stage {
-  width: 155.3%; height: 125.0%;
-  transform: translate(-20%, -14.1%); transform-origin: top left; border-radius: 0;
-}
-
-/* --- Otimizacao responsiva do embed (analise de breakpoints) ---
-   O celular e HEIGHT-bound (retrato em painel largo): a largura sai da altura. Logo, comprimir o
-   ENTORNO (padding/gap/proxy/footer) da mais altura -> emulador maior. O flex ja evita scroll, entao
-   estes ajustes so MAXIMIZAM o tamanho por faixa de ALTURA (o gargalo real) e largura. */
-.live-phone { gap: 8px; padding: 12px 12px 8px; }
+/* --- Responsivo da aba Celular ---
+   A tela do emulador é HEIGHT-bound (retrato em painel largo): a largura sai da altura. Então
+   comprimir o ENTORNO (padding/gap/textos) é o que dá tela maior — mexer em largura não adianta.
+   O flex já evita scroll; estes breakpoints só MAXIMIZAM o tamanho por faixa de altura. */
 @media (max-height: 780px) { .live-phone { gap: 6px; padding: 8px 8px 6px; } .phone-off-hint { font-size: 11px; margin-bottom: 2px; } }
 @media (max-height: 640px) { .live-phone { gap: 4px; padding: 6px; } .phone-off-hint { margin: 0; font-size: 10px; } .phone-footer .phone-reload, .phone-reload { padding: 5px 10px; font-size: 12px; } .phone-mode-opt { padding: 5px 12px; font-size: 12px; } }
-@media (max-width: 640px) { .phone-device.phone-device--embed { max-width: 97vw; } }
-
-/* Modal do Passo 2 (pareamento WAHA): overlay que NÃO afeta o tamanho do emulador (nao reflow). */
-.phone-waha-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.65); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
-.phone-waha-modal { background: #111b21; border: 1px solid var(--border, #2a3942); border-radius: 14px; padding: 16px; width: min(420px, 94vw); max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
-.phone-waha-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.phone-waha-modal-head span { font-weight: 700; font-size: 14px; color: var(--fg); }
-
-/* Dentro do modal do Passo 2: o .wa-connect tem largura FIXA (390px) que estoura o modal (scroll
-   horizontal). Forca 100% + tira borda/padding proprios (o modal ja tem). */
-.phone-waha-modal { overflow-x: hidden; }
-.phone-waha-modal .wa-connect { width: 100%; max-width: 100%; border: 0; padding: 0; background: transparent; }
-.phone-waha-modal .pairing-row { flex-wrap: wrap; }
-.phone-waha-modal .pairing-row input { min-width: 0; }
-
-/* Modal do Passo 2 mais compacto/responsivo (override). */
-.phone-waha-modal { width: min(360px, 92vw); padding: 14px; gap: 8px; }
-.phone-waha-modal .phone-off-hint { font-size: 12px; line-height: 1.4; }
-.phone-waha-modal .status-row { font-size: 13px; }
-.phone-waha-modal .pairing-code { font-size: 22px; letter-spacing: 2px; padding: 8px; }
-.phone-waha-modal input, .phone-waha-modal button { font-size: 13px; }
-
-/* Botões de navegação do Android (◁ ○ □) no rodapé do emulador — via keyevent no backend. */
-.phone-nav { display: flex; gap: 10px; justify-content: center; margin-bottom: 6px; }
-.phone-nav-btn { min-width: 44px; height: 32px; font-size: 16px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
-
-/* Campo de "colar no emulador" (adb input text) — o noVNC nao repassa Ctrl+V. */
-.phone-type { display: flex; gap: 6px; justify-content: center; width: 100%; max-width: 340px; }
-.phone-type input { flex: 1; min-width: 0; }
 
 /* ===== Contador de reassentamento (settle) ===== */
 .settle-banner {
@@ -1166,55 +1106,59 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
   .settle-dot { animation: none; }
 }
 
-/* ── Aba "Guia Google" (passo a passo do sync de contatos anti-463) ───────────────────────── */
-.gsg-wrap { max-width: 760px; margin: 0 auto; padding: 26px 20px 70px; overflow-y: auto; }
-.gsg-hero { margin-bottom: 20px; }
-.gsg-eyebrow { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
-  letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: var(--bg-3);
-  padding: 4px 11px; border-radius: 999px; margin-bottom: 12px; }
-.gsg-hero h1 { font-size: clamp(21px, 4vw, 27px); line-height: 1.2; margin: 0 0 8px; color: var(--fg); }
-.gsg-lede { font-size: 15px; color: var(--muted); margin: 0; max-width: 64ch; line-height: 1.55; }
+/* ── Aba "Guia Google" (passo a passo do sync de contatos anti-463) ───────────────────────────
+   Denso e ANCORADO À ESQUERDA (sem margin:auto): é documentação operacional pra seguir com o
+   Console aberto do lado, não uma landing page. O max-width segue limitando a linha (leitura),
+   mas o bloco encosta na borda esquerda do painel. Sem ícones: hierarquia é só tipografia + cor. */
+.gsg-wrap { max-width: 68ch; margin: 0; padding: 16px 20px 40px; overflow-y: auto; }
+.gsg-hero { margin-bottom: 14px; }
+.gsg-eyebrow { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+.gsg-hero h1 { font-size: clamp(18px, 3vw, 22px); line-height: 1.2; margin: 0 0 6px; color: var(--fg); }
+.gsg-lede { font-size: 13.5px; color: var(--muted); margin: 0; line-height: 1.5; }
 .gsg-lede b, .gsg-role b, .gsg-list b, .gsg-callout b, .gsg-foot b { color: var(--fg); font-weight: 600; }
 
-.gsg-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0 4px; }
+.gsg-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 0; }
 @media (max-width: 560px) { .gsg-roles { grid-template-columns: 1fr; } }
-.gsg-role { background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; }
-.gsg-role h3 { margin: 0 0 4px; font-size: 14px; color: var(--fg); }
+.gsg-role { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; }
+.gsg-role h3 { margin: 0 0 2px; font-size: 13px; color: var(--fg); }
 .gsg-role h3 span { color: var(--accent); }
-.gsg-role p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.gsg-role p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
 
-.gsg-progress { font-size: 13px; color: var(--muted); margin: 18px 2px 4px; display: flex; align-items: center; gap: 10px; }
+.gsg-progress { font-size: 12.5px; color: var(--muted); margin: 12px 0 0; display: flex; align-items: baseline; gap: 10px; }
 .gsg-progress b { color: var(--accent); }
 .gsg-reset { background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: underline; padding: 0; }
 .gsg-reset:hover { color: var(--fg); }
 
-.gsg-step { background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-top: 15px; }
-.gsg-step-head { display: flex; align-items: flex-start; gap: 12px; }
-.gsg-num { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
-  background: var(--accent-strong); color: #fff; font-weight: 700; font-size: 15px; }
-.gsg-step-head h2 { font-size: 17px; margin: 0; color: var(--fg); line-height: 1.25; }
-.gsg-sub { font-size: 12.5px; color: var(--muted); margin: 3px 0 0; }
+.gsg-step { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-top: 10px; }
+.gsg-step-head { display: flex; align-items: flex-start; gap: 10px; }
+.gsg-num { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center;
+  background: var(--accent-strong); color: #fff; font-weight: 700; font-size: 13px; }
+.gsg-step-head h2 { font-size: 15px; margin: 0; color: var(--fg); line-height: 1.25; }
+.gsg-sub { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
 
-.gsg-list { list-style: none; margin: 12px 0 0; padding: 0; }
-.gsg-check { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-top: 1px dashed var(--border); }
+.gsg-list { list-style: none; margin: 8px 0 0; padding: 0; }
+/* Separador SÓLIDO e discreto no lugar do tracejado: menos ruído visual e linhas mais juntas. */
+.gsg-check { display: flex; gap: 9px; align-items: flex-start; padding: 5px 0; border-top: 1px solid var(--border); }
 .gsg-check:first-child { border-top: 0; }
-.gsg-check input[type=checkbox] { appearance: none; -webkit-appearance: none; flex: 0 0 auto; width: 18px; height: 18px;
-  margin: 2px 0 0; border: 2px solid var(--border); border-radius: 5px; background: var(--bg-3); cursor: pointer; position: relative; }
+.gsg-check input[type=checkbox] { appearance: none; -webkit-appearance: none; flex: 0 0 auto; width: 16px; height: 16px;
+  margin: 2px 0 0; border: 2px solid var(--border); border-radius: 4px; background: var(--bg-3); cursor: pointer; position: relative; }
 .gsg-check input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
-.gsg-check input[type=checkbox]:checked::after { content: ""; position: absolute; left: 5px; top: 1px; width: 4px; height: 9px;
+.gsg-check input[type=checkbox]:checked::after { content: ""; position: absolute; left: 4px; top: 0; width: 4px; height: 8px;
   border: solid #04231b; border-width: 0 2.5px 2.5px 0; transform: rotate(42deg); }
 .gsg-check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.gsg-check label { font-size: 14px; color: var(--fg); line-height: 1.5; cursor: pointer; }
+.gsg-check label { font-size: 13px; color: var(--fg); line-height: 1.45; cursor: pointer; }
 .gsg-check input:checked + label { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--muted); }
-.gsg-check code, .gsg-foot code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
-  background: var(--bg-3); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; color: var(--info); white-space: nowrap; }
+.gsg-check code, .gsg-foot code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+  background: var(--bg-3); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--info); white-space: nowrap; }
 
-.gsg-callout { margin-top: 13px; border-radius: 10px; padding: 11px 14px; font-size: 13px; line-height: 1.5;
-  display: flex; gap: 9px; align-items: flex-start; color: var(--fg); border: 1px solid var(--border); }
-.gsg-callout.gsg-info { background: rgba(83,189,235,.09); border-color: rgba(83,189,235,.28); }
-.gsg-callout.gsg-warn { background: rgba(245,158,11,.09); border-color: rgba(245,158,11,.30); }
+/* Aviso sem ícone: barra de cor à esquerda faz o papel que o emoji fazia (info x atenção). */
+.gsg-callout { margin-top: 9px; border-radius: 0 6px 6px 0; padding: 8px 11px; font-size: 12.5px;
+  line-height: 1.45; color: var(--fg); border-left: 3px solid var(--border); }
+.gsg-callout.gsg-info { background: rgba(83,189,235,.08); border-left-color: rgba(83,189,235,.55); }
+.gsg-callout.gsg-warn { background: rgba(245,158,11,.08); border-left-color: rgba(245,158,11,.6); }
 
-.gsg-code { margin: 12px 0 0; background: #0b141a; color: #d8ede6; border: 1px solid var(--border); border-radius: 10px;
-  padding: 13px 15px; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.7; }
+.gsg-code { margin: 9px 0 0; background: #0b141a; color: #d8ede6; border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 11px; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55; }
 
-.gsg-foot { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); line-height: 1.55; }
+.gsg-foot { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); line-height: 1.5; }

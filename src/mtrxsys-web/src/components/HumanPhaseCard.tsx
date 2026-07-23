@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { api } from "../api/client";
+import { usePoll } from "../hooks/usePoll";
 import type { HumanPhaseStatus, PhoneContact } from "../api/types";
 
 // Card da FASE HUMANA (dias 1-3 de um chip novo), na aba Celular junto do WarmupCard. Chip frio é
@@ -37,14 +38,9 @@ export function HumanPhaseCard({
     }
   }, [onBlockingChange]);
 
-  useEffect(() => {
-    // Sincroniza com sistema externo (progresso medido no servidor): o setState é assíncrono
-    // (pós-await), não cascateia render — uso legítimo de efeito. Mesmo padrão do WarmupCard.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-    const id = setInterval(() => void load(), 5_000);
-    return () => clearInterval(id);
-  }, [load]);
+  // Sincroniza com sistema externo (progresso medido no servidor): o setState é assíncrono
+  // (pós-await), não cascateia render — uso legítimo. Mesmo padrão do WarmupCard.
+  usePoll(load, 5_000);
 
   const openPicker = useCallback(async () => {
     setPicking(true);

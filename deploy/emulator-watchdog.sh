@@ -7,7 +7,10 @@
 #
 # + CLEANUP DURAVEL DA TELA (aba "Celular"/noVNC): quando o device esta booted, deixa SO o device
 #   CENTRALIZADO no molde -> fecha os Extended Controls, esconde a barrinha de ferramenta, e escurece a
-#   faixa lateral (a #0d0d0d, cor do .phone-device) pra virar "bezel". Idempotente (roda a cada ciclo);
+#   faixa lateral (#0d0d0d) pra ela nao aparecer como "desktop" dentro da tela. Idempotente (roda a cada
+#   ciclo); ATENCAO: a UI nao desenha mais moldura de celular (o .phone-device virou .phone-screen, sem
+#   fundo), entao esse #0d0d0d agora encosta no fundo da pagina (--bg #111b21) em vez de casar com a
+#   moldura. Se aparecer emenda de cor na borda, alinhe este solid com o --bg do App.css.
 #   re-provisiona xdotool/xsetroot no container se sumirem. NAO recria o container (a conta da Paulinha
 #   vive no LAYER GRAVAVEL -> recreate = perder a conta). SCREEN_WIDTH fica 500; o molde (aspect-ratio
 #   500/850) ja bate com o display, entao o conteudo preenche sem letterbox/scroll.
