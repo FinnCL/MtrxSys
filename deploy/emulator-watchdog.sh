@@ -49,72 +49,14 @@ clean_screen() {
 # "Desligar emulador"). Nesse caso o watchdog NÃO religa — só religa em CRASH real. O Start remove a flag.
 is_off() { docker volume inspect mtrx-dandroid-off >/dev/null 2>&1; }
 
-# ── PROXY TRANSPARENTE (anti-ban): garante que TODO TCP do emulador sai pelo residencial BR ────────
-# POR QUE aqui e não no compose: as regras de iptables vivem na NETNS do container do emulador e
-# somem a cada restart — e este watchdog é justamente quem reinicia o emulador em crash. Sem esta
-# reaplicação, a primeira queda devolvia o disparo pro IP do datacenter (Montreal) EM SILENCIO. Foi o
-# que aconteceu em 18/07: o proxy sumiu e ninguem notou por 5 dias.
-#
-# POR QUE iptables e nao o http_proxy do Android: aquele e uma SUGESTAO que cada app decide seguir.
-# Chrome/Play seguem; o socket de mensagens do WhatsApp (porta 5222) IGNORA e vai direto. O REDIRECT
-# desvia o TCP antes de sair, sem o app saber.
-#
-# nsenter usa o iptables DO HOST dentro da netns do container: nao precisa de NET_ADMIN no emulador
-# (habilitar exigiria RECRIAR o container = PERDER A CONTA pareada) nem de subir alpine+apk a cada ciclo.
-TP_PORT=12345
-ensure_proxy() {
-  # Upstream do .env.prod: MESMA fonte do WAHA deste stack, pra os dois nunca divergirem de IP.
-  local env=/home/ubuntu/MtrxSys/deploy/.env.prod
-  local hostport user pass upstream pid
-  hostport=$(grep -E '^WAHA_PROXY_1=' "$env" 2>/dev/null | cut -d= -f2-)
-  user=$(grep -E '^WAHA_PROXY_1_USER=' "$env" 2>/dev/null | cut -d= -f2-)
-  pass=$(grep -E '^WAHA_PROXY_1_PASS=' "$env" 2>/dev/null | cut -d= -f2-)
-  [ -n "$hostport" ] && [ -n "$user" ] || return 0   # sem proxy configurado: nao mexe em nada
-  upstream="http://${user}:${pass}@${hostport}"
-
-  pid=$(docker inspect -f '{{.State.Pid}}' mtrx-dandroid 2>/dev/null)
-  [ -n "$pid" ] && [ "$pid" != "0" ] || return 0
-
-  # 1) SAUDE POR ALCANCE DA PORTA, nao por "o container existe". Quando o emulador reinicia, a netns
-  #    muda e o gost-tp fica ORFAO num laco de restart: `docker ps` ainda mostra o nome, mas nada
-  #    responde. Testar a porta DENTRO da netns cobre os tres casos (parado, reiniciando, orfao).
-  if ! nsenter -t "$pid" -n timeout 3 bash -c "</dev/tcp/127.0.0.1/${TP_PORT}" 2>/dev/null; then
-    docker rm -f mtrx-gost-tp >/dev/null 2>&1
-    docker run -d --name mtrx-gost-tp --restart unless-stopped \
-      --network "container:mtrx-dandroid" --cap-add NET_ADMIN \
-      gogost/gost -L "red://:${TP_PORT}" -F "$upstream" >/dev/null 2>&1
-    sleep 4
-    # ORDEM CRITICA: so aplica as regras com o proxy RESPONDENDO. Redirecionar pra um gost morto
-    # deixaria o emulador SEM REDE NENHUMA — pior que sair pelo IP errado, e mudo no log.
-    nsenter -t "$pid" -n timeout 3 bash -c "</dev/tcp/127.0.0.1/${TP_PORT}" 2>/dev/null || return 0
-  fi
-
-  # 2) Regras na netns. SENTINELA: as quatro nascem juntas, entao basta checar o REDIRECT — evita 4
-  #    nsenter por ciclo no caso comum (tudo certo).
-  #    ⚠️ LIMITE CONHECIDO: o REDIRECT em OUTPUT captura o tráfego HTTP e boa parte do egresso, MAS o
-  #    socket de mensagens do WhatsApp aberto pelo `netsimd` (rede do docker-android) NÃO cai nesta
-  #    cadeia — reconecta DIRETO mesmo com as regras presentes (provado 2026-07-23: após restart, o
-  #    socket direto pra 31.13.x:5222 persiste). Matar o socket a cada ciclo só CHURNa o WhatsApp sem
-  #    consertar (ele volta direto). O egresso confiável exige TPROXY no bridge do HOST, não aqui —
-  #    pendente. Enquanto isso, NÃO confie que 100% do WhatsApp sai pelo residencial só por estas regras.
-  nsenter -t "$pid" -n iptables -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports "${TP_PORT}" 2>/dev/null && return 0
-
-  #    Os RETURN vem ANTES do REDIRECT e sao obrigatorios: sem excluir o proprio proxy, o gost
-  #    redirecionaria a propria conexao de saida pra si mesmo (laco infinito); sem excluir a rede do
-  #    docker e o loopback, o emulador perderia adb/noVNC/api.
-  #    Subnet LIDA do docker: fixar "172.19.0.0/16" quebraria silenciosamente se a rede fosse recriada
-  #    noutra faixa — o mesmo tipo de armadilha do IP fixo que derrubou o proxy anterior.
-  local proxy_ip=${hostport%%:*} subnet
-  subnet=$(docker network inspect mtrxsys_default -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null)
-  subnet=${subnet:-172.19.0.0/16}
-  for r in "-d 127.0.0.0/8 -j RETURN" \
-           "-d ${subnet} -j RETURN" \
-           "-d ${proxy_ip} -j RETURN" \
-           "-j REDIRECT --to-ports ${TP_PORT}"; do
-    # shellcheck disable=SC2086
-    nsenter -t "$pid" -n iptables -t nat -A OUTPUT -p tcp $r 2>/dev/null
-  done
-}
+# ── (REMOVIDO) proxy transparente na NETNS + container gost-tp ─────────────────────────────────────
+# Tentativa anterior de redirecionar o egresso na netns do container. NÃO funcionava pro que importa:
+# o socket de mensagens do WhatsApp é aberto pelo netsimd de um jeito que NÃO cai no OUTPUT da netns —
+# vazava direto pro datacenter (provado por tcpdump). A captura confiável é DENTRO do guest, na origem
+# (ver ensure_guest_proxy abaixo). Confirmado redundante 2026-07-23: o gost-tp via 0 conexões e o
+# REDIRECT da netns contava 0 pacotes. Removido pra não deixar container e regras que não fazem nada.
+# O container mtrx-gost-tp é derrubado 1x no start do watchdog (logo abaixo).
+docker rm -f mtrx-gost-tp >/dev/null 2>&1
 
 # ── PROXY NA ORIGEM (DENTRO do guest) ──────────────────────────────────────────────────────────
 # O egresso do WhatsApp NASCE dentro do Android (VM). Interceptar de fora (netns/host) NÃO pega o
@@ -134,6 +76,19 @@ ensure_guest_proxy() {
   proxy_ip=${hostport%%:*}
 
   docker exec mtrx-dandroid adb root >/dev/null 2>&1   # idempotente; sobe adbd como root (userdebug)
+
+  # ADAPTA A TROCA DE IP DO PROXY: a IPRoyal já trocou IPs (o bloco 200.160 morreu com 407). Sem isto o
+  # gost ficava com o IP VELHO (não reinicia se já escuta) e a regra RETURN excluía o IP velho — envios
+  # falhavam e o health MENTIA "ok". Guarda o hostport com que montou; se o .env mudou, DERRUBA (kill
+  # gost + flush) e deixa o resto da função remontar com o IP novo (gost-first, depois regras). Arquivo
+  # ausente (1º ciclo após deploy) = inicializa SEM derrubar — zero disrupção no que já funciona.
+  local ipfile=/home/ubuntu/emulator-proxy.ip previp
+  previp=$(cat "$ipfile" 2>/dev/null)
+  if [ -n "$previp" ] && [ "$previp" != "$hostport" ]; then
+    docker exec mtrx-dandroid adb shell "su 0 pkill -f /data/local/tmp/gost; su 0 iptables -t nat -F OUTPUT" >/dev/null 2>&1
+    echo "[$(date -u +%FT%TZ)] proxy do emulador trocou de IP ($previp -> $hostport); remontando." >&2
+  fi
+  [ "$previp" != "$hostport" ] && echo "$hostport" > "$ipfile" 2>/dev/null
 
   # Binário no guest: /data sobrevive a reboot, então re-push só quando some (ex.: recreate/pm clear).
   if ! docker exec mtrx-dandroid adb shell "test -x /data/local/tmp/gost" >/dev/null 2>&1; then
@@ -162,6 +117,26 @@ ensure_guest_proxy() {
     docker exec mtrx-dandroid adb shell "am force-stop com.whatsapp" >/dev/null 2>&1
     docker exec mtrx-dandroid adb shell "monkey -p com.whatsapp 1" >/dev/null 2>&1
   fi
+
+  # POST-CONDIÇÃO (anti-falha-silenciosa): depois de tentar montar tudo, CONFIRMA que a proteção ficou
+  # de pé — regra REDIRECT presente E gost escutando na :12345. Se NÃO (adb root quebrou, gost não subiu,
+  # binário sumiu do host), o egresso do WhatsApp pode estar saindo DIRETO pelo IP do datacenter, e sem
+  # isto a falha seria MUDA (o padrão que já nos custou 5 dias com o proxy antigo). Escreve um flag de
+  # saúde (lido pelo futuro gate do dispatcher — ver nota) e loga SÓ NA TRANSIÇÃO de estado: um ALERTA
+  # quando quebra e um "recuperado" quando volta, em vez de repetir a cada ciclo (parede de log = ruído
+  # inútil). A auto-PAUSA do disparo NÃO é feita aqui de propósito: escrever a pausa do banco pelo shell
+  # acopla errado (ver commit) — a trava certa é um gate no dispatcher lendo este flag.
+  local health=/home/ubuntu/emulator-proxy.health prev now
+  prev=$(cat "$health" 2>/dev/null)
+  if docker exec mtrx-dandroid adb shell \
+       "su 0 iptables -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports 12345 && su 0 ss -ltn 2>/dev/null | grep -q :12345" >/dev/null 2>&1; then
+    now=ok
+    [ "$prev" = leak ] && echo "[$(date -u +%FT%TZ)] proxy do emulador RECUPERADO (egresso volta a sair pelo residencial)." >&2
+  else
+    now=leak
+    [ "$prev" != leak ] && echo "[$(date -u +%FT%TZ)] ALERTA: proxy do emulador NAO estabelecido — egresso do WhatsApp pode estar saindo DIRETO pelo datacenter. Cheque: adb root / gost :12345 / binario $GUEST_GOST." >&2
+  fi
+  [ "$now" != "$prev" ] && echo "$now" > "$health" 2>/dev/null   # só escreve na mudança (menos I/O)
 }
 
 while true; do
@@ -172,7 +147,6 @@ while true; do
       if [ "$B" = "1" ]; then
         down=0
         ensure_tools
-        ensure_proxy
         ensure_guest_proxy
         clean_screen
       else
