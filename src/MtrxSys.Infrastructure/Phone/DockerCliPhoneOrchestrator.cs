@@ -12,6 +12,11 @@ namespace MtrxSys.Infrastructure.Phone;
 internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IHttpClientFactory http)
     : IPhoneOrchestrator, IDisposable
 {
+    // Quanto tempo o WhatsApp pode levar pra reconhecer um contato novo da agenda. MEDIDO em produção
+    // (2026-07-23): o Google subiu em ~90s e o espelho `com.whatsapp` apareceu entre ~2,5 e ~7 min.
+    // Só depois desta janela a AUSÊNCIA do espelho vira prova de que o número não tem WhatsApp.
+    private static readonly TimeSpan MirrorSyncGrace = TimeSpan.FromMinutes(8);
+
     private PhoneOptions Opts => opts.Value;
     // Serializa as operações de UI (o emulador não roda 2 uiautomator dump ao mesmo tempo, e o dump usa
     // um arquivo fixo). O provider é singleton; garante 1 envio por vez por emulador. Ver SendWhatsApp.
@@ -221,6 +226,93 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return rc == 0 ? "ok" : (string.IsNullOrWhiteSpace(err) ? outp : err);
     }
 
+    public async Task<bool?> IsOnWhatsAppAsync(string phoneE164, CancellationToken ct)
+    {
+        var digits = new string((phoneE164 ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (digits.Length < 8)
+        {
+            return null;
+        }
+        // 1) Acha o contato AGREGADO. O phone_lookup do `content query` casa STRING, não número: um
+        //    contato gravado como "+55…" NÃO é achado por "55…" e vice-versa (medido no aparelho).
+        //    Por isso tenta os dois formatos — nós gravamos sem "+", o WhatsApp escreve com.
+        var contactId = await LookupContactIdAsync(digits, ct)
+            ?? await LookupContactIdAsync("%2B" + digits, ct);
+        if (contactId is null)
+        {
+            return null; // nem está na agenda: não dá pra afirmar nada (quem chama salva e re-pergunta)
+        }
+        // 2) O contato agregado tem a marca que o WhatsApp cria pra quem é usuário? A agregação junta
+        //    o nosso raw contact e o do WhatsApp sob o MESMO contact_id, mesmo com o "+" diferente —
+        //    então a marca aparece aqui independentemente de qual dos dois o lookup achou.
+        //    SEM --projection de propósito: a linha crua traz o mimetype E o carimbo de última
+        //    atualização de uma vez (o `content query` não devolve projeção de várias colunas).
+        var (rc, data, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "content", "query",
+            "--uri", $"content://com.android.contacts/contacts/{contactId}/data");
+        if (rc != 0)
+        {
+            return null;
+        }
+        if (data.Contains("vnd.com.whatsapp.profile", System.StringComparison.Ordinal))
+        {
+            return true;
+        }
+        // Sem a marca: só é "NÃO tem WhatsApp" se o contato já teve TEMPO de sincronizar. Um contato
+        // recém-salvo fica minutos sem espelho — devolver false aqui faria quem chama descartá-lo
+        // como inexistente (o job é marcado terminal), perdendo um contato bom pra sempre.
+        var stamp = System.Text.RegularExpressions.Regex.Match(data, @"contact_last_updated_timestamp=(\d+)");
+        if (!stamp.Success
+            || !long.TryParse(stamp.Groups[1].Value, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var ms))
+        {
+            return null;
+        }
+        // Compara com o relógio DO APARELHO, não com o do host. O carimbo acima é gerado lá dentro; se
+        // o emulador atrasar em relação ao host, a diferença INFLA e a gente declararia "não tem
+        // WhatsApp" cedo demais — e esse veredito é terminal (o job é descartado). Duas leituras do
+        // mesmo relógio nunca divergem. Sem conseguir a hora do device, prefere não afirmar nada.
+        var deviceNow = await GetDeviceNowAsync(ct);
+        if (deviceNow is null)
+        {
+            return null;
+        }
+        var updatedAt = DateTimeOffset.FromUnixTimeMilliseconds(ms);
+        return deviceNow.Value - updatedAt > MirrorSyncGrace ? false : null;
+    }
+
+    // "Agora" segundo o próprio Android (epoch em segundos). null se não der pra ler.
+    private async Task<DateTimeOffset?> GetDeviceNowAsync(CancellationToken ct)
+    {
+        var (rc, outp, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "date", "+%s");
+        if (rc != 0)
+        {
+            return null;
+        }
+        var m = System.Text.RegularExpressions.Regex.Match(outp ?? "", @"\d{10,}");
+        return m.Success
+            && long.TryParse(m.Value, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var secs)
+            ? DateTimeOffset.FromUnixTimeSeconds(secs)
+            : null;
+    }
+
+    // contact_id do primeiro resultado do phone_lookup, ou null. `query` já vem no formato "Row: 0 col=valor".
+    private async Task<string?> LookupContactIdAsync(string lookupValue, CancellationToken ct)
+    {
+        var (rc, outp, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "content", "query",
+            "--uri", $"content://com.android.contacts/phone_lookup/{lookupValue}",
+            "--projection", "contact_id");
+        if (rc != 0)
+        {
+            return null;
+        }
+        var m = System.Text.RegularExpressions.Regex.Match(outp ?? "", @"contact_id=(\d+)");
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
     public async Task<string> SaveContactAsync(string phoneE164, string? name, CancellationToken ct)
     {
         // Grava o número na AGENDA do Android do emulador (contacts provider) — NÃO na UI do WhatsApp.
@@ -233,11 +325,11 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
             return "phone inválido";
         }
 
-        // 1) Já está na agenda? phone_lookup normaliza e casa pelos últimos dígitos ("Row:" = achou).
-        var (lc, lookup, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
-            "adb", "shell", "content", "query",
-            "--uri", $"content://com.android.contacts/phone_lookup/{digits}", "--projection", "display_name");
-        if (lc == 0 && lookup.Contains("Row:", System.StringComparison.Ordinal))
+        // 1) Já está na agenda? Testa os DOIS formatos: este phone_lookup casa STRING, não número —
+        //    um contato gravado pelo WhatsApp como "+55…" não é achado por "55…". Com um formato só,
+        //    o "já existe" falhava pra esses e criávamos uma DUPLICATA a cada disparo.
+        if (await LookupContactIdAsync(digits, ct) is not null
+            || await LookupContactIdAsync("%2B" + digits, ct) is not null)
         {
             return "já existe";
         }

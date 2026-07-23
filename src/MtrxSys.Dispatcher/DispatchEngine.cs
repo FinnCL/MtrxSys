@@ -311,6 +311,45 @@ public sealed class DispatchEngine(
                 // → segue (não perde contato por hiccup). O chatId devolvido é o CANÔNICO do WhatsApp
                 // (resolve o 9º dígito BR) — usado no typing E no envio, pra bater no chat certo.
                 var numberCheck = await TryCheckNumberAsync(sessionId, contact, ct);
+                if (numberCheck is null && emulatorMode)
+                {
+                    // WAHA fora do ar NÃO pode parar o disparo no modo emulador: aqui quem envia é o
+                    // aparelho, e ele também sabe responder "esse número tem WhatsApp?" — o app cria um
+                    // raw contact `com.whatsapp` pra todo contato da agenda que é usuário da plataforma.
+                    // Sem chatId canônico: o deep link resolve o número por conta própria.
+                    //
+                    // SALVA ANTES de perguntar: o espelho só existe pra contato que está NA AGENDA. O
+                    // salvamento do fluxo normal acontece lá embaixo, perto do envio — tarde demais pra
+                    // esta checagem. (Lá vira no-op: o SaveContact é idempotente.)
+                    await TrySaveContactAsync(contact, ct);
+                    var onWhatsApp = await phone.IsOnWhatsAppAsync(contact.Phone.E164, ct);
+                    if (onWhatsApp is null)
+                    {
+                        // "Ainda não sei": contato recém-salvo, o WhatsApp leva minutos pra reconhecer.
+                        // ADIA — jamais descarta. Neste instante "ainda não sincronizou" e "não tem
+                        // WhatsApp" são indistinguíveis, e o caminho do descarte é TERMINAL: trataria um
+                        // contato bom como inexistente e o perderia. Quando a janela de sync passar, o
+                        // aparelho responde true ou false com segurança.
+                        job.Defer(clock.UtcNow.AddSeconds(EmulatorSyncGraceSeconds), "contato salvo; aguardando o WhatsApp reconhecê-lo");
+                        await uow.SaveChangesAsync(ct);
+                        retried++;
+                        log.LogInformation(
+                            "Emulador: {Phone} salvo na agenda; adiado {Sec}s até o WhatsApp reconhecer (sem WAHA pra checar).",
+                            contact.Phone.E164, EmulatorSyncGraceSeconds);
+                        // Espaça como um ENVIO (90-240s), não como um check-exists (8-21s). Salvar um
+                        // contato aqui não é uma consulta: é uma ESCRITA que sobe pro Google e faz o
+                        // WhatsApp reconhecer um número novo. No ritmo de checagem, a fila encheria a
+                        // agenda com 125 contatos em ~29 min pra enviar os ~12 do teto diário — rajada
+                        // visível e desperdício de sync. Assim a agenda cresce no mesmo compasso das
+                        // mensagens, que é o que um humano faria.
+                        await Task.Delay(delay.NextDelay(), ct);
+                        continue;
+                    }
+                    numberCheck = new WahaNumberCheck(onWhatsApp.Value, null);
+                    log.LogInformation(
+                        "Checagem de número pelo APARELHO (WAHA indisponível): {Phone} {Verdict}.",
+                        contact.Phone.E164, onWhatsApp.Value ? "tem WhatsApp" : "NÃO tem WhatsApp");
+                }
                 if (numberCheck is null)
                 {
                     // Checagem INDISPONÍVEL: NÃO enviar pro E164 CRU (vem da libphonenumber COM o 9º dígito,
@@ -686,6 +725,12 @@ public sealed class DispatchEngine(
     // pontual do check-exists). Futuro o bastante pra não re-checar em loop; curto o bastante pra o
     // contato não esperar demais quando o check voltar.
     private const int NumberCheckDeferSeconds = 60;
+
+    // Espera até o WhatsApp reconhecer um contato recém-salvo na agenda do emulador. MEDIDO em
+    // produção (2026-07-23): Google sobe em ~90s e o espelho `com.whatsapp` aparece entre ~2,5 e ~7min.
+    // Um pouco acima do teto observado: adiar de novo custa um ciclo, mas responder cedo demais faz o
+    // aparelho dizer "não tem WhatsApp" sobre quem só não sincronizou ainda.
+    private const int EmulatorSyncGraceSeconds = 480;
 
     // Falha definitiva = a que não melhora reenviando: respostas 4xx do WAHA (request inválido,
     // número ruim), EXCETO 408 (timeout) e 429 (rate limit), que são transitórios. Timeout do

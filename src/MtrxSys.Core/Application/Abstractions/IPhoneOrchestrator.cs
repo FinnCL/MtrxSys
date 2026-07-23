@@ -68,6 +68,20 @@ public interface IPhoneOrchestrator
     /// <summary>Grava um número na AGENDA do Android do emulador (contacts provider) — pra o disparo
     /// sair pra um "contato salvo" (perfil menos-robô, ajuda anti-ban). Chamado pelo DispatchEngine
     /// antes de cada envio: IDEMPOTENTE (não duplica) e best-effort. Default: não suportado.</summary>
+    /// <summary>O número está no WhatsApp, SEGUNDO O PRÓPRIO APARELHO? Equivalente LOCAL do
+    /// check-exists do WAHA, sem API nenhuma: quando um contato da agenda é usuário da plataforma, o
+    /// WhatsApp cria por conta própria um raw contact na conta <c>com.whatsapp</c> (com as linhas
+    /// <c>vnd.com.whatsapp.profile</c>/<c>.voip.call</c>), agregado ao contato original. A ausência
+    /// desse espelho, num contato JÁ sincronizado, é o sinal de que o número não tem WhatsApp.
+    /// Medido em produção (2026-07-23): 115 contatos salvos → 113 espelhados → 2 não-usuários.
+    /// PRÉ-REQUISITO: o contato precisa estar salvo E ter dado tempo de sincronizar (o espelho leva
+    /// de ~2,5 a ~7 min pra aparecer). Por isso <c>null</c> ("não sei") quando ele nem está na agenda
+    /// — quem chama deve salvar, esperar o grace e perguntar de novo, nunca tratar null como "não".
+    /// </summary>
+    /// <returns>true = é usuário; false = está na agenda há tempo e NÃO é usuário; null = não deu pra saber.</returns>
+    Task<bool?> IsOnWhatsAppAsync(string phoneE164, CancellationToken ct) =>
+        Task.FromResult<bool?>(null);
+
     Task<string> SaveContactAsync(string phoneE164, string? name, CancellationToken ct) =>
         Task.FromResult("gravação de contato não suportada neste engine.");
 
