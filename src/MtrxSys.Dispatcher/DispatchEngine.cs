@@ -59,6 +59,9 @@ public sealed class DispatchEngine(
         // exec INÚTEIS por envio (falham/são no-op, com latência e spam de log). Lido 1x por ciclo.
         var sysStateSnapshot = await systemState.GetAsync(ct);
         var saveContactsToEmulator = sysStateSnapshot.DispatchMode == PhoneDispatchMode.Emulator;
+        // FASE 3 (Caminho A): envia pela UI do EMULADOR-primário (não pelo WAHA) — mata o 463 do frio.
+        // Lido 1x por ciclo. Mantém check-exists (WAHA valida o número), mas pula typing e usa a UI.
+        var sendViaEmulator = dispatchOpts.Value.SendViaEmulator;
         // Número do chip CONECTADO agora (reconciliado logo acima). O gate-por-chip usa isto pra só
         // disparar pros contatos que ESTE chip importou (co-membros dele). Lido 1x por ciclo.
         var connectedPhone = sysStateSnapshot.WarmupPhone;
@@ -124,7 +127,9 @@ public sealed class DispatchEngine(
             // cair abaixo do limiar numa janela recente (com amostra mínima), PARA o ciclo — é o freio
             // que faltava pra não drenar o cap diário num número morto (o que vira ban duro). Re-checado
             // a cada job; acks atrasados recuperam a taxa e o ciclo volta sozinho.
-            if (dispatchOpts.Value.DeliveryHealthGuardEnabled
+            // No modo emulador o guard baseia-se em ack async do WAHA, que não existe (envio pela UI):
+            // desliga aqui pra não pausar o ciclo à toa. A confirmação de envio da própria UI é o sinal.
+            if (!sendViaEmulator && dispatchOpts.Value.DeliveryHealthGuardEnabled
                 && await IsDeliveryUnhealthyAsync(ct) is { } bad)
             {
                 metrics.RecordWarmupBlocked();
@@ -371,7 +376,10 @@ public sealed class DispatchEngine(
                 }
 
                 var delayBefore = delay.NextDelay();
-                var typingMs = await typing.SimulateAsync(sessionId, sendTarget, text, ct);
+                // No modo emulador NÃO simula "digitando" pelo WAHA: o typing sairia da conta do
+                // COMPANION (WAHA), diferente de quem envia (o primário do emulador) — inconsistente e
+                // com cara de bot. O intent click-to-chat já abre o chat de forma natural.
+                var typingMs = sendViaEmulator ? 0 : await typing.SimulateAsync(sessionId, sendTarget, text, ct);
 
                 // 2º freio de mão: se o operador clicou "Parar envios" enquanto a gente simulava
                 // o typing (2-5s), o envio ainda não saiu. Checa de novo aqui pra abortar ANTES
@@ -413,14 +421,35 @@ public sealed class DispatchEngine(
                 // Anexo de imagem DESABILITADO: todo disparo sai como texto, mesmo que o template
                 // tenha imagem. Evita rejeição do WAHA (422 por mimetype/dados) e mantém o envio
                 // simples e estável. (O texto composto preserva spintax, placeholders e o "SAIR".)
-                var waMessageId = await waha.SendTextAsync(sessionId, sendTarget, text, ct);
+                string waMessageId;
+                if (sendViaEmulator)
+                {
+                    // FASE 3 (Caminho A): envia pela UI do EMULADOR-primário — entrega pra FRIO sem 463
+                    // (o WAHA/companion daria 463). !Sent → throw pro tratamento de falha (retry/fail)
+                    // abaixo, exatamente como uma falha de envio do WAHA. Sem id do WAHA: a confirmação
+                    // (campo esvaziou) e o status de entrega vêm da própria UI (uiautomator).
+                    var emu = await phone.SendWhatsAppMessageAsync(contact.Phone.E164, text, ct);
+                    if (!emu.Sent)
+                    {
+                        throw new InvalidOperationException(emu.Error ?? "envio pelo emulador não confirmado.");
+                    }
+                    log.LogInformation(
+                        "Emulador: enviado para {Phone} (entrega: {Status}).",
+                        contact.Phone.E164, emu.DeliveryStatus ?? "?");
+                    waMessageId = string.Empty; // sem id do WAHA — auditoria fica sem ack async, ok no emulador
+                }
+                else
+                {
+                    waMessageId = await waha.SendTextAsync(sessionId, sendTarget, text, ct);
+                }
 
                 // Id vazio NÃO invalida o envio (a mensagem saiu; ver ReadSentMessageIdAsync), mas
                 // CEGA o sensor de entrega: sem id a auditoria fica órfã, o message.ack nunca acha o
                 // que casar, e o guard de shadow-restriction perde a única evidência que ele tem.
                 // Era exatamente o estado da produção em 2026-07-15 — 100% dos envios sem id, e nada
                 // no log. Aviso alto: se isto aparecer, o guard está cego e alguém precisa saber.
-                if (string.IsNullOrWhiteSpace(waMessageId))
+                // No modo emulador o id vazio é ESPERADO (não há ack async do WAHA) — não é anomalia.
+                if (!sendViaEmulator && string.IsNullOrWhiteSpace(waMessageId))
                 {
                     log.LogWarning(
                         "Envio para {Phone} não devolveu id de mensagem. A mensagem SAIU, mas o sensor "
@@ -506,7 +535,10 @@ public sealed class DispatchEngine(
                 // TIMEOUT fica FORA daqui de propósito: um timeout pós-request PODE ter enviado, então
                 // vai pro retry COM TETO abaixo — senão um WAHA lento-mas-vivo geraria reenvio ilimitado
                 // (duplicata/risco de ban).
-                if (IsSessionDownFailure(ex))
+                // Estes dois checks são específicos do WAHA (sessão inalcançável / fora de WORKING). No
+                // modo emulador não há sessão WAHA no caminho de envio: a falha vai direto pro
+                // tratamento de falha-do-número (retry até o teto, senão Failed) mais abaixo.
+                if (!sendViaEmulator && IsSessionDownFailure(ex))
                 {
                     log.LogWarning(ex,
                         "WAHA inalcançável ao enviar o job {JobId}; ciclo parado (job segue Pending).", job.Id);
@@ -519,7 +551,7 @@ public sealed class DispatchEngine(
                 // degradada (risco de ban). Só cai no tratamento de falha-do-número se a sessão SEGUE
                 // WORKING. Se não der pra ler o status (blip), NÃO afirma que caiu — o gate de lista-
                 // branca no topo do próximo ciclo é o backstop.
-                if (await IsSessionNotWorkingAsync(sessionId, ct))
+                if (!sendViaEmulator && await IsSessionNotWorkingAsync(sessionId, ct))
                 {
                     log.LogWarning(ex,
                         "Envio do job {JobId} falhou e a sessão NÃO está WORKING; ciclo parado (job segue Pending).", job.Id);
