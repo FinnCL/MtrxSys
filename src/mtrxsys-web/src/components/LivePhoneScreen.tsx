@@ -107,8 +107,10 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
     }
   }, 8000, emulatorMode);
 
-  return (
-    <section className="live-phone">
+  // Os controles são montados UMA vez e compostos em dois layouts (coluna única sem emulador; tela +
+  // faixa lateral com emulador). Sem isto o JSX teria que ser duplicado nos dois caminhos.
+  const controls = (
+    <>
       {/* Proxy REALMENTE aplicado na sessão WAHA do chip (verde) ou saída pelo IP da máquina (cinza). */}
       <p className="phone-off-hint" style={{ textAlign: "center", margin: "0 0 8px" }}>
         Proxy:{" "}
@@ -211,61 +213,75 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
         <HumanPhaseCard onOpenConversation={onOpenConversation} onBlockingChange={setHumanPhaseBlocking} />
       )}
 
-      {/* Modo "Com emulador": a TELA do Android (noVNC do docker-android) embutida direto, sem moldura.
-          O disparo a frio sai por ESTE aparelho (o primário) — é o que mata o 463. Barra de navegação
-          Android (adb keyevent) + recarregar/abrir a tela. Desligado → botão pra ligar o container. */}
-      {emulatorMode && (
-        <>
-          {phoneStatus && !phoneStatus.running ? (
-            <div className="phone-steps">
-              <p className="phone-off-hint" style={{ textAlign: "center" }}>
-                {phoneStatus.state === "unavailable"
-                  ? "Emulador indisponível neste host (sem docker/KVM)."
-                  : "O emulador está desligado. Ligue para ver a tela e disparar por ele."}
-              </p>
-              {phoneStatus.state !== "unavailable" && (
-                <button type="button" className="phone-activate" onClick={() => void api.phoneStart()}>
-                  Ligar emulador
-                </button>
-              )}
-            </div>
-          ) : (
-            <>
-              {/* Sem moldura de celular: só a tela. O wrapper existe apenas pra manter o aspect-ratio
-                  do display e o recorte (overflow) do noVNC — nada de bezel/notch desenhado. */}
-              <div className="phone-screen">
-                <iframe
-                  key={frameKey}
-                  className="phone-stage"
-                  src={url}
-                  title="Tela do emulador Android (WhatsApp primário)"
-                  allow="clipboard-read; clipboard-write"
-                />
-              </div>
-              {/* Navegação do Android (◁ ○ ▢) via adb keyevent — pra operar a tela quando o mouse do
-                  noVNC não basta (ex.: voltar de um menu). */}
-              <div className="phone-navbar">
-                {/* aria-label além do title: sem ele o leitor de tela anuncia só o glifo ("◁"). */}
-                <button type="button" className="phone-nav-btn" title="Voltar" aria-label="Voltar" onClick={() => void api.phoneKey("back")}>◁</button>
-                <button type="button" className="phone-nav-btn" title="Início" aria-label="Início" onClick={() => void api.phoneKey("home")}>○</button>
-                <button type="button" className="phone-nav-btn" title="Recentes" aria-label="Recentes" onClick={() => void api.phoneKey("recents")}>▢</button>
-              </div>
-              <p className="phone-off-hint" style={{ textAlign: "center", maxWidth: 390 }}>
-                Tela do Android (emulador-primário). O disparo a frio sai por aqui — sem 463.{" "}
-                <button type="button" className="phone-reload" onClick={() => setFrameKey((k) => k + 1)}>
-                  Recarregar tela
-                </button>{" "}
-                <a href={url} target="_blank" rel="noreferrer" style={{ color: "var(--accent, #00a884)" }}>
-                  abrir em nova aba
-                </a>
-              </p>
-            </>
-          )}
-
-          {/* Aquecimento de conversa (pool) — só no modo Com emulador; fora da área WAHA + físico. */}
-          <WarmupCard />
-        </>
+      {/* Legenda + ações da tela ficam AQUI (na faixa lateral) e não embaixo do emulador: cada linha
+          de texto sob a tela custa largura, porque a tela é retrato e sai da altura disponível. */}
+      {emulatorMode && (!phoneStatus || phoneStatus.running) && (
+        <p className="phone-off-hint" style={{ textAlign: "center" }}>
+          Tela do Android (emulador-primário). O disparo a frio sai por aqui, sem 463.{" "}
+          <button type="button" className="phone-reload" onClick={() => setFrameKey((k) => k + 1)}>
+            Recarregar tela
+          </button>{" "}
+          <a href={url} target="_blank" rel="noreferrer" style={{ color: "var(--accent, #00a884)" }}>
+            abrir em nova aba
+          </a>
+        </p>
       )}
+
+      {/* Aquecimento de conversa (pool) — só no modo Com emulador; fora da área WAHA + físico. */}
+      {emulatorMode && <WarmupCard />}
+    </>
+  );
+
+  // Sem emulador não há tela pra exibir: coluna única, como sempre foi.
+  if (!emulatorMode) {
+    return <section className="live-phone">{controls}</section>;
+  }
+
+  // Modo "Com emulador": a TELA do Android (noVNC do docker-android) embutida direto, sem moldura.
+  // O disparo a frio sai por ESTE aparelho (o primário) — é o que mata o 463. Layout LADO A LADO: a
+  // tela fica com a coluna inteira (altura cheia) e os controles vão pra faixa lateral rolável.
+  // Como a tela é retrato e HEIGHT-bound, altura livre é a única coisa que a faz crescer.
+  return (
+    <section className="live-phone live-phone--split">
+      <div className="phone-main">
+        {phoneStatus && !phoneStatus.running ? (
+          <div className="phone-steps">
+            <p className="phone-off-hint" style={{ textAlign: "center" }}>
+              {phoneStatus.state === "unavailable"
+                ? "Emulador indisponível neste host (sem docker/KVM)."
+                : "O emulador está desligado. Ligue para ver a tela e disparar por ele."}
+            </p>
+            {phoneStatus.state !== "unavailable" && (
+              <button type="button" className="phone-activate" onClick={() => void api.phoneStart()}>
+                Ligar emulador
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Sem moldura de celular: só a tela. O wrapper existe apenas pra manter o aspect-ratio
+                do display e o recorte (overflow) do noVNC — nada de bezel/notch desenhado. */}
+            <div className="phone-screen">
+              <iframe
+                key={frameKey}
+                className="phone-stage"
+                src={url}
+                title="Tela do emulador Android (WhatsApp primário)"
+                allow="clipboard-read; clipboard-write"
+              />
+            </div>
+            {/* Navegação do Android (◁ ○ ▢) via adb keyevent — pra operar a tela quando o mouse do
+                noVNC não basta (ex.: voltar de um menu). Fica colada na tela, como no aparelho. */}
+            <div className="phone-navbar">
+              {/* aria-label além do title: sem ele o leitor de tela anuncia só o glifo ("◁"). */}
+              <button type="button" className="phone-nav-btn" title="Voltar" aria-label="Voltar" onClick={() => void api.phoneKey("back")}>◁</button>
+              <button type="button" className="phone-nav-btn" title="Início" aria-label="Início" onClick={() => void api.phoneKey("home")}>○</button>
+              <button type="button" className="phone-nav-btn" title="Recentes" aria-label="Recentes" onClick={() => void api.phoneKey("recents")}>▢</button>
+            </div>
+          </>
+        )}
+      </div>
+      <aside className="phone-side">{controls}</aside>
     </section>
   );
 }

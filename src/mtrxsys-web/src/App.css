@@ -1076,6 +1076,27 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
 @media (max-height: 780px) { .live-phone { gap: 6px; padding: 8px 8px 6px; } .phone-off-hint { font-size: 11px; margin-bottom: 2px; } }
 @media (max-height: 640px) { .live-phone { gap: 4px; padding: 6px; } .phone-off-hint { margin: 0; font-size: 10px; } .phone-footer .phone-reload, .phone-reload { padding: 5px 10px; font-size: 12px; } .phone-mode-opt { padding: 5px 12px; font-size: 12px; } }
 
+/* --- Modo "Com emulador": tela GRANDE, lado a lado com os controles ---
+   A tela é retrato e HEIGHT-bound (a largura sai da altura), então empilhar proxy/toggle/conexão/
+   aquecimento ACIMA dela comia mais da metade da altura do painel e a deixava minúscula. Aqui a tela
+   ganha a coluna inteira (só a navbar ◁ ○ ▢ embaixo) e todo o resto vai pra uma faixa lateral que
+   rola sozinha. Efeito: a tela sai de ~55% pra ~95% da altura disponível.
+   DEPOIS dos @media acima de propósito: eles ajustam .live-phone e sobrescreveriam o padding daqui.
+   align-items: stretch é obrigatório — .live-phone usa center, que no grid impediria a coluna da tela
+   de esticar (e a tela voltaria a encolher). */
+.live-phone--split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, 330px);
+  align-items: stretch; gap: 10px; padding: 6px 10px; overflow: hidden; }
+.phone-main { min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px; }
+/* Só a faixa lateral rola; a tela nunca sai de vista. */
+.phone-side { min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
+  align-items: center; gap: 8px; padding: 2px; }
+/* Painel estreito (janela pequena / celular): volta a empilhar, tela em cima. */
+@media (max-width: 900px) {
+  .live-phone--split { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; overflow: auto; }
+  .phone-side { overflow-y: visible; }
+}
+
 /* ===== Contador de reassentamento (settle) ===== */
 .settle-banner {
   display: flex;
