@@ -183,16 +183,37 @@ public sealed class DispatchEngine(
                 if (sessionStatus is not WahaSessionStatus.Working)
                 {
                     settle.Reset(); // caiu: o próximo WORKING recomeça a contagem do reassentamento.
-                    log.LogInformation("Sessão WAHA {Status} (não WORKING); ciclo parado (job segue Pending).", sessionStatus);
-                    break;
+                    if (!emulatorMode)
+                    {
+                        log.LogInformation("Sessão WAHA {Status} (não WORKING); ciclo parado (job segue Pending).", sessionStatus);
+                        break;
+                    }
+                    // MODO EMULADOR: quem envia é o APARELHO, não o WAHA — uma sessão degradada não
+                    // torna o envio arriscado, porque ela não participa dele. O portão existe pro modo
+                    // WahaOnly, onde a sessão É o canal de saída.
+                    // O QUE SE PERDE sem o companion (e é por isso que isto é WARNING, não INFO): o
+                    // caminho de VOLTA. Sem webhook não há inbound, então quem responde "SAIR" por
+                    // TEXTO não é detectado. O link de opt-out da mensagem continua funcionando (bate
+                    // direto na nossa API), então o descadastro segue possível — mas parcial.
+                    // Re-parear o WAHA restaura tudo; ver deploy/README.
+                    log.LogWarning(
+                        "Sessão WAHA {Status}: sigo enviando pelo EMULADOR (o aparelho é quem envia). "
+                        + "SEM companion não há inbound — 'SAIR' por TEXTO não é detectado; só o link do opt-out.",
+                        sessionStatus);
                 }
-                // REASSENTAR APÓS RECONECTAR: se a sessão voltou a WORKING há pouco (ou o dispatcher
-                // reiniciou), espera a janela antes de enviar — evita reconectar-e-metralhar (anti-ban).
-                var settleWindow = TimeSpan.FromSeconds(Math.Max(0, dispatchOpts.Value.SettleAfterReconnectSeconds));
-                if (settleWindow > TimeSpan.Zero && settle.IsSettling(clock.UtcNow, settleWindow))
+                else
                 {
-                    log.LogInformation("Chip reassentando após reconectar; ciclo aguarda (job segue Pending).");
-                    break;
+                    // REASSENTAR APÓS RECONECTAR: se a sessão voltou a WORKING há pouco (ou o dispatcher
+                    // reiniciou), espera a janela antes de enviar — evita reconectar-e-metralhar (anti-ban).
+                    // Só faz sentido com a sessão VIVA: a janela mede há quanto tempo ela está WORKING.
+                    // Com ela fora (ramo acima), o Reset() acabou de zerar o marcador e o IsSettling
+                    // devolveria true pra sempre — travaria o ciclo pelo caminho de trás.
+                    var settleWindow = TimeSpan.FromSeconds(Math.Max(0, dispatchOpts.Value.SettleAfterReconnectSeconds));
+                    if (settleWindow > TimeSpan.Zero && settle.IsSettling(clock.UtcNow, settleWindow))
+                    {
+                        log.LogInformation("Chip reassentando após reconectar; ciclo aguarda (job segue Pending).");
+                        break;
+                    }
                 }
             }
 
