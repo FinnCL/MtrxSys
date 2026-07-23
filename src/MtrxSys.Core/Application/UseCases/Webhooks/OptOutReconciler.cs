@@ -26,59 +26,83 @@ public sealed class OptOutReconciler(
     ISharedPhoneLedger ledger,
     ILogger<OptOutReconciler> log)
 {
-    // Respostas de saída são curtas e recentes; 200 msgs por conversa cobre com folga sem
-    // carregar históricos enormes.
-    private const int MessagesPerConversation = 200;
+    // Contatos por ida ao banco atrás das mensagens. Segura o pico de memória sem voltar ao N+1.
+    private const int ConversationsPerBatch = 500;
 
     public async Task<OptOutReconcileResult> ReconcileAsync(CancellationToken ct)
     {
         var now = clock.UtcNow;
         // Só contatos ATIVOS e ainda não opt-out (ExcludeOptedOut=true também exclui descartados).
         var candidates = await contacts.ListByFilterAsync(new ContactFilter(ExcludeOptedOut: true), ct);
+        if (candidates.Count == 0)
+        {
+            return new OptOutReconcileResult(0, []);
+        }
+
+        // DUAS consultas + uma por lote de conversas, em vez de DUAS POR CONTATO (conversa +
+        // mensagens). Numa base de milhares de contatos ativos — e a maioria nunca responde, então
+        // quase toda ida ao banco voltava vazia — aquilo era milhares de round-trips a cada ciclo do
+        // auto-sync que importasse qualquer mensagem.
+        var chosen = (await conversations.ListIndividualByContactIdsAsync([.. candidates.Select(c => c.Id)], ct))
+            .GroupBy(c => c.ContactId)
+            // MESMO critério do GetByContactIdAsync (a de atividade mais recente): um contato pode ter
+            // mais de uma conversa (@c.us e @lid), e trocar a escolhida mudaria o que é detectado.
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.LastActivityAt).First().ConversationId);
+
+        // Só os contatos que TÊM conversa entram no varejo das mensagens (o OptOutAt é defesa extra:
+        // o filtro da consulta já exclui quem saiu).
+        var withConversation = candidates
+            .Where(c => c.OptOutAt is null && chosen.ContainsKey(c.Id))
+            .Select(c => (Contact: c, ConversationId: chosen[c.Id]));
+
         var reconciled = new List<string>();
 
-        foreach (var contact in candidates)
+        // Em LOTES: pedir o inbound de TODAS as conversas de uma vez faria o pico de memória crescer
+        // com a base (o loop antigo, apesar de lento, só segurava uma conversa por vez). Assim ficam
+        // poucas consultas E memória limitada — uma query a cada ConversationsPerBatch contatos.
+        foreach (var batch in withConversation.Chunk(ConversationsPerBatch))
         {
             ct.ThrowIfCancellationRequested();
-            if (contact.OptOutAt is not null)
-            {
-                continue; // defesa extra — o filtro já exclui
-            }
+            var inbound = (await messages.ListInboundByConversationsAsync(
+                    [.. batch.Select(x => x.ConversationId)], ct))
+                .ToLookup(m => m.ConversationId);
 
-            var conversation = await conversations.GetByContactIdAsync(contact.Id, ct);
-            if (conversation is null)
+            foreach (var (contact, conversationId) in batch)
             {
-                continue;
-            }
+                // Mensagem ANTERIOR à reativação manual não conta: o operador já viu aquele "sair" e
+                // religou o contato de propósito. Sem este corte o reconciliador reencontrava a mesma
+                // mensagem no histórico e devolvia o contato pra "Saiu" — na prática o botão
+                // "Reativar" não funcionava, o status voltava sozinho no ciclo seguinte do auto-sync.
+                // Um "sair" NOVO (depois da reativação) continua sendo respeitado.
+                var askedToLeave = inbound[conversationId].Any(m =>
+                    (contact.ReactivatedAt is null || m.Timestamp > contact.ReactivatedAt)
+                    && OptOutDetector.IsOptOut(m.Body));
+                if (!askedToLeave)
+                {
+                    continue;
+                }
 
-            var msgs = await messages.ListByConversationAsync(conversation.Id, MessagesPerConversation, 0, ct);
-            var askedToLeave = msgs.Any(m =>
-                m.Direction == MessageDirection.Inbound && OptOutDetector.IsOptOut(m.Body));
-            if (!askedToLeave)
-            {
-                continue;
-            }
-
-            // Mesma transição do webhook: opt-out + Lost + auditoria de stage.
-            contact.OptOut(now);
-            await contacts.UpdateAsync(contact, ct);
-            var previous = contact.ChangeStage(ContactStage.Lost, now);
-            if (previous is not null)
-            {
+                // Mesma transição do webhook: opt-out + Lost + auditoria de stage.
+                contact.OptOut(now);
                 await contacts.UpdateAsync(contact, ct);
-                await stageChanges.AddAsync(
-                    ContactStageChange.Create(
-                        id: Guid.NewGuid(),
-                        contactId: contact.Id,
-                        fromStage: previous,
-                        toStage: ContactStage.Lost,
-                        changedAt: now,
-                        changedByUserId: Guid.Empty),
-                    ct);
-            }
+                var previous = contact.ChangeStage(ContactStage.Lost, now);
+                if (previous is not null)
+                {
+                    await contacts.UpdateAsync(contact, ct);
+                    await stageChanges.AddAsync(
+                        ContactStageChange.Create(
+                            id: Guid.NewGuid(),
+                            contactId: contact.Id,
+                            fromStage: previous,
+                            toStage: ContactStage.Lost,
+                            changedAt: now,
+                            changedByUserId: Guid.Empty),
+                        ct);
+                }
 
-            reconciled.Add(contact.Phone.E164);
-            log.LogInformation("Opt-out reconciliado (resposta de saída atrasada) para contato {ContactId}", contact.Id);
+                reconciled.Add(contact.Phone.E164);
+                log.LogInformation("Opt-out reconciliado (resposta de saída atrasada) para contato {ContactId}", contact.Id);
+            }
         }
 
         if (reconciled.Count > 0)

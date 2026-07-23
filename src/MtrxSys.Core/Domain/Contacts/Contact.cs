@@ -21,6 +21,13 @@ public sealed class Contact : Entity<Guid>
     /// <summary>Soft delete ("descartado"): quando preenchido, some das listas e do disparo,
     /// mas a linha (e o opt-out) permanece no banco. null = ativo.</summary>
     public DateTimeOffset? DeletedAt { get; private set; }
+    /// <summary>Quando o operador RELIGOU o contato à mão (botão "Reativar"), sobrepondo um opt-out.
+    /// É a marca d'água do <c>OptOutReconciler</c>: um "sair" ANTERIOR a esta data já foi
+    /// deliberadamente perdoado e não pode desfazer a reativação. Sem isto o reconciliador reencontrava
+    /// a mesma mensagem antiga no histórico e devolvia o contato pra "Saiu" no ciclo seguinte do
+    /// auto-sync — o operador reativava e o status voltava sozinho, pra sempre. Um "sair" NOVO (depois
+    /// desta data) continua valendo normalmente.</summary>
+    public DateTimeOffset? ReactivatedAt { get; private set; }
 
     private Contact() { }
 
@@ -126,10 +133,13 @@ public sealed class Contact : Entity<Guid>
     /// <summary>
     /// Religa o contato: limpa o opt-out e volta pra "Novo" (Lead). Retorna o estágio
     /// anterior se mudou (pra registrar no histórico), ou null se já estava em "Novo".
+    /// Carimba <see cref="ReactivatedAt"/> pra o reconciliador não reverter isto com a mensagem
+    /// de saída antiga que ainda está no histórico da conversa.
     /// </summary>
     public ContactStage? Reactivate(DateTimeOffset at)
     {
         OptOutAt = null;
+        ReactivatedAt = at;
         return ChangeStage(ContactStage.Lead, at);
     }
 

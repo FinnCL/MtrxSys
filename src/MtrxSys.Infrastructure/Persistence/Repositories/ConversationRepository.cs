@@ -20,6 +20,25 @@ internal sealed class ConversationRepository(MtrxDbContext db) : IConversationRe
             .OrderByDescending(c => c.LastMessageAt ?? c.CreatedAt)
             .FirstOrDefaultAsync(ct);
 
+    // Lote do GetByContactIdAsync. `Guid?` na lista de propósito: comparar direto com a coluna
+    // anulável (contact_id) vira `contact_id = ANY(@ids)` sem precisar de .Value no LINQ.
+    // Projeção (não entidade) e sem tracking: o reconciliador só precisa saber QUAL conversa é a
+    // mais recente de cada contato — carregar título/prévia da base inteira seria desperdício.
+    public async Task<IReadOnlyList<ContactConversationRef>> ListIndividualByContactIdsAsync(
+        IReadOnlyCollection<Guid> contactIds, CancellationToken ct)
+    {
+        if (contactIds.Count == 0)
+        {
+            return [];
+        }
+        var ids = contactIds.Select(id => (Guid?)id).ToList();
+        return await db.Conversations
+            .AsNoTracking()
+            .Where(c => !c.IsGroup && c.ContactId != null && ids.Contains(c.ContactId))
+            .Select(c => new ContactConversationRef(c.ContactId!.Value, c.Id, c.LastMessageAt ?? c.CreatedAt))
+            .ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<Conversation>> ListByStatusAsync(
         string? status, string? search, int limit, int offset, CancellationToken ct) =>
         await BuildQuery(status, search)
