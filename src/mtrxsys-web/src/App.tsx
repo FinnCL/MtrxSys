@@ -48,6 +48,14 @@ function Shell() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [view, setView] = useState<ViewTab>(loadView);
+  // KEEP-ALIVE da aba "Celular": depois da primeira visita ela fica MONTADA (só escondida por CSS
+  // quando você está em outra aba). O motivo é o iframe do emulador: ele carrega uma sessão VNC, e
+  // desmontar a aba derrubava essa conexão — ao voltar, a tela reconectava do zero e piscava
+  // "Conectar", dando a impressão de que o emulador tinha caído. Nenhuma outra aba tem conexão viva
+  // a preservar, então todas continuam sendo desmontadas normalmente. Enquanto escondida, a aba não
+  // consulta nada (os polls dela param via `active`) — o que segue de pé é só o stream do emulador.
+  // Montagem PREGUIÇOSA: quem nunca abre a aba não paga o stream.
+  const [phoneMounted, setPhoneMounted] = useState(view === "phone");
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const autoSyncTriggeredRef = useRef(false);
   // Na 1ª vez que detectar o WhatsApp desconectado, cai na aba "Celular" (onde fica a conexão/QR).
@@ -134,6 +142,7 @@ function Shell() {
     didInitViewRef.current = true;
     if (wahaWorking === false) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPhoneMounted(true);
       setView("phone");
     }
   }, [wahaWorking]);
@@ -172,7 +181,10 @@ function Shell() {
             <button
               type="button"
               className={`tab-btn${view === "phone" ? " active" : ""}`}
-              onClick={() => setView("phone")}
+              onClick={() => {
+                setPhoneMounted(true); // a partir daqui a aba não é mais desmontada (keep-alive)
+                setView("phone");
+              }}
             >
               Celular
             </button>
@@ -231,6 +243,19 @@ function Shell() {
         <button type="button" onClick={logout}>Sair</button>
       </header>
       <SettleCountdown />
+      {/* Fora da cadeia de ternários de propósito: a aba Celular fica montada em paralelo às outras e
+          só se esconde (is-hidden). É o que preserva a sessão VNC do emulador entre trocas de aba. */}
+      {phoneMounted && wahaWorking !== null && (
+        <LivePhoneScreen
+          url={EMULATOR_URL ?? ""}
+          viewerKind={EMULATOR_KIND}
+          udid={EMULATOR_UDID}
+          showServerOption={PHONE_SERVER_OPTION}
+          active={view === "phone"}
+          onDisconnect={wahaWorking === true ? () => setConfirmDisconnect(true) : undefined}
+          onOpenConversation={openConversation}
+        />
+      )}
       {wahaWorking === null ? (
         <div className="loading">
           <p>Verificando WhatsApp...</p>
@@ -248,9 +273,7 @@ function Shell() {
         <CampaignsScreen />
       ) : view === "gsync" ? (
         <GoogleSyncGuideScreen />
-      ) : view === "phone" ? (
-        <LivePhoneScreen url={EMULATOR_URL ?? ""} viewerKind={EMULATOR_KIND} udid={EMULATOR_UDID} showServerOption={PHONE_SERVER_OPTION} onDisconnect={wahaWorking === true ? () => setConfirmDisconnect(true) : undefined} onOpenConversation={openConversation} />
-      ) : (
+      ) : view === "phone" ? null : (
         <main className="three-col">
           <ConversationList selectedId={selected?.id ?? null} onSelect={setSelected} onStarted={setSelected} />
           {selected ? (

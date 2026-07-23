@@ -9,7 +9,9 @@ type WarmupEngineStatus = Awaited<ReturnType<typeof api.warmupEngineStatus>>;
 // mostrado acima. UM toggle Iniciar/Parar + status por membro (polling 5s). Pool/grupos são
 // configurados no servidor (WarmupEngine:*); aqui só liga/desliga e acompanha. Reusa os estilos
 // .phone-* da própria aba pra ficar coeso.
-export function WarmupCard() {
+// `active=false` (aba Celular montada mas fora de vista, ver keep-alive no App.tsx): o card continua
+// montado, só para de consultar. Sem isto o keep-alive faria este poll rodar pra sempre em segundo plano.
+export function WarmupCard({ active = true }: { active?: boolean }) {
   const [status, setStatus] = useState<WarmupEngineStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,7 +25,7 @@ export function WarmupCard() {
     }
   }, []);
 
-  usePoll(load, 5_000);
+  usePoll(load, 5_000, active);
 
   const onToggle = useCallback(async () => {
     if (!status) return;

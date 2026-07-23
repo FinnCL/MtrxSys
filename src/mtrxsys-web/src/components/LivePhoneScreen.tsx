@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { api, type ChipIdentity, type PhoneMode, type PhoneStatus } from "../api/client";
 import { usePoll } from "../hooks/usePoll";
 import { WhatsAppConnect } from "./WhatsAppConnect";
@@ -18,10 +18,16 @@ interface LivePhoneScreenProps {
   showServerOption?: boolean; // idem — setup do Android no servidor.
   onDisconnect?: () => void; // abre a confirmação de desconectar o WhatsApp (só quando conectado).
   onOpenConversation?: (id: string) => void; // atalho da Fase Humana: leva à conversa na aba Chat.
+  /// A aba está à vista? `false` = continua MONTADA (o iframe do emulador mantém a sessão VNC viva),
+  /// só escondida por CSS e com os polls parados. Ver o comentário do keep-alive no App.tsx.
+  active?: boolean;
 }
 
-export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LivePhoneScreenProps) {
+export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active = true }: LivePhoneScreenProps) {
   const [ident, setIdent] = useState<ChipIdentity | null>(null);
+  // Já veio ALGUMA resposta do servidor? Sem isto o primeiro render assumia "desconectado" e piscava
+  // o acordeão "Conectar o WhatsApp" antes da 1ª resposta chegar — parecia que a sessão tinha caído.
+  const [identKnown, setIdentKnown] = useState(false);
   // Acordeão do "Conectar WhatsApp": o QR só MONTA ao abrir. Enquanto fechado, o WhatsAppConnect nem
   // existe → sem o poll de status/QR (perf). A detecção de conexão não depende dele: o refreshIdent
   // abaixo (poll leve de /api/presence/chip) vira `connected` sozinho.
@@ -38,16 +44,24 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
   const [phoneStatus, setPhoneStatus] = useState<PhoneStatus | null>(null);
   // Recarrega o iframe da tela (botão "recarregar") sem F5 na página inteira.
   const [frameKey, setFrameKey] = useState(0);
+  // Último `running` visto do container, pra detectar a VOLTA do emulador (false→true) e religar a
+  // tela. Ref e não state: só é lido dentro do poll, e mudá-lo não deve provocar render.
+  const runningRef = useRef<boolean | null>(null);
 
   const refreshIdent = useCallback(async () => {
     try {
       setIdent(await api.phoneIdentity());
     } catch {
-      setIdent(null);
+      // MANTÉM o último estado conhecido. Antes zerava pra null, então UM poll que falhasse (blip de
+      // rede, api reiniciando) já jogava a tela pra "Conectar o WhatsApp" como se o chip tivesse
+      // caído. Falha de consulta não é prova de desconexão — quando o chip cai de verdade, a resposta
+      // VEM, com status diferente de Working.
+    } finally {
+      setIdentKnown(true);
     }
   }, []);
 
-  usePoll(refreshIdent, 5000);
+  usePoll(refreshIdent, 5000, active);
 
   // Lê o modo persistido e mantém em sincronia. Só faz sentido onde há emulador disponível (url);
   // sem url a aba é sempre WAHA + físico (não há o que alternar). Falha silenciosa preserva o valor.
@@ -57,7 +71,7 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
     } catch {
       /* mantém o valor atual */
     }
-  }, 6000, !!url);
+  }, 6000, active && !!url);
 
   const connected = ident?.status === "Working";
 
@@ -95,17 +109,27 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
     } catch {
       /* ignora */
     }
-  }, 30000, connected);
+  }, 30000, active && connected);
 
   // Status do container do emulador — só no modo emulador. Diz se a tela (noVNC) tem o que embutir:
   // running=false → mostra "Ligar emulador"; unavailable → host sem docker/emulador. Poll leve.
   usePoll(async () => {
     try {
-      setPhoneStatus(await api.phoneStatus());
+      const s = await api.phoneStatus();
+      setPhoneStatus(s);
+      // RELIGA a tela sozinha quando o emulador VOLTA (crash + watchdog, ou "Ligar emulador"). O
+      // vnc_lite não tem reconexão automática: se o container reinicia, o iframe fica num
+      // "Disconnected" morto até alguém apertar "Recarregar tela". Como o poll já sabe a hora em que
+      // o container voltou (running false→true), remontamos o iframe nesse instante.
+      const wasRunning = runningRef.current;
+      runningRef.current = s.running;
+      if (wasRunning === false && s.running) {
+        setFrameKey((k) => k + 1);
+      }
     } catch {
       /* ignora — a tela otimista embute mesmo assim */
     }
-  }, 8000, emulatorMode);
+  }, 8000, active && emulatorMode);
 
   // Os controles são montados UMA vez e compostos em dois layouts (coluna única sem emulador; tela +
   // faixa lateral com emulador). Sem isto o JSX teria que ser duplicado nos dois caminhos.
@@ -156,7 +180,11 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
 
       {/* Fluxo WAHA + aparelho físico. Conectado → estado PRONTO (confirma + aponta o próximo passo).
           Desconectado → a etapa "Conectar" em acordeão: desliza e monta o QR só ao clicar. */}
-      {connected ? (
+      {!identKnown ? (
+        // Ainda não sabemos: NÃO afirme "desconectado" (era o que fazia o acordeão "Conectar o
+        // WhatsApp" piscar a cada volta pra aba, parecendo queda de sessão).
+        <p className="phone-off-hint" style={{ textAlign: "center" }}>Verificando o WhatsApp…</p>
+      ) : connected ? (
         <div className="phone-ident-card">
           <span className="phone-badge ok">conectado</span>
           <p className="phone-ident-name">{ident?.name || "WhatsApp conectado"}</p>
@@ -200,7 +228,7 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
               <p className="phone-off-hint" style={{ margin: "0 0 8px" }}>
                 Em <b>Aparelhos conectados</b>, toque <b>Conectar um aparelho</b> e escaneie o QR.
               </p>
-              <WhatsAppConnect onConnected={refreshIdent} />
+              <WhatsAppConnect onConnected={refreshIdent} active={active} />
             </div>
           )}
         </div>
@@ -210,7 +238,7 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
           WarmupCard: a fase é do CHIP, não do emulador, e vale nos dois modos. Só faz sentido com
           chip conectado — sem chip não há fase. O card some sozinho quando não se aplica. */}
       {connected && (
-        <HumanPhaseCard onOpenConversation={onOpenConversation} onBlockingChange={setHumanPhaseBlocking} />
+        <HumanPhaseCard onOpenConversation={onOpenConversation} onBlockingChange={setHumanPhaseBlocking} active={active} />
       )}
 
       {/* Legenda + ações da tela ficam AQUI (na faixa lateral) e não embaixo do emulador: cada linha
@@ -228,13 +256,17 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
       )}
 
       {/* Aquecimento de conversa (pool) — só no modo Com emulador; fora da área WAHA + físico. */}
-      {emulatorMode && <WarmupCard />}
+      {emulatorMode && <WarmupCard active={active} />}
     </>
   );
 
+  // Escondida por CSS (e não desmontada) quando a aba sai de vista: é o que mantém a sessão VNC do
+  // iframe viva entre trocas de aba.
+  const hidden = active ? "" : " is-hidden";
+
   // Sem emulador não há tela pra exibir: coluna única, como sempre foi.
   if (!emulatorMode) {
-    return <section className="live-phone">{controls}</section>;
+    return <section className={`live-phone${hidden}`}>{controls}</section>;
   }
 
   // Modo "Com emulador": a TELA do Android (noVNC do docker-android) embutida direto, sem moldura.
@@ -242,7 +274,7 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation }: LiveP
   // tela fica com a coluna inteira (altura cheia) e os controles vão pra faixa lateral rolável.
   // Como a tela é retrato e HEIGHT-bound, altura livre é a única coisa que a faz crescer.
   return (
-    <section className="live-phone live-phone--split">
+    <section className={`live-phone live-phone--split${hidden}`}>
       <div className="phone-main">
         {phoneStatus && !phoneStatus.running ? (
           <div className="phone-steps">

@@ -91,7 +91,12 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   # do emulador (fonte única) — mostrá-lo num stack SEM emulador é uma armadilha: ligar o modo faria o
   # disparo tentar enviar por um emulador inexistente e falhar. Vazio nos demais = sem toggle (WahaOnly).
   # Quando outro stack ganhar emulador, é só liberar a URL dele aqui.
-  if [ "$n" = "1" ]; then export WEB_EMULATOR_URL="https://phone-${L}.${MTRX_DOMAIN}"; else export WEB_EMULATOR_URL=""; fi
+  # vnc_lite.html?scale=true (e NAO a raiz "/"): o cliente LEVE do noVNC nao tem barra de controle e,
+  # com scale=true, ESCALA o desktop remoto pra caber no iframe preservando a proporcao. A raiz servia
+  # a UI completa em tamanho fixo, e a aba Celular precisava recortar o iframe no CSS (transform +
+  # overflow) pra esconder a barra — recorte que tambem comia conteudo do Android (topo/rodape). Com o
+  # cliente certo o recorte deixou de existir: a tela cabe inteira e acompanha o tamanho do painel.
+  if [ "$n" = "1" ]; then export WEB_EMULATOR_URL="https://phone-${L}.${MTRX_DOMAIN}/vnc_lite.html?scale=true"; else export WEB_EMULATOR_URL=""; fi
   export "PHONE_VIEW_URL_${n}=https://phone-${L}.${MTRX_DOMAIN}"
   export "OPTOUT_PUBLIC_URL_${n}=https://${L}.${MTRX_DOMAIN}"
   # Token do webhook por-stack no header X-Webhook-Token (via deploy/docker-compose.hookfix.yml). Sem

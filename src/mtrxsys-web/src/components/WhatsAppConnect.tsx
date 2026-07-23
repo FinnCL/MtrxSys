@@ -10,6 +10,11 @@ interface Props {
   // Esconde o QR e mostra SÓ o código de pareamento. Usado no fluxo emulador-principal: o emulador
   // NÃO tem câmera pra escanear, então o QR é inútil — só o código funciona.
   codeOnly?: boolean;
+  // A aba está à vista? Com o keep-alive da aba Celular (ver App.tsx) este componente pode continuar
+  // MONTADO fora de vista: sem este gate, o poll de status (3s) e principalmente o do QR (5s, que bate
+  // na WAHA) seguiriam rodando pra sempre em segundo plano. Continua montado de propósito — assim um
+  // código de pareamento já gerado não some quando você dá uma passada em outra aba.
+  active?: boolean;
 }
 
 // Quantas vezes o QR é regenerado sozinho ao expirar (Failed) antes de pedir clique manual.
@@ -39,7 +44,7 @@ function stripBrNinthDigit(digits: string): string {
   return m ? `55${m[1]}${m[2]}` : digits;
 }
 
-export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
+export function WhatsAppConnect({ onConnected, codeOnly, active = true }: Props) {
   const [status, setStatus] = useState<WahaStatus>("Unknown");
   const [error, setError] = useState<string | null>(null);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
@@ -68,11 +73,12 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
   }, [onConnected]);
 
   useEffect(() => {
+    if (!active) return; // fora de vista: não consulta (volta a consultar na hora em que reaparecer)
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void pollStatus();
     const handle = setInterval(pollStatus, 3_000);
     return () => clearInterval(handle);
-  }, [pollStatus]);
+  }, [pollStatus, active]);
 
   // Auto-preenche o número REAL do emulador (registration_jid) no fluxo codeOnly — evita digitar o
   // número errado (a causa do pareamento não conectar). Usa o número canônico, SEM normalizar.
@@ -93,7 +99,6 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
       }
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setQrUrl(null);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPairingCode(null);
       return;
     }
@@ -123,6 +128,13 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
         // Outras falhas: best-effort — o próximo tick tenta de novo (o intervalo segue vivo).
       }
     }
+    if (!active) {
+      // Fora de vista: NÃO fica puxando QR novo da WAHA. Mantém o que já está na tela (não limpa o
+      // qrUrl) — ao voltar, o efeito re-roda e busca um QR fresco na hora.
+      return () => {
+        cancelled = true;
+      };
+    }
     void loadQr();
     // 5s (era 10s): durante a rotação do QR, refresca mais rápido pro usuário sempre ter um QR válido.
     const handle = setInterval(loadQr, 5_000);
@@ -130,7 +142,7 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
       cancelled = true;
       clearInterval(handle);
     };
-  }, [status, pollStatus]);
+  }, [status, pollStatus, active]);
 
   useEffect(
     () => () => {
@@ -211,8 +223,13 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
     }
   }, [phoneDigits, codeOnly]);
 
+  // `!active` no gate NÃO é detalhe de performance: esta auto-tentativa chama wahaReset, que RE-VINCULA
+  // o aparelho (ver MAX_AUTO_RETRIES acima — re-vínculos seguidos queimam a conta). Antes do keep-alive
+  // da aba, sair da tela DESMONTAVA o componente e cancelava este timer; sem o gate, ele passaria a
+  // disparar resets sozinho com o operador olhando outra aba. Manter a tela viva não pode mudar o que o
+  // sistema faz por conta própria. Ao voltar pra aba o timer se rearma normalmente.
   useEffect(() => {
-    if (status !== "Failed" || busy || autoRetries >= MAX_AUTO_RETRIES) {
+    if (!active || status !== "Failed" || busy || autoRetries >= MAX_AUTO_RETRIES) {
       return;
     }
     const handle = setTimeout(() => {
@@ -220,7 +237,7 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
       void retrySession();
     }, AUTO_RETRY_BACKOFF_MS);
     return () => clearTimeout(handle);
-  }, [status, busy, autoRetries, retrySession]);
+  }, [status, busy, autoRetries, retrySession, active]);
 
   useEffect(() => {
     if (status === "Working" && autoRetries !== 0) {
@@ -231,6 +248,10 @@ export function WhatsAppConnect({ onConnected, codeOnly }: Props) {
 
   // STARTING preso → restart não-destrutivo. Não interfere num start/reset manual (busy) nem no
   // pareamento por código (pairingBusy), que já reinicia por conta própria.
+  // SEM gate de `active`, ao contrário da auto-tentativa acima, e a assimetria é proposital: aqui é
+  // wahaStart (EnsureSessionStarted — MANTÉM o número, não re-pareia). Destravar uma sessão presa
+  // enquanto o operador trabalha em outra aba é ganho puro; o que não pode rodar desatendido é o que
+  // re-vincula o aparelho.
   useEffect(() => {
     if (status !== "Starting" || busy || pairingBusy || startingRestarts >= MAX_STARTING_RESTARTS) {
       return;

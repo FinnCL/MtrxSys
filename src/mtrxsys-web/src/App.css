@@ -145,20 +145,23 @@ input[type="checkbox"], input[type="radio"] {
 /* Aba "Celular": a tela do emulador embutida (iframe) direto na página, SEM moldura de aparelho.
    gap/padding aqui já são os valores finais — antes viviam em duas declarações a ~950 linhas de
    distância, e só lendo as duas dava pra saber o efetivo. */
+/* Aba Celular escondida (keep-alive): sai do fluxo SEM desmontar, pra o iframe do emulador não
+   perder a sessão VNC. `display: none` mantém o iframe carregado e conectado — ao contrário de
+   desmontar, que derrubava a conexão e obrigava a reconectar ao voltar pra aba. */
+.live-phone.is-hidden { display: none; }
 .live-phone { flex: 1; min-height: 0; background: var(--bg); display: flex; flex-direction: column;
   align-items: center; justify-content: safe center; gap: 8px; padding: 12px 12px 8px; overflow: auto; }
-/* Caixa de RECORTE da tela do emulador — não é moldura: sem fundo, sombra ou cantos. Existe só pra
-   (1) fixar o aspect-ratio do display do emulador (1440×3040; se o SCREEN_WIDTH mudar, ajuste aqui)
-   e (2) cortar, via overflow, o que o transform do .phone-stage empurra pra fora.
-   flex:1 1 0 ocupa a altura que sobra e ENCOLHE pra não gerar scroll externo — como é retrato, a
-   largura sai da altura: quem manda no tamanho é o espaço vertical, não o max-width. */
+/* Caixa da tela do emulador — sem moldura e SEM RECORTE. O aspect-ratio é o do display do noVNC
+   (SCREEN_WIDTH×SCREEN_HEIGHT do docker-android: 404×850); se mudar lá, ajuste aqui.
+   flex:1 1 0 ocupa a altura que sobra e ENCOLHE pra não gerar scroll — como é retrato, a largura sai
+   da altura: quem manda no tamanho é o espaço vertical, não o max-width.
+   Antes havia um transform que ampliava o iframe pra 155% e o deslocava, escondendo a barra de
+   controle do noVNC — e junto com ela comia topo e rodapé da tela do Android. A barra sumiu na
+   origem: o viewer agora é vnc_lite.html?scale=true (cliente sem barra, que escala o desktop remoto
+   pra caber). Não recorte de novo aqui: se sobrar cromo do viewer, o lugar de corrigir é a URL. */
 .phone-screen { position: relative; flex: 1 1 0; min-height: 0; height: auto;
-  aspect-ratio: 1440 / 3040; width: auto; max-width: 100%; overflow: hidden; }
-/* O iframe é MAIOR que a caixa e deslocado, escondendo a barra de controle do noVNC: corta 20% à
-   esquerda, ~15,6% à direita, 14,1% no topo e ~5,9% embaixo. Números medidos na tela do viewer —
-   os quatro andam juntos (mexer em um sem os outros desalinha o recorte). */
-.phone-screen .phone-stage { width: 155.3%; height: 125%; border: 0; display: block; background: #fff;
-  transform: translate(-20%, -14.1%); transform-origin: top left; }
+  aspect-ratio: 404 / 850; width: auto; max-width: 100%; }
+.phone-screen .phone-stage { width: 100%; height: 100%; border: 0; display: block; background: #000; }
 .phone-off-hint { font-size: 12px; color: var(--muted); margin: 0 8px; line-height: 1.5; }
 .phone-activate { margin-top: 8px; background: var(--accent, #00a884); color: #fff; border: 0;
   border-radius: 10px; padding: 11px 20px; font-size: 14px; font-weight: 700; cursor: pointer; }
@@ -1084,16 +1087,30 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
    DEPOIS dos @media acima de propósito: eles ajustam .live-phone e sobrescreveriam o padding daqui.
    align-items: stretch é obrigatório — .live-phone usa center, que no grid impediria a coluna da tela
    de esticar (e a tela voltaria a encolher). */
-.live-phone--split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, 330px);
-  align-items: stretch; gap: 10px; padding: 6px 10px; overflow: hidden; }
-.phone-main { min-width: 0; min-height: 0; display: flex; flex-direction: column;
+/* TRÊS colunas, com a primeira VAZIA e do mesmo tamanho da faixa lateral: é o que deixa a tela
+   centralizada na PÁGINA, e não só dentro do espaço que sobra. Sem a coluna-espelho o emulador ficava
+   deslocado pra esquerda pela largura da lateral. Não custa tamanho: a tela é retrato e height-bound,
+   então largura sobrando não a faz crescer — só reposiciona. */
+.live-phone--split { display: grid; grid-template-columns: var(--phone-side-w) minmax(0, 1fr) var(--phone-side-w);
+  align-items: stretch; gap: 10px; padding: 6px 10px; overflow: hidden; --phone-side-w: 340px; }
+.phone-main { grid-column: 2; min-width: 0; min-height: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 4px; }
-/* Só a faixa lateral rola; a tela nunca sai de vista. */
-.phone-side { min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
-  align-items: center; gap: 8px; padding: 2px; }
-/* Painel estreito (janela pequena / celular): volta a empilhar, tela em cima. */
-@media (max-width: 900px) {
-  .live-phone--split { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; overflow: auto; }
+.phone-side { grid-column: 3; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 2px; }
+/* Os cards da aba nasceram pra uma coluna de 390px (width: min(390px, 95vw)) e ESTOURAVAM a faixa
+   lateral, criando barra de rolagem horizontal e cortando texto ("onectar o WhatsApp"). Dentro da
+   faixa eles passam a acompanhar a largura dela. */
+.phone-side > *,
+.phone-side .phone-steps,
+.phone-side .phone-step-toggle,
+.phone-side .phone-step-body,
+.phone-side .phone-ident-card,
+.phone-side .phone-server,
+.phone-side .wa-connect { width: 100%; max-width: 100%; }
+/* Painel estreito (janela pequena / celular): uma coluna só, tela em cima, sem a coluna-espelho. */
+@media (max-width: 980px) {
+  .live-phone--split { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; overflow: auto; }
+  .phone-main, .phone-side { grid-column: 1; }
   .phone-side { overflow-y: visible; }
 }
 

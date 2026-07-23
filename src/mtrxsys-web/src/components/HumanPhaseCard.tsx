@@ -12,8 +12,12 @@ import type { HumanPhaseStatus, PhoneContact } from "../api/types";
 export function HumanPhaseCard({
   onOpenConversation,
   onBlockingChange,
+  active = true,
 }: {
   onOpenConversation?: (id: string) => void;
+  // `false` = aba Celular montada mas fora de vista (keep-alive do App.tsx): segue montada, só para
+  // de consultar. Sem isto o keep-alive faria este poll rodar pra sempre em segundo plano.
+  active?: boolean;
   // Avisa a tela se a fase está SEGURANDO o disparo. Sem isto o card acima segue dizendo "Pronto
   // para disparar. Vá para a aba Disparo" enquanto nada sai — o operador acharia que quebrou.
   onBlockingChange?: (blocking: boolean) => void;
@@ -40,7 +44,7 @@ export function HumanPhaseCard({
 
   // Sincroniza com sistema externo (progresso medido no servidor): o setState é assíncrono
   // (pós-await), não cascateia render — uso legítimo. Mesmo padrão do WarmupCard.
-  usePoll(load, 5_000);
+  usePoll(load, 5_000, active);
 
   const openPicker = useCallback(async () => {
     setPicking(true);
