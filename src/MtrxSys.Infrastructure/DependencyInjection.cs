@@ -95,6 +95,9 @@ public static class DependencyInjection
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IRandomSource, CryptoRandomSource>();
         services.AddSingleton<IDispatchMetrics, NullDispatchMetrics>();
+        // Gate de egresso do emulador: lê o flag de saúde do watchdog (fail-closed). Singleton — só lê
+        // um arquivo; sem estado. Desligado por padrão (sem Dispatch:EmulatorEgressHealthPath).
+        services.AddSingleton<IEmulatorEgressHealthCheck, MtrxSys.Infrastructure.Phone.FileEmulatorEgressHealthCheck>();
         // Aparelho virtual da aba "Celular": a API provisiona/liga/instala/registra um Android em
         // container via docker CLI sobre o socket — tudo DENTRO da aba, sem prompt. O Android vira o
         // dispositivo PRINCIPAL do número e o WAHA fica como companion (disparo). Fail-safe onde não há

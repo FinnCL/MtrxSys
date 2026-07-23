@@ -66,6 +66,11 @@ docker rm -f mtrx-gost-tp >/dev/null 2>&1
 # direto pra Meta e 100% pelo residencial; fail-closed (gost morto = REDIRECT pra porta morta =
 # conexão recusada, não vaza). Requer adb root (build userdebug) — o gost é o MESMO binário do stack.
 GUEST_GOST=/home/ubuntu/gost-guest
+# Diretório de estado do proxy (flag de saúde + IP montado). Diretório (não arquivos soltos) pra o
+# dispatcher montar por PASTA — sobrevive à recriação do arquivo sem virar mount órfão. Ver o gate de
+# egresso no DispatchEngine, que lê /proxy-health/proxy.health (este dir montado :ro no container).
+HEALTH_DIR=/home/ubuntu/emulator-health
+mkdir -p "$HEALTH_DIR" 2>/dev/null
 ensure_guest_proxy() {
   local env=/home/ubuntu/MtrxSys/deploy/.env.prod
   local hostport user pass proxy_ip
@@ -82,7 +87,7 @@ ensure_guest_proxy() {
   # falhavam e o health MENTIA "ok". Guarda o hostport com que montou; se o .env mudou, DERRUBA (kill
   # gost + flush) e deixa o resto da função remontar com o IP novo (gost-first, depois regras). Arquivo
   # ausente (1º ciclo após deploy) = inicializa SEM derrubar — zero disrupção no que já funciona.
-  local ipfile=/home/ubuntu/emulator-proxy.ip previp
+  local ipfile="$HEALTH_DIR/proxy.ip" previp
   previp=$(cat "$ipfile" 2>/dev/null)
   if [ -n "$previp" ] && [ "$previp" != "$hostport" ]; then
     docker exec mtrx-dandroid adb shell "su 0 pkill -f /data/local/tmp/gost; su 0 iptables -t nat -F OUTPUT" >/dev/null 2>&1
@@ -126,7 +131,7 @@ ensure_guest_proxy() {
   # quando quebra e um "recuperado" quando volta, em vez de repetir a cada ciclo (parede de log = ruído
   # inútil). A auto-PAUSA do disparo NÃO é feita aqui de propósito: escrever a pausa do banco pelo shell
   # acopla errado (ver commit) — a trava certa é um gate no dispatcher lendo este flag.
-  local health=/home/ubuntu/emulator-proxy.health prev now
+  local health="$HEALTH_DIR/proxy.health" prev now
   prev=$(cat "$health" 2>/dev/null)
   if docker exec mtrx-dandroid adb shell \
        "su 0 iptables -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports 12345 && su 0 ss -ltn 2>/dev/null | grep -q :12345" >/dev/null 2>&1; then

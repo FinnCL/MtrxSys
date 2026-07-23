@@ -219,7 +219,17 @@ services:
       Phone__Engine: ${PHONE_ENGINE_1:-docker-android}
       Phone__ContainerName: ${PHONE_CONTAINER_1:-mtrx-android}
       Phone__AdbPort: ${PHONE_ADB_PORT_1:-5555}
+      # GATE DE EGRESSO (fail-closed): o dispatcher só envia no modo emulador se o flag de saúde escrito
+      # pelo watchdog disser "ok" (proxy residencial de pé). VAZIO = DESLIGADO (default seguro; os 9
+      # stacks sem emulador nunca setam). Pra LIGAR: aponte pro flag montado abaixo (/proxy-health/...).
+      # Só ligue depois de confirmar o mount + o watchdog escrevendo, senão o disparo bloqueia (seguro,
+      # mas para de enviar). Ver DispatchEngine (gate de egresso) e emulator-watchdog.sh (pós-condição).
+      Dispatch__EmulatorEgressHealthPath: ${EMULATOR_EGRESS_HEALTH_PATH:-}
     volumes:
+      # Flag de saúde do egresso (só-leitura), escrito pelo watchdog do host. Montado sempre (barato);
+      # o gate só AGE se Dispatch__EmulatorEgressHealthPath apontar pra cá. Diretório (não o arquivo)
+      # pra sobreviver a recriação do arquivo pelo watchdog sem virar mount órfão.
+      - /home/ubuntu/emulator-health:/proxy-health:ro
       # OBRIGATÓRIO no modo Emulator: TODO o caminho do emulador (salvar contato na agenda, checar se o
       # número tem WhatsApp, e o PRÓPRIO ENVIO pela UI) roda via `docker exec <container> adb ...`.
       # Sem o socket, cada uma dessas chamadas falha e o disparo NUNCA sai — em silêncio, porque são

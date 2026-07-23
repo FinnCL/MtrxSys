@@ -85,4 +85,12 @@ public sealed class DispatchOptions
     // NOTA (Caminho A anti-463): NÃO há flag de "enviar pelo emulador" aqui. O disparo pela UI do
     // emulador é comandado pelo TOGGLE "Com emulador" (PhoneDispatchMode.Emulator, persistido no banco
     // e visível na aba Celular), não por config de deploy — fonte única. Ver DispatchEngine.emulatorMode.
+
+    // Caminho do flag de saúde do EGRESSO do emulador (escrito pelo watchdog do host: "ok"/"leak").
+    // VAZIO (default) = gate DESLIGADO, nenhum bloqueio. Preenchido = FAIL-CLOSED no modo emulador: o
+    // ciclo só envia se o flag disser "ok" (proxy residencial de pé); "leak" ou flag ausente/ilegível
+    // PARA o ciclo, pra a mensagem não sair pelo IP do datacenter (gatilho de ban). O flag precisa
+    // estar montado no container do dispatcher (ver docker-compose). Ligar só depois de confirmar o
+    // mount + o watchdog escrevendo, senão o disparo bloqueia (falha SEGURA, mas para de enviar).
+    public string EmulatorEgressHealthPath { get; set; } = string.Empty;
 }

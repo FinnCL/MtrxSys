@@ -35,6 +35,7 @@ public sealed class DispatchEngine(
     IWarmupCircleRepository warmupCircle,
     DispatchSettleTracker settle,
     IContactAddressBookSync addressBook,
+    IEmulatorEgressHealthCheck egressHealth,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
 {
@@ -99,6 +100,22 @@ public sealed class DispatchEngine(
             {
                 metrics.RecordCircuitOpen();
                 log.LogInformation("Circuit breaker open; stopping cycle.");
+                break;
+            }
+
+            // EGRESSO PROTEGIDO (só modo emulador): o disparo pela UI do emulador só é seguro se o
+            // proxy residencial estiver de pé — senão a mensagem sai pelo IP do DATACENTER (número BR
+            // frio de datacenter estrangeiro = gatilho de ban). O watchdog do host escreve um flag de
+            // saúde; se ele não disser "ok" (proxy fora, flag ausente/ilegível → Unhealthy, FAIL-CLOSED)
+            // PARA o ciclo. É o par da auto-detecção do watchdog: ele CONSERTA e ALERTA, este NÃO ENVIA
+            // enquanto não protegido. Desligado por padrão (sem EmulatorEgressHealthPath) — não afeta
+            // os 9 stacks sem emulador. Vem antes do teto/typing porque é mais forte: sem egresso
+            // seguro, nada pode sair.
+            if (emulatorMode && egressHealth.Check() == EmulatorEgressStatus.Unhealthy)
+            {
+                log.LogWarning(
+                    "Egresso do emulador NÃO confirmado (proxy residencial fora, ou watchdog não "
+                    + "escreveu o flag); ciclo PARADO — não envio pra não vazar pelo IP do datacenter.");
                 break;
             }
 
