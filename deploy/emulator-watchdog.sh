@@ -90,7 +90,13 @@ ensure_proxy() {
   fi
 
   # 2) Regras na netns. SENTINELA: as quatro nascem juntas, entao basta checar o REDIRECT — evita 4
-  #    nsenter por ciclo no caso comum (tudo certo), que e o de 99% das voltas.
+  #    nsenter por ciclo no caso comum (tudo certo).
+  #    ⚠️ LIMITE CONHECIDO: o REDIRECT em OUTPUT captura o tráfego HTTP e boa parte do egresso, MAS o
+  #    socket de mensagens do WhatsApp aberto pelo `netsimd` (rede do docker-android) NÃO cai nesta
+  #    cadeia — reconecta DIRETO mesmo com as regras presentes (provado 2026-07-23: após restart, o
+  #    socket direto pra 31.13.x:5222 persiste). Matar o socket a cada ciclo só CHURNa o WhatsApp sem
+  #    consertar (ele volta direto). O egresso confiável exige TPROXY no bridge do HOST, não aqui —
+  #    pendente. Enquanto isso, NÃO confie que 100% do WhatsApp sai pelo residencial só por estas regras.
   nsenter -t "$pid" -n iptables -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports "${TP_PORT}" 2>/dev/null && return 0
 
   #    Os RETURN vem ANTES do REDIRECT e sao obrigatorios: sem excluir o proprio proxy, o gost
@@ -110,6 +116,54 @@ ensure_proxy() {
   done
 }
 
+# ── PROXY NA ORIGEM (DENTRO do guest) ──────────────────────────────────────────────────────────
+# O egresso do WhatsApp NASCE dentro do Android (VM). Interceptar de fora (netns/host) NÃO pega o
+# socket de mensagens — o netsimd o entrega já "pronto" e ele sai DIRETO pelo IP do datacenter
+# (provado por tcpdump 2026-07-23). A captura confiável é DENTRO do guest, onde o tráfego se origina:
+# um gost transparente no Android + iptables nat OUTPUT REDIRECT. Provado: tcpdump no host mostra 0
+# direto pra Meta e 100% pelo residencial; fail-closed (gost morto = REDIRECT pra porta morta =
+# conexão recusada, não vaza). Requer adb root (build userdebug) — o gost é o MESMO binário do stack.
+GUEST_GOST=/home/ubuntu/gost-guest
+ensure_guest_proxy() {
+  local env=/home/ubuntu/MtrxSys/deploy/.env.prod
+  local hostport user pass proxy_ip
+  hostport=$(grep -E '^WAHA_PROXY_1=' "$env" 2>/dev/null | cut -d= -f2-)
+  user=$(grep -E '^WAHA_PROXY_1_USER=' "$env" 2>/dev/null | cut -d= -f2-)
+  pass=$(grep -E '^WAHA_PROXY_1_PASS=' "$env" 2>/dev/null | cut -d= -f2-)
+  [ -n "$hostport" ] && [ -n "$user" ] || return 0
+  proxy_ip=${hostport%%:*}
+
+  docker exec mtrx-dandroid adb root >/dev/null 2>&1   # idempotente; sobe adbd como root (userdebug)
+
+  # Binário no guest: /data sobrevive a reboot, então re-push só quando some (ex.: recreate/pm clear).
+  if ! docker exec mtrx-dandroid adb shell "test -x /data/local/tmp/gost" >/dev/null 2>&1; then
+    [ -f "$GUEST_GOST" ] || return 0
+    docker cp "$GUEST_GOST" mtrx-dandroid:/tmp/gg >/dev/null 2>&1
+    docker exec mtrx-dandroid chmod 644 /tmp/gg 2>/dev/null
+    docker exec mtrx-dandroid adb push /tmp/gg /data/local/tmp/gost >/dev/null 2>&1
+    docker exec mtrx-dandroid adb shell "chmod 755 /data/local/tmp/gost" >/dev/null 2>&1
+  fi
+
+  # Processo do gost (o PROCESSO morre no reboot mesmo com o binário presente): religa se não escuta.
+  if ! docker exec mtrx-dandroid adb shell "su 0 ss -ltn 2>/dev/null | grep -q :12345" >/dev/null 2>&1; then
+    docker exec mtrx-dandroid adb shell \
+      "setsid /data/local/tmp/gost -L red://:12345 -F http://${user}:${pass}@${hostport} >/data/local/tmp/gost.log 2>&1 &" >/dev/null 2>&1
+    sleep 2
+  fi
+
+  # Regras nat OUTPUT no guest (regras são runtime, somem no reboot). SENTINELA no REDIRECT.
+  # RETURN pra loopback / rede do emulador (10.x, inclui DNS 10.0.2.3) / o PROXY (senão o gost
+  # redirecionaria a própria saída — laço). O resto do TCP vai pro gost.
+  if ! docker exec mtrx-dandroid adb shell "su 0 iptables -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports 12345" >/dev/null 2>&1; then
+    docker exec mtrx-dandroid adb shell "su 0 iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN; su 0 iptables -t nat -A OUTPUT -p tcp -d 10.0.0.0/8 -j RETURN; su 0 iptables -t nat -A OUTPUT -p tcp -d ${proxy_ip} -j RETURN; su 0 iptables -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports 12345" >/dev/null 2>&1
+    # BOOT-RACE: no boot o WhatsApp conecta DIRETO antes das regras. Recém-aplicadas, um force-stop
+    # reseta a conexão dele — que RECONECTA já pelo redirect (dentro do guest o redirect PEGA a
+    # reconexão, ao contrário das tentativas de fora). Só roda quando as regras nascem (1x por boot).
+    docker exec mtrx-dandroid adb shell "am force-stop com.whatsapp" >/dev/null 2>&1
+    docker exec mtrx-dandroid adb shell "monkey -p com.whatsapp 1" >/dev/null 2>&1
+  fi
+}
+
 while true; do
   status=$(docker ps -a --filter name=mtrx-dandroid --format '{{.Status}}' 2>/dev/null)
   case "$status" in
@@ -119,6 +173,7 @@ while true; do
         down=0
         ensure_tools
         ensure_proxy
+        ensure_guest_proxy
         clean_screen
       else
         down=$((down + 1))
