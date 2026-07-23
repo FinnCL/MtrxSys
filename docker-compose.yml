@@ -211,6 +211,13 @@ services:
       AddressBookSync__Google__ClientId: ${ADDRBOOK_GOOGLE_CLIENT_ID:-}
       AddressBookSync__Google__ClientSecret: ${ADDRBOOK_GOOGLE_CLIENT_SECRET:-}
       AddressBookSync__Google__RefreshToken: ${ADDRBOOK_GOOGLE_REFRESH_TOKEN:-}
+    volumes:
+      # OBRIGATÓRIO no modo Emulator: TODO o caminho do emulador (salvar contato na agenda, checar se o
+      # número tem WhatsApp, e o PRÓPRIO ENVIO pela UI) roda via `docker exec <container> adb ...`.
+      # Sem o socket, cada uma dessas chamadas falha e o disparo NUNCA sai — em silêncio, porque são
+      # best-effort. O Dockerfile do dispatcher já instalava o CLI do docker; só o socket faltava.
+      # Mesma exposição que a api já tem (ela provisiona o Android pela aba "Celular").
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
