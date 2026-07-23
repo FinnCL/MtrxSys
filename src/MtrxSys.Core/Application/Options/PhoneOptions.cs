@@ -137,4 +137,9 @@ public sealed class PhoneOptions
 
     /// <summary>Timeout (ms) do poll de CONFIRMAÇÃO do envio (o campo de texto esvaziar) após tocar enviar.</summary>
     public int WhatsAppSendWaitMs { get; set; } = 3000;
+
+    /// <summary>Timeout TOTAL (s) de um envio pela UI. Cada chamada adb já tem seu teto (60s), mas um
+    /// envio faz várias (intent + polls + tap); sem um teto total, um emulador travado seguraria o lock
+    /// de UI por minutos e travaria a fila. Aborta o envio (retorna falha) e libera o lock passado isto.</summary>
+    public int WhatsAppSendTimeoutSeconds { get; set; } = 90;
 }

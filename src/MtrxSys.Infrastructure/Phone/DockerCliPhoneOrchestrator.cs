@@ -288,9 +288,14 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         await _uiLock.WaitAsync(ct);
         try
         {
+            // Teto TOTAL do envio: cada adb já tem 60s, mas um envio faz várias chamadas — sem um teto
+            // total, adb travados nos polls segurariam este lock (e a fila) por minutos. sct aborta tudo.
+            using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            sendCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(15, Opts.WhatsAppSendTimeoutSeconds)));
+            var sct = sendCts.Token;
             // 1) Abre o chat com a mensagem já preenchida (click-to-chat). Aspas simples: o '&'/'#' da URL
             //    não podem ser interpretados pelo shell do device.
-            var (rc, outp, err) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            var (rc, outp, err) = await DockerCli.DockerAsync(sct, "exec", Opts.ContainerName,
                 "adb", "shell", $"am start -a android.intent.action.VIEW -d '{url}'");
             if (rc != 0)
             {
@@ -298,13 +303,13 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
             }
             // 2) POLL o botão ENVIAR aparecer (id/send surge quando há texto no campo) — não um sleep fixo:
             //    chat lento (cold start / proxy) abriria depois dos 4s e o envio seria abortado à toa.
-            var send = await PollNodeCenterAsync("com.whatsapp:id/send", Opts.WhatsAppOpenWaitMs, ct);
+            var send = await PollNodeCenterAsync("com.whatsapp:id/send", Opts.WhatsAppOpenWaitMs, sct);
             if (send is null)
             {
                 return WhatsAppSendResult.Fail("botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
             }
             // 3) Toca enviar.
-            var (tc, to, te) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            var (tc, to, te) = await DockerCli.DockerAsync(sct, "exec", Opts.ContainerName,
                 "adb", "shell", "input", "tap",
                 send.Value.X.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 send.Value.Y.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -314,12 +319,17 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
             }
             // 4) CONFIRMA o envio: o campo de texto ESVAZIA quando a msg sai (correlação confiável — se o
             //    tap errou o botão, o texto fica no campo e sabemos que NÃO enviou).
-            if (!await PollEntryClearedAsync(Opts.WhatsAppSendWaitMs, ct))
+            if (!await PollEntryClearedAsync(Opts.WhatsAppSendWaitMs, sct))
             {
                 return WhatsAppSendResult.Fail("toquei enviar mas o campo não esvaziou — envio não confirmado.");
             }
             // 5) Status de ENTREGA (normalizado sent/delivered/read, locale-independente) — best-effort.
-            return WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(ct));
+            return WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Estourou o teto TOTAL (não foi cancelamento do chamador): emulador lento/travado.
+            return WhatsAppSendResult.Fail("envio excedeu o tempo total (emulador lento/travado?).");
         }
         finally
         {
