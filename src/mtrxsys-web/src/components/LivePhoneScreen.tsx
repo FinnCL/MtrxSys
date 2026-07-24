@@ -43,6 +43,10 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   const [phoneStatus, setPhoneStatus] = useState<PhoneStatus | null>(null);
   // Recarrega o iframe da tela (botão "recarregar") sem F5 na página inteira.
   const [frameKey, setFrameKey] = useState(0);
+  // Provisionamento do emulador num stack que ainda NÃO tem (ex.: B..J novos): cria o container + liga
+  // o modo Emulator. Sem isto não havia caminho de UI pra bootstrapar um stack sem emulador.
+  const [provisioning, setProvisioning] = useState(false);
+  const [provisionError, setProvisionError] = useState<string | null>(null);
   // Último `running` visto do container, pra detectar a VOLTA do emulador (false→true) e religar a
   // tela. Ref e não state: só é lido dentro do poll, e mudá-lo não deve provocar render.
   const runningRef = useRef<boolean | null>(null);
@@ -104,6 +108,49 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
       /* ignora — a tela otimista embute mesmo assim */
     }
   }, 8000, active && emulatorMode);
+
+  // Bootstrap de um stack SEM emulador ainda (B..J recém-criados): cria o container do Android e liga o
+  // modo Emulator — aí a tela aparece pra registrar o chip. O A já tem emulador + modo Emulator, então
+  // este botão NÃO aparece nele (ele cai no ramo com emulatorMode=true). Provisionar boota um Android
+  // do zero (leva ~1-2 min); depois o poll de status assume e mostra a tela.
+  const activateEmulator = useCallback(async () => {
+    setProvisioning(true);
+    setProvisionError(null);
+    try {
+      await api.phoneProvision();
+      await api.phoneSetMode("Emulator");
+      setMode("Emulator");
+    } catch {
+      setProvisionError("Falha ao provisionar. Cheque se o host tem docker/KVM e veja os logs do emulador.");
+    } finally {
+      setProvisioning(false);
+    }
+  }, []);
+
+  // Bloco "provisionar" reusado nos DOIS caminhos sem-emulador (WahaOnly em coluna única e Emulator com
+  // container ainda `not_created`). Fragmento (sem .phone-steps) pra o chamador embrulhar onde precisa.
+  const provisionPrompt = (
+    <>
+      <p className="phone-off-hint" style={{ textAlign: "center" }}>
+        Este ambiente ainda não tem emulador. Provisione para ver a tela, registrar o chip e disparar.
+      </p>
+      <button type="button" className="phone-activate" onClick={() => void activateEmulator()} disabled={provisioning}>
+        {provisioning ? "Provisionando… (pode levar 1-2 min)" : "Provisionar emulador"}
+      </button>
+      {provisionError && (
+        <p className="phone-off-hint" style={{ textAlign: "center", color: "var(--danger)" }}>{provisionError}</p>
+      )}
+      {/* AVISO CRÍTICO: o proxy in-guest do emulador (gost+iptables) é montado pelo watchdog@N — sem ele,
+          o egresso sai DIRETO pelo IP do datacenter. O gate bloqueia o DISPARO automático, mas NÃO o
+          registro manual do chip. Registrar um número novo por IP de datacenter = ban. A linha
+          "Proxy: ativo" acima é o proxy da sessão WAHA, NÃO o do emulador — não confie nela pra isto. */}
+      <p className="phone-off-hint" style={{ textAlign: "center", color: "var(--danger)", maxWidth: 320, margin: "8px auto 0" }}>
+        Atenção: só registre o chip DEPOIS de ligar o watchdog do proxy deste stack
+        (<code>systemctl enable --now mtrx-emulator-watchdog@N</code>). Sem ele, o número sai pelo IP do
+        datacenter e é ban — o disparo já é bloqueado sem proxy, mas o registro do chip não.
+      </p>
+    </>
+  );
 
   // Os controles são montados UMA vez e compostos em dois layouts (coluna única sem emulador; tela +
   // faixa lateral com emulador). Sem isto o JSX teria que ser duplicado nos dois caminhos.
@@ -191,9 +238,16 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   // iframe viva entre trocas de aba.
   const hidden = active ? "" : " is-hidden";
 
-  // Sem emulador não há tela pra exibir: coluna única, como sempre foi.
+  // Sem emulador ATIVO: coluna única. Se o stack TEM viewer (url) mas o emulador ainda não foi
+  // provisionado/ligado (modo ≠ Emulator — típico de um stack novo B..J), oferece o botão de
+  // provisionar — o único caminho de UI pra bootstrapar o emulador daquele ambiente.
   if (!emulatorMode) {
-    return <section className={`live-phone${hidden}`}>{controls}</section>;
+    return (
+      <section className={`live-phone${hidden}`}>
+        {url && <div className="phone-steps">{provisionPrompt}</div>}
+        {controls}
+      </section>
+    );
   }
 
   // Modo "Com emulador": a TELA do Android (noVNC do docker-android) embutida direto, sem moldura.
@@ -205,15 +259,24 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
       <div className="phone-main">
         {phoneStatus && !phoneStatus.running ? (
           <div className="phone-steps">
-            <p className="phone-off-hint" style={{ textAlign: "center" }}>
-              {phoneStatus.state === "unavailable"
-                ? "Emulador indisponível neste host (sem docker/KVM)."
-                : "O emulador está desligado. Ligue para ver a tela e disparar por ele."}
-            </p>
-            {phoneStatus.state !== "unavailable" && (
-              <button type="button" className="phone-activate" onClick={() => void api.phoneStart()}>
-                Ligar emulador
-              </button>
+            {phoneStatus.state === "unavailable" ? (
+              <p className="phone-off-hint" style={{ textAlign: "center" }}>
+                Emulador indisponível neste host (sem docker/KVM).
+              </p>
+            ) : phoneStatus.state === "not_created" ? (
+              // Container NUNCA criado (stack novo em modo Emulator): "Ligar" faria `docker start` e
+              // falharia — o certo é PROVISIONAR (cria o Android do zero). Ver ProvisionAsync.
+              provisionPrompt
+            ) : (
+              // Container EXISTE mas está parado (exited/created): aí sim "Ligar" (docker start) resolve.
+              <>
+                <p className="phone-off-hint" style={{ textAlign: "center" }}>
+                  O emulador está desligado. Ligue para ver a tela e disparar por ele.
+                </p>
+                <button type="button" className="phone-activate" onClick={() => void api.phoneStart()}>
+                  Ligar emulador
+                </button>
+              </>
             )}
           </div>
         ) : (
