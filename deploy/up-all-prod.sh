@@ -226,6 +226,24 @@ echo "== [3/5] Android (KVM) — provisionamento SOB DEMANDA (pela aba \"Celular
 # dinâmico funciona nos 10 (só A/B têm o serviço `android` estático, hoje inerte) e
 # casa com "validar 1 chip antes de escalar" — não sobe 10 emuladores ociosos de uma vez.
 echo "   provisione cada Android na aba \"Celular\" ao registrar o chip (ver deploy/README.md)."
+# WATCHDOGS DE EMULADOR (proxy in-guest AUTOMÁTICO): instala o template systemd + liga os @2..@10, toda
+# vez (idempotente). É o que torna o proxy AUTOMÁTICO — ao provisionar um emulador pela aba Celular, o
+# watchdog daquele stack (já rodando) monta o gost+iptables DENTRO do Android sozinho, ~20s após o boot.
+# O usuário NÃO roda nada no servidor. Requer sudo (o ubuntu tem sem senha). O A segue no serviço legado.
+echo "== [3.5/5] segurança automática (watchdogs de emulador + firewall) =="
+if sudo -n bash deploy/setup-emulator-watchdogs.sh >/dev/null 2>&1; then
+  echo "   ✓ watchdogs instalados e no ar (proxy in-guest sobe sozinho ao provisionar)."
+else
+  echo "   ⚠ FALHA ao instalar os watchdogs (sudo/systemd) — o proxy do emulador NÃO sobe sozinho;"
+  echo "     registrar um chip sem proxy = ban. Rode à mão: sudo bash deploy/setup-emulator-watchdogs.sh"
+fi
+# Firewall (idempotente: iptables -C || -I): fecha a 5440 (ledger) e o noVNC da internet. Rodado sozinho —
+# antes era só uma sugestão impressa. Num servidor NOVO o deploy já protege, sem passo manual.
+if sudo -n bash deploy/setup-firewall.sh >/dev/null 2>&1; then
+  echo "   ✓ firewall aplicado (5440/noVNC fechados pra internet)."
+else
+  echo "   ⚠ firewall NÃO aplicado (cheque sudo) — rode à mão: sudo bash deploy/setup-firewall.sh"
+fi
 
 echo "== [4/5] portão de autenticação (Gate) =="
 # TEM que subir ANTES do Caddy: o Caddyfile gerado põe app./a..j/phone-*/hml atrás do
@@ -268,9 +286,8 @@ cat <<EOF
   Ambientes:    https://a.${MTRX_DOMAIN} .. https://j.${MTRX_DOMAIN}
   Tela Android: https://phone-a.${MTRX_DOMAIN} ..
 
-⚠️  SEGURANÇA — rode UMA vez com sudo (fecha 5440 e o noVNC da internet):
-      sudo bash deploy/setup-firewall.sh
+Segurança (firewall 5440/noVNC) + watchdogs de emulador: aplicados AUTOMÁTICO no passo [3.5/5] acima.
 
-Próximo: em cada ambiente, aba "Celular" → Provisionar/Ligar Android → registrar
-o número por SMS (SIM gateway) → vincular o WAHA por QR. Ver deploy/README.md.
+Próximo: em cada ambiente, aba "Celular" → Provisionar emulador → esperar o badge "Proxy do emulador: OK"
+→ registrar o número por SMS (SIM gateway). Ver deploy/README.md.
 EOF

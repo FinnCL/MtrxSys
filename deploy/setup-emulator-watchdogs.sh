@@ -8,8 +8,9 @@
 # ligá-lo ANTES de provisionar é seguro — e é o certo: quando você provisiona (aba Celular → Provisionar),
 # o proxy já sobe sozinho ANTES de você registrar o chip (senão o número sairia pelo datacenter = ban).
 #
-# Roda UMA vez, com sudo (instala unit no systemd). Idempotente — pode repetir. O ambiente A NÃO é tocado:
-# ele segue no serviço legado mtrx-emulator-watchdog.service.
+# AUTO-RODADO pelo up-all-prod.sh (passo [3.5/5], sudo sem senha) em TODO deploy — idempotente, então um
+# servidor NOVO fica protegido só com o deploy, sem passo manual. Também baixa o gost-guest se faltar e
+# cobre o A (@1) num servidor novo. Dá pra rodar à mão também:
 #   sudo bash deploy/setup-emulator-watchdogs.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."   # raiz do repo (no servidor: /home/ubuntu/MtrxSys)
@@ -22,13 +23,35 @@ GUEST_GOST=/home/ubuntu/gost-guest             # binário do gost empurrado PRA 
 # Pré-condições (fail-closed): sem elas o watchdog subiria mas não protegeria — melhor abortar loud.
 [ -f "$TEMPLATE_SRC" ] || { echo "ERRO: $TEMPLATE_SRC não existe (deploye o código antes)."; exit 1; }
 [ -f "$SCRIPT" ]       || { echo "ERRO: $SCRIPT não existe (deploye o código antes)."; exit 1; }
-[ -f "$GUEST_GOST" ]   || echo "AVISO: $GUEST_GOST não existe — sem ele o proxy in-guest NÃO monta e o gate segura o disparo. Copie o binário do gost pra lá (o A já usa este mesmo)."
+
+# gost-guest (o gost que o watchdog empurra PRA DENTRO do Android): baixa se faltar, pra um servidor NOVO
+# não precisar do binário à mão. Estático linux/amd64 (o emulador é x86_64), versão PINADA. Se falhar,
+# avisa loud — sem ele o proxy in-guest não monta (o gate fail-closed segura o disparo, então não vaza).
+GOST_VER=3.0.0
+if [ ! -f "$GUEST_GOST" ]; then
+  echo "gost-guest ausente — baixando gost ${GOST_VER} (estático linux/amd64) das releases do go-gost…"
+  if curl -fsSL "https://github.com/go-gost/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_amd64.tar.gz" \
+       | tar -xz -C /tmp gost 2>/dev/null && mv /tmp/gost "$GUEST_GOST"; then
+    echo "  ✓ gost-guest obtido em $GUEST_GOST."
+  else
+    echo "  ⚠ FALHA ao baixar o gost-guest. Copie de um servidor que funcione (/home/ubuntu/gost-guest) ou"
+    echo "    baixe à mão das releases do go-gost/gost (asset linux_amd64). Sem ele o proxy in-guest NÃO sobe."
+  fi
+fi
 
 echo "== instalando o template mtrx-emulator-watchdog@.service =="
 cp "$TEMPLATE_SRC" "$UNIT_DST"
 systemctl daemon-reload
 
-echo "== ligando os watchdogs dos stacks 2..10 (ociosos até você provisionar o emulador de cada um) =="
+echo "== ligando os watchdogs de emulador (ociosos até você provisionar o emulador de cada stack) =="
+# Ambiente A: se o serviço LEGADO já roda (servidor ATUAL), NÃO mexe — fica intocado. Senão (servidor
+# NOVO), liga o @1 (mesmo script, N=1 → mtrx-dandroid / WAHA_PROXY_1) pra o A também ter watchdog no deploy.
+if systemctl is-active --quiet mtrx-emulator-watchdog.service 2>/dev/null; then
+  echo "   ambiente A: serviço legado ativo — mantido intocado."
+else
+  systemctl enable --now mtrx-emulator-watchdog@1 >/dev/null 2>&1 || true
+  echo "   mtrx-emulator-watchdog@1  (ambiente A) -> $(systemctl is-active mtrx-emulator-watchdog@1 2>/dev/null || echo '?')"
+fi
 for n in 2 3 4 5 6 7 8 9 10; do
   systemctl enable --now "mtrx-emulator-watchdog@${n}" >/dev/null 2>&1 || true
   printf "   mtrx-emulator-watchdog@%-2s -> %s\n" "$n" "$(systemctl is-active "mtrx-emulator-watchdog@${n}" 2>/dev/null || echo '?')"
