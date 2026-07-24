@@ -30,6 +30,13 @@ public interface IPhoneOrchestrator
     /// <summary>Provisiona o aparelho: cria o container (se ainda não existe) e o liga. Idempotente.</summary>
     Task<PhoneStatus> ProvisionAsync(CancellationToken ct);
 
+    /// <summary>Reset FORTE ("aparelho novo"): remove o container E o volume de dados (agenda, conta
+    /// Google, WhatsApp e a identidade do device) e provisiona do ZERO. Diferente de
+    /// <see cref="ClearWhatsAppAsync"/> (pm clear), que só zera o WhatsApp e MANTÉM agenda/Google/device.
+    /// Segunda linha: use quando um número novo morre rápido no MESMO aparelho (suspeita de correlação por
+    /// device) — não é o passo padrão após um ban (esse é chip novo). Default: no-op (status atual).</summary>
+    Task<PhoneStatus> ResetEmulatorAsync(CancellationToken ct) => GetStatusAsync(ct);
+
     /// <summary>Liga o aparelho já provisionado.</summary>
     Task<PhoneStatus> StartAsync(CancellationToken ct);
 

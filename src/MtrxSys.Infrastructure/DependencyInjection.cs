@@ -116,15 +116,20 @@ public static class DependencyInjection
         }
 
         // Salvar+sincronizar contato na agenda (Google) antes de disparar pra FRIO (anti-463). Ver
-        // docs/google-contacts-sync.md. DESLIGADO por padrão → NoOp (nada muda em prod). Só liga o
-        // provider Google com Enabled=true, Provider=Google E um RefreshToken (do chip deste stack).
+        // docs/google-contacts-sync.md.
+        //
+        // ANTI-FOOTGUN — por que NÃO há mais "Enabled=true" nesta condição: esta defesa é ESSENCIAL, e
+        // escondê-la atrás de um Enabled que nascia false foi o que deixou o chip do A disparar a frio SEM
+        // o tctoken (Provider=Google + RefreshToken VÁLIDO, mas Enabled=false esquecido → NoOp) — um dos
+        // furos que levaram à restrição. Agora ela LIGA SOZINHA sempre que tem o que precisa: Provider=
+        // Google + um RefreshToken (o do chip deste stack). Sem token (ou Provider≠Google) → NoOp, porque
+        // sincronizar seria impossível de qualquer jeito. Desligar de propósito = Provider=None ou remover
+        // o token. NUNCA mais um "false" silencioso apagando a defesa.
         services.AddOptions<AddressBookSyncOptions>().Bind(config.GetSection(AddressBookSyncOptions.SectionName));
         var abSection = config.GetSection(AddressBookSyncOptions.SectionName);
-        var abEnabled = abSection.GetValue<bool>("Enabled");
         var abProvider = abSection["Provider"];
         var abRefreshToken = abSection["Google:RefreshToken"];
-        if (abEnabled
-            && string.Equals(abProvider, "Google", StringComparison.OrdinalIgnoreCase)
+        if (string.Equals(abProvider, "Google", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(abRefreshToken))
         {
             services.AddSingleton<IContactAddressBookSync>(sp =>

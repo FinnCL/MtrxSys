@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../api/client";
+import { api, type ValidationStatus } from "../api/client";
 import { type Contact, type ContactGroupTag } from "../api/types";
 import { AddContactsModal } from "./AddContactsModal";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -27,6 +27,37 @@ export function ContactsScreen() {
   // Círculo de Aquecimento: telefone (E.164) -> id do membro. Marca quais contatos SEUS re-enviam na
   // fase híbrida (dia 4+). Persistente — carregado uma vez e alterado pelos checkboxes.
   const [circle, setCircle] = useState<Map<string, string>>(new Map());
+  // "Validar lista" (pré-voo anti-463): progresso da checagem de existência dos Leads no WhatsApp.
+  const [validation, setValidation] = useState<ValidationStatus | null>(null);
+
+  const startValidation = async () => {
+    setActionMsg(null);
+    try {
+      const r = await api.contactsValidateStart();
+      setValidation(r.status); // running=true dispara o poll abaixo
+      if (!r.started) setActionMsg("Validação já está em andamento.");
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    }
+  };
+
+  // Enquanto a validação roda, faz poll do progresso a cada 4s. Ao terminar, recarrega as listas (os
+  // descartados saíram da fila).
+  useEffect(() => {
+    if (!validation?.running) return;
+    let alive = true;
+    const t = setInterval(async () => {
+      try {
+        const s = await api.contactsValidateStatus();
+        if (!alive) return;
+        setValidation(s);
+        if (!s.running) {
+          try { setGroups(await api.listContactGroupTags()); } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+    }, 4000);
+    return () => { alive = false; clearInterval(t); };
+  }, [validation?.running]);
 
   useEffect(() => {
     void (async () => {
@@ -221,7 +252,20 @@ export function ContactsScreen() {
           <button type="button" onClick={() => setShowAdd(true)}>
             Adicionar números
           </button>
+          {/* Validar lista (pré-voo anti-463): confirma quais têm WhatsApp e descarta os inexistentes
+              ANTES do disparo. Paced (8-20s/número) — some do grupo raspado o que não tem conta. */}
+          <button type="button" onClick={() => void startValidation()} disabled={validation?.running}>
+            {validation?.running ? "Validando…" : "Validar números"}
+          </button>
         </div>
+        {validation && (
+          <p className="muted small">
+            Validação: {validation.done}/{validation.total} · <strong>{validation.valid}</strong> com
+            WhatsApp · <strong>{validation.invalid}</strong> descartados (sem conta)
+            {validation.uncertain > 0 ? ` · ${validation.uncertain} indeterminados` : ""}
+            {validation.running ? " — em andamento…" : " — concluído"}
+          </p>
+        )}
         <p className="muted">
           Clique numa lista para abrir os contatos salvos dela. Lista é só uma etiqueta pra organizar
           seus contatos aqui, não é o grupo do WhatsApp.

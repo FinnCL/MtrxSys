@@ -10,6 +10,14 @@ public static class ContactsEndpoints
     {
         var group = app.MapGroup("/api/contacts");
 
+        // "Validar lista" (pré-voo anti-463): checa quais Leads têm conta no WhatsApp e descarta os
+        // inexistentes ANTES do disparo. Dispara em background (paced) e reporta o progresso. Ver
+        // NumberValidationRunner.
+        group.MapPost("/validate/start", (BackgroundServices.NumberValidationRunner runner) =>
+            Results.Ok(new { started = runner.Start(), status = runner.Status }));
+        group.MapGet("/validate/status", (BackgroundServices.NumberValidationRunner runner) =>
+            Results.Ok(runner.Status));
+
         group.MapGet("/", async (
             string? stage,
             string? groupTag,

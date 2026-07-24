@@ -170,6 +170,12 @@ input[type="checkbox"], input[type="radio"] {
   border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
 .phone-reload:hover:not(:disabled) { color: var(--fg); }
 .phone-reload:disabled { opacity: .5; cursor: default; }
+/* "Trocar chip": ação destrutiva (só quando o número foi restrito). Contorno discreto em danger pra
+   não competir com os botões primários, mas deixar claro que é sensível. */
+.phone-reset-chip { background: transparent; color: var(--danger, #e0596b); border: 1px solid var(--danger, #e0596b);
+  border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+.phone-reset-chip:hover:not(:disabled) { background: var(--danger, #e0596b); color: #fff; }
+.phone-reset-chip:disabled { opacity: .5; cursor: default; }
 .phone-activate:disabled { opacity: .5; cursor: default; }
 .phone-footer { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 /* Barra de navegação do Android (voltar ◁ / home ○ / recentes ▢) abaixo da tela. Envia keyevent via
@@ -1155,11 +1161,20 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
    Denso e ANCORADO À ESQUERDA (sem margin:auto): é documentação operacional pra seguir com o
    Console aberto do lado, não uma landing page. O max-width segue limitando a linha (leitura),
    mas o bloco encosta na borda esquerda do painel. Sem ícones: hierarquia é só tipografia + cor. */
-.gsg-wrap { max-width: 68ch; margin: 0; padding: 16px 20px 40px; overflow-y: auto; }
+/* Full-width + flex:1 (como .campaigns-screen): o WRAP é o container de scroll, então a barra fica na
+   BORDA da página. Antes era max-width:68ch à esquerda com overflow próprio → barra no MEIO da tela e
+   lado direito vazio. O conteúdo vira uma coluna legível CENTRADA via .gsg-wrap > * abaixo. */
+.gsg-wrap { flex: 1; overflow-y: auto; padding: 24px 20px 48px; }
+.gsg-wrap > * { max-width: 72ch; margin-inline: auto; }
 .gsg-hero { margin-bottom: 14px; }
 .gsg-eyebrow { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .06em;
   text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
 .gsg-hero h1 { font-size: clamp(18px, 3vw, 22px); line-height: 1.2; margin: 0 0 6px; color: var(--fg); }
+/* Selo AO VIVO do status do Google sync deste stack (a visibilidade que faltava). Verde = ATIVA. */
+.gsg-badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted); background: var(--bg-2); margin: 2px 0 8px; }
+.gsg-badge.is-on { color: #0b3d2e; background: #34d399; border-color: #34d399; }
+.gsg-badge.is-off { color: var(--muted); background: var(--bg-2); border-color: var(--border); }
 .gsg-lede { font-size: 13.5px; color: var(--muted); margin: 0; line-height: 1.5; }
 .gsg-lede b, .gsg-role b, .gsg-list b, .gsg-callout b, .gsg-foot b { color: var(--fg); font-weight: 600; }
 

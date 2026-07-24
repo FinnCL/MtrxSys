@@ -111,6 +111,21 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return await StartAsync(ct);
     }
 
+    public async Task<PhoneStatus> ResetEmulatorAsync(CancellationToken ct)
+    {
+        // Reset FORTE (aparelho novo): derruba o container e APAGA o volume de dados — agenda, conta
+        // Google, WhatsApp e a identidade do device somem TODOS. Depois ProvisionAsync recria do zero
+        // (o State vira "not_created"). É o nível 2 do "trocar chip": o pm clear (ClearWhatsAppAsync) só
+        // zera o WhatsApp e mantém o resto; aqui o aparelho nasce limpo. Segunda linha — só quando há
+        // suspeita de correlação por device (número novo morrendo rápido no mesmo aparelho).
+        // -f: remove mesmo rodando. O volume só sai DEPOIS do container (senão está "in use").
+        await DockerCli.DockerAsync(ct, "rm", "-f", Opts.ContainerName);
+        await DockerCli.DockerAsync(ct, "volume", "rm", "-f", Opts.VolumeName);
+        // Também limpa a flag "desligado de propósito", pra o aparelho novo não nascer marcado como off.
+        await DockerCli.DockerAsync(ct, "volume", "rm", "-f", $"{Opts.ContainerName}-off");
+        return await ProvisionAsync(ct);
+    }
+
     public async Task<PhoneStatus> StartAsync(CancellationToken ct)
     {
         // Remove a flag "desligado DE PROPÓSITO" — o emulator-watchdog volta a religar em crash normalmente.

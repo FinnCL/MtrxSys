@@ -8,8 +8,12 @@ public sealed class AddressBookSyncOptions
 {
     public const string SectionName = "AddressBookSync";
 
-    /// <summary>Liga o pipeline. Com false, o provider é NoOp (nada muda).</summary>
-    public bool Enabled { get; set; }
+    /// <summary>IGNORADO para ativação (era o "gate" do pipeline, mas virou armadilha: nascia false e
+    /// deixava a defesa anti-463 apagada mesmo com token válido — um dos furos que restringiram o chip do
+    /// A). Hoje a ativação é AUTOMÁTICA: Provider=Google + RefreshToken presente LIGA sozinho (ver
+    /// DependencyInjection). Desligar de propósito = Provider=None ou remover o token. Mantido só pra não
+    /// quebrar bindings de env antigos; não altera mais o comportamento.</summary>
+    public bool Enabled { get; set; } = true;
 
     /// <summary>Provider da agenda: "None" (default) ou "Google" (People API na conta do chip).</summary>
     public string Provider { get; set; } = "None";

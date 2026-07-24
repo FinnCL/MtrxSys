@@ -160,7 +160,7 @@ public sealed class WarmupManagerTests
     // no meio REDUZIRIA o teto no meio da escalada, sem erro nenhum, e só apareceria como disparo
     // misteriosamente parando mais cedo semanas depois.
     [Fact]
-    public async Task Curva_padrao_so_sobe_comeca_em_8_e_estabiliza_em_400()
+    public async Task Curva_padrao_so_sobe_comeca_em_3_e_estabiliza_em_200()
     {
         // Sem Curve configurada → cai no default do código.
         var svc = Build(new WarmupOptions { StartedOnUtc = new DateOnly(2026, 7, 15) });
@@ -169,14 +169,13 @@ public sealed class WarmupManagerTests
 
         curve.Should().NotBeEmpty("teto ausente anularia o aquecimento inteiro");
         // ⚠️ INCIDENTE PRESERVADO: com 15 no 1º dia um chip novo foi RESTRINGIDO na 4ª mensagem
-        // (2026-07-15, +557191072835). Por isso o dia 0 NÃO chega perto de 15 — subiu de 5 pra 8
-        // (2026-07-23), abaixo da linha de perigo, porque o caminho de envio mudou (app oficial +
-        // contato salvo/sincronizado + IP residencial) e o 1º disparo não cai mais num chip gelado.
-        // NÃO subir o índice 0 pra perto de 15 sem prova nova — essa fronteira custou um chip.
-        curve[0].Should().Be(8, "dia 0 modesto: abaixo do 15 que restringiu um chip em 2026-07-15");
-        curve[^1].Should().Be(400,
-            "platô 400/dia — 2x o antigo 200, e ALCANÇÁVEL: com delay 90-240s o máximo físico é ~480/dia, "
-            + "então teto maior seria decorativo");
+        // (2026-07-15, +557191072835). E em 2026-07-24 OUTRO chip (A) foi restringido rodando a rampa
+        // agressiva (platô 400/dia) + números inexistentes. Por isso o dia 0 desceu pra 3 (bem abaixo do
+        // 15 que custou um chip) e o platô caiu de 400 pra 200. NÃO subir o índice 0 sem prova nova.
+        curve[0].Should().Be(3, "dia 0 modesto: bem abaixo do 15 que restringiu um chip em 2026-07-15");
+        curve[^1].Should().Be(200,
+            "platô 200/dia — reduzido do 400 após a restrição de 2026-07-24; com delay 150-360s o máximo "
+            + "físico é ~340/dia, então 200 é alcançável e ainda deixa margem");
         curve.Should().BeInAscendingOrder("uma curva que desce em algum ponto é erro de digitação, não desenho");
         // Nenhum salto brusco: a constância é a defesa anti-ban (volume errático sinaliza robô). Um
         // degrau que mais que dobra seria pico — exatamente o que o aquecimento existe pra evitar.

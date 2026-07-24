@@ -137,6 +137,18 @@ export interface ChipIdentity {
   proxyReal?: string | null;
 }
 
+// Progresso da "Validar lista" (pré-voo anti-463): quantos Leads foram checados no WhatsApp e quantos
+// foram descartados por não ter conta. Espelha o ValidationStatus do backend.
+export interface ValidationStatus {
+  running: boolean;
+  total: number;
+  done: number;
+  valid: number;
+  invalid: number;
+  uncertain: number;
+  message: string | null;
+}
+
 export const api = {
   login: (email: string, password: string) =>
     request<LoginResponse>("/api/auth/login", {
@@ -192,6 +204,20 @@ export const api = {
     }),
   phoneInstallWhatsApp: () =>
     request<{ output: string }>("/api/phone/whatsapp/install", { method: "POST" }),
+  // "Trocar chip": zera os dados do WhatsApp no emulador (pm clear) → volta pra tela de boas-vindas,
+  // pronto pra registrar OUTRO número. Mantém o APK instalado (NÃO desinstala) e pré-concede a câmera.
+  // O número antigo (restrito) sai do app; a restrição continua no servidor do WhatsApp — isto só libera
+  // registrar um número diferente.
+  phoneWhatsAppReset: () =>
+    request<{ output: string }>("/api/phone/whatsapp/reset", { method: "POST" }),
+  // "Resetar emulador" (nível 2): remove o container + o volume de dados e provisiona do zero — aparelho
+  // NOVO (apaga agenda, conta Google logada, WhatsApp e a identidade do device). Segunda linha, só quando
+  // há suspeita de correlação por device. Retorna o PhoneStatus do container recém-criado (bootando).
+  phoneResetEmulator: () =>
+    request<PhoneStatus>("/api/phone/reset-emulator", { method: "POST" }),
+  // Status da defesa anti-463 (Google sync) deste stack — pro selo na aba Guia Google.
+  gsyncStatus: () =>
+    request<{ active: boolean; provider: string; tokenPresent: boolean }>("/api/phone/gsync-status"),
   // Lê o número que o WhatsApp do emulador está registrando (pré-preenche o campo do código).
   phoneWhatsAppNumber: () => request<{ number: string | null }>("/api/phone/whatsapp-number"),
   // Digita texto no emulador (o código do WhatsApp) — `t` vai na query (param string simples do minimal API).
@@ -446,6 +472,10 @@ export const api = {
       members: { name: string; phone: string; sentToday: number }[];
     }>("/api/warmup/status"),
   startWarmupEngine: () => request<{ running: boolean }>("/api/warmup/start", { method: "POST" }),
+  // "Validar lista" (pré-voo anti-463): dispara a validação dos Leads pelo check-exists e reporta progresso.
+  contactsValidateStart: () =>
+    request<{ started: boolean; status: ValidationStatus }>("/api/contacts/validate/start", { method: "POST" }),
+  contactsValidateStatus: () => request<ValidationStatus>("/api/contacts/validate/status"),
   stopWarmupEngine: () => request<{ running: boolean }>("/api/warmup/stop", { method: "POST" }),
 
   // FASE HUMANA (dias 1-3 do chip novo): o disparo fica travado enquanto o operador conversa à mão

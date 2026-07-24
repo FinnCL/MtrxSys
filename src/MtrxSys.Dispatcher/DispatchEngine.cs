@@ -84,6 +84,10 @@ public sealed class DispatchEngine(
         // continua valendo. Carregado SOB DEMANDA (1x, no 1º job) e só quando o ledger está ligado —
         // ciclo ocioso ou ledger Off nem consulta.
         HashSet<Guid>? circleContactIds = null;
+        // GUARDA anti-463: avisa UMA vez por ciclo se houve disparo FRIO com a defesa (Google sync)
+        // desligada. Não bloqueia (travaria stacks sem token), mas a defesa apagada em silêncio foi o
+        // que restringiu o A — então grita nos logs pra nunca mais passar despercebido.
+        var coldWithoutDefenseWarned = false;
 
         while (!ct.IsCancellationRequested)
         {
@@ -455,6 +459,18 @@ public sealed class DispatchEngine(
                         continue;
                     }
                     // AlreadyPresent / NotSupported → já sincronizado (ou inerte): segue pro envio.
+                }
+                else if (!isCircle && !ContactStages.IsEngaged(contact.Stage) && !coldWithoutDefenseWarned)
+                {
+                    // Chegou aqui = disparo FRIO (não-círculo, não-engajado) com a defesa anti-463 OFF
+                    // (sem token / Provider≠Google). NÃO bloqueia — travaria os stacks sem token —, mas
+                    // avisa ALTO uma vez por ciclo. A defesa apagada em silêncio foi o que restringiu o A.
+                    coldWithoutDefenseWarned = true;
+                    log.LogWarning(
+                        "GUARDA anti-463: disparo FRIO com a defesa (Google sync) DESLIGADA neste stack — "
+                        + "{Phone} e os próximos frios vão SEM o tctoken do Google. Configure Provider=Google "
+                        + "+ RefreshToken do chip pra armar a defesa (auto-liga). Envio não bloqueado.",
+                        contact.Phone.E164);
                 }
 
                 var delayBefore = delay.NextDelay();

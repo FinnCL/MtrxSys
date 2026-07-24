@@ -55,7 +55,7 @@ public sealed class WarmupManager(
     // 90-240s, o máximo físico é ~480/dia, então acima disso o cap seria decorativo. DEVE ser idêntica
     // à dos appsettings (Api + Dispatcher) — os três são a MESMA curva, a UI mostra e o motor aplica.
     private static readonly int[] DefaultCurve =
-        [8, 11, 14, 18, 22, 28, 35, 44, 55, 68, 84, 104, 128, 158, 195, 240, 295, 355, 400, 400];
+        [3, 5, 8, 12, 16, 21, 27, 34, 42, 51, 62, 75, 90, 107, 125, 145, 165, 185, 200];
 
     // Índice (base-0) do PLATÔ: último degrau da curva (onde estabiliza em 200/dia). É o fim do
     // aquecimento — a fase híbrida vai até aqui. Sem I/O; mesma curva que o snapshot usa (não duplica).

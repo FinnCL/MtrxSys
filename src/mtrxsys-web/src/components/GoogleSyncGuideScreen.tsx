@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { api } from "../api/client";
 
 // Aba "Guia Google": passo a passo pra configurar o sync de contatos (anti-463), do Console ao
 // disparo. É só documentação/checklist (não faz chamadas). O progresso fica salvo no localStorage
@@ -59,7 +60,6 @@ const STEPS: GuideStep[] = [
     title: "Colar na config do stack",
     sub: "Client ID/Secret iguais pros 10 · o RefreshToken muda por stack",
     code: `# variáveis de ambiente do stack (cada stack usa o token do SEU chip)
-AddressBookSync__Enabled=true
 AddressBookSync__Provider=Google
 AddressBookSync__GraceSeconds=180
 AddressBookSync__Google__ClientId=<compartilhado>
@@ -70,7 +70,7 @@ AddressBookSync__Google__RefreshToken=<token DESTE chip>`,
     ],
     note: {
       kind: "info",
-      node: <>Com <code>Enabled=false</code> (o padrão) nada muda: o pipeline fica no-op. Ligar é só preencher isto e reiniciar.</>,
+      node: <>Não precisa de <code>Enabled</code>: assim que houver <code>Provider=Google</code> + o RefreshToken, a defesa <b>liga sozinha</b>. Desligar de propósito = <code>Provider=None</code> ou remover o token — nunca mais fica apagada por esquecimento.</>,
     },
   },
   {
@@ -108,11 +108,29 @@ export function GoogleSyncGuideScreen() {
   const reset = () => setChecks({});
   const done = useMemo(() => ALL_IDS.filter((id) => checks[id]).length, [checks]);
 
+  // Estado AO VIVO da defesa neste stack (o selo). Foi a invisibilidade disso que deixou o chip do A
+  // rodar com o sync apagado. active = provider Google ligado (Provider=Google + token → auto-liga).
+  const [sync, setSync] = useState<{ active: boolean; provider: string; tokenPresent: boolean } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.gsyncStatus().then((s) => { if (alive) setSync(s); }).catch(() => { if (alive) setSync(null); });
+    return () => { alive = false; };
+  }, []);
+  // 3 estados: ATIVA (verde), sem token (cinza — falta configurar), Provider=None (cinza — desligado).
+  const syncBadge = sync === null
+    ? { cls: "gsg-badge", text: "Sincronização Google: verificando…" }
+    : sync.active
+      ? { cls: "gsg-badge is-on", text: "Sincronização Google: ATIVA" }
+      : !sync.tokenPresent
+        ? { cls: "gsg-badge is-off", text: "Sincronização Google: desligada (falta o token deste chip)" }
+        : { cls: "gsg-badge is-off", text: "Sincronização Google: desligada (Provider ≠ Google)" };
+
   return (
     <main className="gsg-wrap">
       <header className="gsg-hero">
         <span className="gsg-eyebrow">Configuração anti-463</span>
         <h1>Sincronizar agenda (Google)</h1>
+        <span className={syncBadge.cls}>{syncBadge.text}</span>
         <p className="gsg-lede">
           Salvar o contato <b>frio</b> na conta Google do chip <b>antes</b> de disparar, pro aparelho
           primário sincronizar e o WhatsApp herdar o <b>tctoken</b>. É o que mata o erro 463 que derruba

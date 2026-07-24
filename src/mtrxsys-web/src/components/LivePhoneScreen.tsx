@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { api, type ChipIdentity, type PhoneMode, type PhoneStatus } from "../api/client";
 import { usePoll } from "../hooks/usePoll";
 import { HumanPhaseCard } from "./HumanPhaseCard";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 // Aba "Celular": a TELA do Android (noVNC do docker-android) embutida direto na página, sem moldura.
 // O emulador é o ÚNICO caminho de disparo — o app oficial dentro dele envia, e é isso que mata o 463.
@@ -51,6 +52,15 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   // (NÃO registre o chip); true = seguro. O watchdog do stack monta o proxy SOZINHO ~20s após o boot —
   // este sinal só CONFIRMA pro usuário; ninguém roda comando no servidor.
   const [proxyUp, setProxyUp] = useState<boolean | null>(null);
+  // "Trocar chip": modal de confirmação + estado do pm clear. Ação destrutiva (apaga a conta logada do
+  // app), por isso passa por confirmação. `resetMsg` mostra o retorno (ok/erro) sob o botão.
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetMsg, setResetMsg] = useState<string | null>(null);
+  // "Resetar emulador" (nível 2): recria o aparelho do zero. Estado separado do "Trocar chip".
+  const [confirmWipe, setConfirmWipe] = useState(false);
+  const [wiping, setWiping] = useState(false);
+  const [wipeMsg, setWipeMsg] = useState<string | null>(null);
   // Último `running` visto do container, pra detectar a VOLTA do emulador (false→true) e religar a
   // tela. Ref e não state: só é lido dentro do poll, e mudá-lo não deve provocar render.
   const runningRef = useRef<boolean | null>(null);
@@ -141,6 +151,41 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
     }
   }, []);
 
+  // "Trocar chip": pm clear no WhatsApp do emulador → tela de boas-vindas, pronto pra registrar OUTRO
+  // número. NÃO recria o container nem mexe no proxy in-guest (que continua de pé); só zera o app.
+  const resetChip = useCallback(async () => {
+    setConfirmReset(false);
+    setResetting(true);
+    setResetMsg(null);
+    try {
+      await api.phoneWhatsAppReset();
+      setResetMsg("WhatsApp zerado. Registre o novo número — só com o Proxy do emulador: OK.");
+      setFrameKey((k) => k + 1); // recarrega a tela pra já mostrar as boas-vindas
+    } catch {
+      setResetMsg("Falha ao trocar o chip. Veja os logs do emulador e tente de novo.");
+    } finally {
+      setResetting(false);
+    }
+  }, []);
+
+  // "Resetar emulador" (nível 2): rm container + rm volume + provisiona do zero → aparelho NOVO. Apaga
+  // agenda, conta Google logada e WhatsApp. Depois precisa: logar o Google de novo, reinstalar o WhatsApp
+  // e registrar o número. Leva ~1-2 min pra bootar; o proxy in-guest volta pelo watchdog.
+  const resetEmulator = useCallback(async () => {
+    setConfirmWipe(false);
+    setWiping(true);
+    setWipeMsg(null);
+    try {
+      await api.phoneResetEmulator();
+      setWipeMsg("Emulador recriado. Aguarde o boot (~1-2 min) e o Proxy: OK; depois logue o Google, reinstale o WhatsApp e registre o novo número.");
+      setFrameKey((k) => k + 1);
+    } catch {
+      setWipeMsg("Falha ao resetar o emulador. Veja os logs do host (docker/KVM) e tente de novo.");
+    } finally {
+      setWiping(false);
+    }
+  }, []);
+
   // Bloco "provisionar" reusado nos DOIS caminhos sem-emulador (WahaOnly em coluna única e Emulator com
   // container ainda `not_created`). Fragmento (sem .phone-steps) pra o chamador embrulhar onde precisa.
   const provisionPrompt = (
@@ -158,9 +203,8 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           ~20s após o boot). O usuário NÃO roda nada. Só precisa esperar o sinal "Proxy do emulador: OK"
           na tela antes de registrar — senão o número sairia pelo IP do datacenter (ban). */}
       <p className="phone-off-hint" style={{ textAlign: "center", maxWidth: 320, margin: "8px auto 0" }}>
-        Ao provisionar, o proxy do emulador sobe sozinho (~20s após o boot). Só registre o chip quando
-        aparecer <b>Proxy do emulador: OK</b> na tela — o sinal de que o número sai pelo IP brasileiro, não
-        pelo do datacenter.
+        O proxy sobe sozinho ~20s após o boot. Registre o chip só quando aparecer <b>Proxy do emulador: OK</b>.
+        Antes disso, o número sai pelo IP do datacenter (risco de ban).
       </p>
     </>
   );
@@ -188,7 +232,7 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           {proxyUp === null ? (
             <span className="phone-badge">verificando…</span>
           ) : proxyUp ? (
-            <span className="phone-badge ok">OK — seguro registrar o chip</span>
+            <span className="phone-badge ok">OK, seguro registrar o chip</span>
           ) : (
             <span className="phone-badge off">montando… NÃO registre ainda (sairia pelo datacenter)</span>
           )}
@@ -255,11 +299,62 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           <a href={url} target="_blank" rel="noreferrer" className="phone-screen-link">
             abrir em nova aba
           </a>
+          {/* Trocar chip: só quando o número atual foi restrito/queimado. Destrutivo → passa por modal. */}
+          <button type="button" className="phone-reset-chip" onClick={() => setConfirmReset(true)} disabled={resetting}>
+            {resetting ? "Trocando chip…" : "Trocar chip"}
+          </button>
+          {resetMsg && <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>{resetMsg}</p>}
+          {/* Resetar emulador (nível 2): aparelho novo de verdade. Segunda linha — só se houver suspeita
+              de correlação por device (número novo morrendo rápido no mesmo aparelho). */}
+          <button type="button" className="phone-reset-chip" onClick={() => setConfirmWipe(true)} disabled={wiping}>
+            {wiping ? "Resetando…" : "Resetar emulador"}
+          </button>
+          {wipeMsg && <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>{wipeMsg}</p>}
         </div>
       )}
 
       {/* Aquecimento de conversa (pool) — só no modo Com emulador; fora da área WAHA + físico. */}
 
+      {confirmReset && (
+        <ConfirmDialog
+          title="Trocar o chip deste emulador?"
+          message={
+            <>
+              Apaga a conta logada e volta pra tela de boas-vindas, pronto pra registrar <b>outro número</b>. O app <b>não</b> é desinstalado.
+              <br /><br />
+              O número antigo <b>continua restrito</b> no WhatsApp; trocar o chip não desfaz isso. Registre o novo <b>só com o Proxy: OK</b>.
+            </>
+          }
+          confirmLabel="Sim, trocar chip"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void resetChip()}
+          onCancel={() => setConfirmReset(false)}
+        />
+      )}
+
+      {confirmWipe && (
+        <ConfirmDialog
+          title="Resetar o emulador do zero?"
+          message={
+            <>
+              Recria o aparelho inteiro: apaga <b>a agenda, a conta Google logada, o WhatsApp e a
+              identidade do device</b>. Diferente de "Trocar chip", que só zera o WhatsApp.
+              <br /><br />
+              Depois você vai precisar <b>logar o Google de novo</b>, <b>reinstalar o WhatsApp</b> e
+              registrar o número. Leva <b>~1-2 min</b> pra bootar; o proxy volta sozinho.
+              <br /><br />
+              Use como <b>segunda linha</b>: só se um número novo morrer rápido no <b>mesmo aparelho</b>.
+              Pra troca comum, "Trocar chip" basta.
+            </>
+          }
+          confirmLabel="Sim, resetar emulador"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void resetEmulator()}
+          onCancel={() => setConfirmWipe(false)}
+        />
+      )}
     </>
   );
 

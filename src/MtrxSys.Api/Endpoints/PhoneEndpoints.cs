@@ -50,6 +50,25 @@ public static class PhoneEndpoints
         group.MapGet("/proxy-health", async (IPhoneOrchestrator phone, CancellationToken ct) =>
             Results.Ok(new { up = await phone.IsEgressProxyUpAsync(ct) }));
 
+        // Reset FORTE do emulador (aparelho novo): rm container + rm volume + provisiona do zero. Nível 2
+        // do "trocar chip" — só quando há suspeita de correlação por device. Ver ResetEmulatorAsync.
+        group.MapPost("/reset-emulator", async (IPhoneOrchestrator phone, CancellationToken ct) =>
+            Results.Ok(await phone.ResetEmulatorAsync(ct)));
+
+        // Status da defesa anti-463 (Google sync) DESTE stack, pro selo na aba Guia Google. `active` = o
+        // provider Google está ligado (Provider=Google + RefreshToken → auto-liga; ver DependencyInjection).
+        // A invisibilidade disso foi o que deixou o chip do A disparar com a defesa apagada.
+        group.MapGet("/gsync-status", (IContactAddressBookSync addressBook, IOptions<AddressBookSyncOptions> abOpts) =>
+        {
+            var o = abOpts.Value;
+            return Results.Ok(new
+            {
+                active = addressBook.IsEnabled,
+                provider = o.Provider,
+                tokenPresent = !string.IsNullOrWhiteSpace(o.Google.RefreshToken),
+            });
+        });
+
         group.MapGet("/booted", async (IPhoneOrchestrator phone, CancellationToken ct) =>
             Results.Ok(new { booted = await phone.IsBootedAsync(ct) }));
 
