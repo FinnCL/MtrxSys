@@ -47,6 +47,10 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   // o modo Emulator. Sem isto não havia caminho de UI pra bootstrapar um stack sem emulador.
   const [provisioning, setProvisioning] = useState(false);
   const [provisionError, setProvisionError] = useState<string | null>(null);
+  // Proxy in-guest do emulador de pé? (só no modo emulador). null = verificando; false = montando/fora
+  // (NÃO registre o chip); true = seguro. O watchdog do stack monta o proxy SOZINHO ~20s após o boot —
+  // este sinal só CONFIRMA pro usuário; ninguém roda comando no servidor.
+  const [proxyUp, setProxyUp] = useState<boolean | null>(null);
   // Último `running` visto do container, pra detectar a VOLTA do emulador (false→true) e religar a
   // tela. Ref e não state: só é lido dentro do poll, e mudá-lo não deve provocar render.
   const runningRef = useRef<boolean | null>(null);
@@ -109,6 +113,16 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
     }
   }, 8000, active && emulatorMode);
 
+  // Proxy in-guest do emulador (gost+iptables DENTRO do Android) — o sinal de "seguro registrar o chip".
+  // Só no modo emulador; falha silenciosa preserva o valor. É read-only: o watchdog é quem monta.
+  usePoll(async () => {
+    try {
+      setProxyUp((await api.phoneProxyHealth()).up);
+    } catch {
+      /* mantém o valor atual */
+    }
+  }, 10000, active && emulatorMode);
+
   // Bootstrap de um stack SEM emulador ainda (B..J recém-criados): cria o container do Android e liga o
   // modo Emulator — aí a tela aparece pra registrar o chip. O A já tem emulador + modo Emulator, então
   // este botão NÃO aparece nele (ele cai no ramo com emulatorMode=true). Provisionar boota um Android
@@ -140,14 +154,13 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
       {provisionError && (
         <p className="phone-off-hint" style={{ textAlign: "center", color: "var(--danger)" }}>{provisionError}</p>
       )}
-      {/* AVISO CRÍTICO: o proxy in-guest do emulador (gost+iptables) é montado pelo watchdog@N — sem ele,
-          o egresso sai DIRETO pelo IP do datacenter. O gate bloqueia o DISPARO automático, mas NÃO o
-          registro manual do chip. Registrar um número novo por IP de datacenter = ban. A linha
-          "Proxy: ativo" acima é o proxy da sessão WAHA, NÃO o do emulador — não confie nela pra isto. */}
-      <p className="phone-off-hint" style={{ textAlign: "center", color: "var(--danger)", maxWidth: 320, margin: "8px auto 0" }}>
-        Atenção: só registre o chip DEPOIS de ligar o watchdog do proxy deste stack
-        (<code>systemctl enable --now mtrx-emulator-watchdog@N</code>). Sem ele, o número sai pelo IP do
-        datacenter e é ban — o disparo já é bloqueado sem proxy, mas o registro do chip não.
+      {/* O proxy in-guest sobe AUTOMÁTICO (o watchdog do stack, sempre rodando, monta o gost+iptables
+          ~20s após o boot). O usuário NÃO roda nada. Só precisa esperar o sinal "Proxy do emulador: OK"
+          na tela antes de registrar — senão o número sairia pelo IP do datacenter (ban). */}
+      <p className="phone-off-hint" style={{ textAlign: "center", maxWidth: 320, margin: "8px auto 0" }}>
+        Ao provisionar, o proxy do emulador sobe sozinho (~20s após o boot). Só registre o chip quando
+        aparecer <b>Proxy do emulador: OK</b> na tela — o sinal de que o número sai pelo IP brasileiro, não
+        pelo do datacenter.
       </p>
     </>
   );
@@ -165,6 +178,22 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           <span className="phone-badge off">desligado (sai pelo IP da máquina)</span>
         )}
       </p>
+
+      {/* Proxy in-guest do EMULADOR (gost+iptables DENTRO do Android) — diferente do proxy da sessão WAHA
+          acima. É o gate de "seguro registrar o chip": o watchdog do stack monta sozinho ~20s após o boot;
+          este badge só CONFIRMA. Verde = egresso pelo residencial; senão o registro sairia pelo datacenter. */}
+      {emulatorMode && (
+        <p className="phone-off-hint" style={{ textAlign: "center", margin: "0 0 8px" }}>
+          Proxy do emulador:{" "}
+          {proxyUp === null ? (
+            <span className="phone-badge">verificando…</span>
+          ) : proxyUp ? (
+            <span className="phone-badge ok">OK — seguro registrar o chip</span>
+          ) : (
+            <span className="phone-badge off">montando… NÃO registre ainda (sairia pelo datacenter)</span>
+          )}
+        </p>
+      )}
 
       {/* SEM seletor de modo: o emulador é o único caminho de disparo. O modo persistido (phone_mode)
           segue sendo LIDO — é ele que o dispatcher usa pra escolher o caminho de envio — mas não é

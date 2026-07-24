@@ -20,6 +20,13 @@ public interface IPhoneOrchestrator
     /// espera isto antes de instalar o WhatsApp.</summary>
     Task<bool> IsBootedAsync(CancellationToken ct);
 
+    /// <summary>Proxy in-guest do emulador de pé? (gost escutando na :12345 + regra REDIRECT no nat OUTPUT,
+    /// DENTRO do Android — a MESMA pós-condição do watchdog). É o que garante que o egresso sai pelo
+    /// residencial e não pelo IP do datacenter: o SINAL de que é seguro registrar o chip. false quando não
+    /// dá pra confirmar (container ausente, adb mudo, sem root, proxy fora) — fail-safe: a UI segura o
+    /// registro. Default: false (engines sem esse conceito nunca liberam).</summary>
+    Task<bool> IsEgressProxyUpAsync(CancellationToken ct) => Task.FromResult(false);
+
     /// <summary>Provisiona o aparelho: cria o container (se ainda não existe) e o liga. Idempotente.</summary>
     Task<PhoneStatus> ProvisionAsync(CancellationToken ct);
 

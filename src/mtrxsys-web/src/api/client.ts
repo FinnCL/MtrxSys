@@ -179,6 +179,9 @@ export const api = {
   phoneStart: () => request<PhoneStatus>("/api/phone/start", { method: "POST" }),
   phoneStop: () => request<void>("/api/phone/stop", { method: "POST" }),
   phoneBooted: () => request<{ booted: boolean }>("/api/phone/booted"),
+  // Proxy in-guest do emulador de pé? Sinal de "seguro registrar o chip" (egresso pelo residencial, não
+  // pelo IP do datacenter). false = ainda montando/fora — a UI segura o registro.
+  phoneProxyHealth: () => request<{ up: boolean }>("/api/phone/proxy-health"),
   phoneKeepAlive: () => request<void>("/api/phone/keepalive", { method: "POST" }),
   phoneLogs: (tail = 200) => request<{ logs: string }>(`/api/phone/logs?tail=${tail}`),
   // Aplica proxy no emulador (restaurado: ffacd78 removeu o botão; o backend /api/phone/proxy existe).

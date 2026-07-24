@@ -45,6 +45,11 @@ public static class PhoneEndpoints
             return Results.Ok(new { mode = mode.ToString() });
         });
 
+        // Proxy in-guest do emulador de pé? O SINAL de "seguro registrar o chip" pra a aba Celular — o
+        // egresso sai pelo residencial, não pelo IP do datacenter. false = ainda montando / fora (a UI segura).
+        group.MapGet("/proxy-health", async (IPhoneOrchestrator phone, CancellationToken ct) =>
+            Results.Ok(new { up = await phone.IsEgressProxyUpAsync(ct) }));
+
         group.MapGet("/booted", async (IPhoneOrchestrator phone, CancellationToken ct) =>
             Results.Ok(new { booted = await phone.IsBootedAsync(ct) }));
 

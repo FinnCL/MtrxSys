@@ -50,6 +50,17 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return code == 0 && outp.Trim() == "1";
     }
 
+    public async Task<bool> IsEgressProxyUpAsync(CancellationToken ct)
+    {
+        // MESMA pós-condição do watchdog (emulator-watchdog.sh): gost escutando na :12345 E regra REDIRECT
+        // presente no nat OUTPUT, DENTRO do Android. Requer root (build userdebug). Qualquer não-zero
+        // (container ausente, adb mudo, sem root, gost/regra fora) → false. Fail-safe: a UI só libera o
+        // registro do chip quando isto é true, então o número nunca sai pelo IP do datacenter por engano.
+        var (code, _, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            "su 0 iptables -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports 12345 && su 0 ss -ltn 2>/dev/null | grep -q :12345");
+        return code == 0;
+    }
+
     public async Task<PhoneStatus> ProvisionAsync(CancellationToken ct)
     {
         var status = await GetStatusAsync(ct);
