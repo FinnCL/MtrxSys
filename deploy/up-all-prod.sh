@@ -115,7 +115,14 @@ wire_template() {
   export SEED_ADMIN_EMAIL="$(getenv SEED${n}_ADMIN_EMAIL)" SEED_ADMIN_PASS="$(getenv SEED${n}_ADMIN_PASS)" SEED_ADMIN_NAME="$(getenv SEED${n}_ADMIN_NAME)"
   export PHONE_VIEW_URL="https://phone-${L}.${MTRX_DOMAIN}"
   local v
-  v=$(getenv "PHONE_NOVNC_PORT_${n}"); export PHONE_NOVNC_PORT="${v:-$((6079 + n))}"
+  # Porta do noVNC do PRIMÁRIO (docker-android) que vira Phone__NoVncPort — o ProvisionAsync e o botão
+  # "Resetar emulador" recriam o container NELA. TEM que bater, por stack, com a porta que o gen-config.sh
+  # põe no Caddy do phone-${L}; senão a tela dá 1006 (e o reset recria na porta errada). O A é special-case
+  # 6090 (o primário publica em 6090 pra não colidir com a base 6080) — IDÊNTICO ao special-case do
+  # gen-config.sh (`[ "$i" = "0" ] && PHONE_PORT=6090`). Mantenha os DOIS em sincronia. Demais: 6079+n.
+  v=$(getenv "PHONE_NOVNC_PORT_${n}")
+  local default_novnc=$((6079 + n)); [ "$n" = "1" ] && default_novnc=6090
+  export PHONE_NOVNC_PORT="${v:-$default_novnc}"
   v=$(getenv "PHONE_VOLUME_${n}");     export PHONE_VOLUME="${v:-android-data-${n}}"
   v=$(getenv "MASK_CHIP_PHONE_${n}");  export MASK_CHIP_PHONE="${v:-false}"
   export PHONE_WA_APK_URL="$(getenv PHONE_WA_APK_URL_${n})"

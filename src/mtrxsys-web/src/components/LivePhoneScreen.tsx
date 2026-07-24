@@ -176,9 +176,15 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
     setWiping(true);
     setWipeMsg(null);
     try {
-      await api.phoneResetEmulator();
-      setWipeMsg("Emulador recriado. Aguarde o boot (~1-2 min) e o Proxy: OK; depois logue o Google, reinstale o WhatsApp e registre o novo número.");
-      setFrameKey((k) => k + 1);
+      const r = await api.phoneResetEmulator();
+      if (r.blocked) {
+        // Emulador gerenciado por compose (ex.: o A): resetar por docker-run recriaria errado. A UI só
+        // avisa o caminho certo — não quebra nada.
+        setWipeMsg(r.message ?? "Reset bloqueado: emulador gerenciado pelo deploy. Use \"Trocar chip\".");
+      } else {
+        setWipeMsg("Emulador recriado. Aguarde o boot (~1-2 min) e o Proxy: OK; depois logue o Google, reinstale o WhatsApp e registre o novo número.");
+        setFrameKey((k) => k + 1);
+      }
     } catch {
       setWipeMsg("Falha ao resetar o emulador. Veja os logs do host (docker/KVM) e tente de novo.");
     } finally {
@@ -320,9 +326,9 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           title="Trocar o chip deste emulador?"
           message={
             <>
-              Apaga a conta logada e volta pra tela de boas-vindas, pronto pra registrar <b>outro número</b>. O app <b>não</b> é desinstalado.
+              Apaga a conta logada e volta pra tela de boas-vindas, pronto pra registrar um <b>número novo</b>. O app <b>não</b> é desinstalado.
               <br /><br />
-              O número antigo <b>continua restrito</b> no WhatsApp; trocar o chip não desfaz isso. Registre o novo <b>só com o Proxy: OK</b>.
+              Você passa a usar esse número novo (limpo). O antigo continua banido no WhatsApp, mas é ele que você está <b>substituindo</b>. Registre o novo <b>só com o Proxy: OK</b>.
             </>
           }
           confirmLabel="Sim, trocar chip"

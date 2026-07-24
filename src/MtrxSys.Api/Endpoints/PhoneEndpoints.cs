@@ -52,8 +52,24 @@ public static class PhoneEndpoints
 
         // Reset FORTE do emulador (aparelho novo): rm container + rm volume + provisiona do zero. Nível 2
         // do "trocar chip" — só quando há suspeita de correlação por device. Ver ResetEmulatorAsync.
+        // TRAVA: se o emulador é gerenciado por compose (ex.: o A, via emulator-a.yml), o reset por
+        // docker-run recriaria um container ERRADO → bloqueia e aponta o caminho certo (ver
+        // IsComposeManagedAsync). Assim o usuário não quebra o A clicando aqui.
         group.MapPost("/reset-emulator", async (IPhoneOrchestrator phone, CancellationToken ct) =>
-            Results.Ok(await phone.ResetEmulatorAsync(ct)));
+        {
+            if (await phone.IsComposeManagedAsync(ct))
+            {
+                return Results.Ok(new
+                {
+                    blocked = true,
+                    message = "Este emulador é gerenciado pelo deploy (compose) — resetar por aqui o "
+                        + "recriaria errado. Para um número novo, use \"Trocar chip\". Para aparelho novo, "
+                        + "recrie pelo deploy/compose.",
+                    status = (PhoneStatus?)null,
+                });
+            }
+            return Results.Ok(new { blocked = false, message = (string?)null, status = (PhoneStatus?)await phone.ResetEmulatorAsync(ct) });
+        });
 
         // Status da defesa anti-463 (Google sync) DESTE stack, pro selo na aba Guia Google. `active` = o
         // provider Google está ligado (Provider=Google + RefreshToken → auto-liga; ver DependencyInjection).

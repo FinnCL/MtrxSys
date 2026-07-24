@@ -37,6 +37,14 @@ public interface IPhoneOrchestrator
     /// device) — não é o passo padrão após um ban (esse é chip novo). Default: no-op (status atual).</summary>
     Task<PhoneStatus> ResetEmulatorAsync(CancellationToken ct) => GetStatusAsync(ct);
 
+    /// <summary>O container do emulador é gerenciado por docker compose (tem label
+    /// <c>com.docker.compose.project</c>)? Se SIM, o <see cref="ResetEmulatorAsync"/> por docker-run
+    /// recriaria um container ERRADO — perde a config do compose (self-healing do X-lock, porta 6090,
+    /// mount do emulator.py, sem-volume/commit-to-image — ver docker-compose.emulator-a.yml do A). Usado
+    /// pra BLOQUEAR o "Resetar emulador" nesses casos (a recuperação certa é "Trocar chip" ou recriar pelo
+    /// deploy/compose). Default false (engines sem esse conceito).</summary>
+    Task<bool> IsComposeManagedAsync(CancellationToken ct) => Task.FromResult(false);
+
     /// <summary>Liga o aparelho já provisionado.</summary>
     Task<PhoneStatus> StartAsync(CancellationToken ct);
 

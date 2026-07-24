@@ -214,7 +214,8 @@ export const api = {
   // NOVO (apaga agenda, conta Google logada, WhatsApp e a identidade do device). Segunda linha, só quando
   // há suspeita de correlação por device. Retorna o PhoneStatus do container recém-criado (bootando).
   phoneResetEmulator: () =>
-    request<PhoneStatus>("/api/phone/reset-emulator", { method: "POST" }),
+    request<{ blocked: boolean; message: string | null; status: PhoneStatus | null }>(
+      "/api/phone/reset-emulator", { method: "POST" }),
   // Status da defesa anti-463 (Google sync) deste stack — pro selo na aba Guia Google.
   gsyncStatus: () =>
     request<{ active: boolean; provider: string; tokenPresent: boolean }>("/api/phone/gsync-status"),

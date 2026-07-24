@@ -111,6 +111,17 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return await StartAsync(ct);
     }
 
+    public async Task<bool> IsComposeManagedAsync(CancellationToken ct)
+    {
+        // Lê o label com.docker.compose.project. Presente/não-vazio = o container veio de um `docker compose`
+        // (ex.: o A pelo emulator-a.yml) → o reset por docker-run recriaria errado. `<no value>` (label
+        // ausente) e rc!=0 (container inexistente) contam como NÃO-gerenciado.
+        var (rc, outp, _) = await DockerCli.DockerAsync(ct,
+            "inspect", "-f", "{{index .Config.Labels \"com.docker.compose.project\"}}", Opts.ContainerName);
+        var val = outp.Trim();
+        return rc == 0 && val.Length > 0 && val != "<no value>";
+    }
+
     public async Task<PhoneStatus> ResetEmulatorAsync(CancellationToken ct)
     {
         // Reset FORTE (aparelho novo): derruba o container e APAGA o volume de dados — agenda, conta

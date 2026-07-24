@@ -92,6 +92,9 @@ fauth() {
     # (docker-compose.emulator-a.yml), cujo noVNC publica no host 6090 (não no 6080 do array, pra não
     # colidir com o base). Os demais stacks usam NOVNC_PORTS[i] (6080-6089). O 8000 do ws-scrcpy era do
     # experimento redroid (abandonado: bug de foco de input) — não usar.
+    # ⚠️ SINCRONIA: esta porta TEM que bater com PHONE_NOVNC_PORT do up-all-prod.sh (o Phone__NoVncPort,
+    # que o ProvisionAsync/"Resetar emulador" usa). Se divergirem, a tela dá 1006. O special-case do A
+    # (6090) está DUPLICADO lá — mudou aqui, mude lá.
     PHONE_PORT=${NOVNC_PORTS[$i]}
     [ "$i" = "0" ] && PHONE_PORT=6090
     echo "# Tela do Android (noVNC/ws-scrcpy) — atrás do portão."
