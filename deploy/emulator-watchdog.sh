@@ -165,6 +165,19 @@ ensure_guest_proxy() {
   [ "$now" != "$prev" ] && echo "$now" > "$health" 2>/dev/null   # só escreve na mudança (menos I/O)
 }
 
+# Locale pt-BR: o WhatsApp herda o idioma E o país (Brasil/+55) da entrada do número — sem isso o padrão
+# do docker-android é en-US (país cai nos EUA/+1). IDEMPOTENTE: só seta + reinicia o framework se ainda
+# NAO estiver pt-BR (senão restartaria a cada tick de 20s). persist.sys.locale persiste no /data, mas
+# recriação do container zera pro default da imagem -> o watchdog reaplica sozinho no 1º boot. Vale pros 10.
+ensure_locale() {
+  local cur
+  cur=$(docker exec "$CONTAINER" adb shell getprop persist.sys.locale 2>/dev/null | tr -d '\r')
+  [ "$cur" = "pt-BR" ] && return 0
+  docker exec "$CONTAINER" adb shell "su 0 setprop persist.sys.locale pt-BR" >/dev/null 2>&1
+  docker exec "$CONTAINER" adb shell "su 0 sh -c 'stop; start'" >/dev/null 2>&1
+  echo "[$(date -u +%FT%TZ)] [stack ${N}] locale setado pt-BR (framework reiniciando ~15-20s)." >&2
+}
+
 while true; do
   # Substring (não âncora): o filtro `name` do Docker casa contra o nome COM a barra inicial (/nome),
   # então "^nome$" pode não casar. Não há container superstring que colida com mtrx-dandroid/mtrxN-android.
@@ -177,6 +190,7 @@ while true; do
         ensure_tools
         ensure_guest_proxy
         clean_screen
+        ensure_locale
       else
         down=$((down + 1))
         if [ "$down" -ge 4 ] && ! is_off; then

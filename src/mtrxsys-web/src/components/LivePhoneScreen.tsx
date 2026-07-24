@@ -61,6 +61,11 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [wiping, setWiping] = useState(false);
   const [wipeMsg, setWipeMsg] = useState<string | null>(null);
+  // "Instalar/Atualizar WhatsApp": sideload do APK oficial (WhatsAppApkUrl / apk local) via o endpoint.
+  // Necessário quando o WhatsApp está desatualizado e cai na tela "baixe o app oficial", ou num emulador
+  // recém-recriado sem o app. Baixa ~130MB + instala → pode levar 1-2 min.
+  const [installing, setInstalling] = useState(false);
+  const [installMsg, setInstallMsg] = useState<string | null>(null);
   // Último `running` visto do container, pra detectar a VOLTA do emulador (false→true) e religar a
   // tela. Ref e não state: só é lido dentro do poll, e mudá-lo não deve provocar render.
   const runningRef = useRef<boolean | null>(null);
@@ -192,6 +197,25 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
     }
   }, []);
 
+  // Instalar/Atualizar o WhatsApp oficial (sideload). Usado quando cai na tela "baixe o app oficial"
+  // (APK velho) ou num emulador recém-recriado sem o app. Baixa ~130MB + instala → 1-2 min.
+  const installWhatsApp = useCallback(async () => {
+    setInstalling(true);
+    setInstallMsg("Baixando e instalando o WhatsApp oficial… pode levar 1-2 min.");
+    try {
+      const r = await api.phoneInstallWhatsApp();
+      const ok = (r.output ?? "").toLowerCase().includes("success");
+      setInstallMsg(ok
+        ? "WhatsApp instalado/atualizado. Reabra a tela e registre o número."
+        : `Retorno: ${r.output || "sem saída"}`);
+      setFrameKey((k) => k + 1);
+    } catch {
+      setInstallMsg("Falha ao instalar o WhatsApp. Veja os logs do emulador.");
+    } finally {
+      setInstalling(false);
+    }
+  }, []);
+
   // Bloco "provisionar" reusado nos DOIS caminhos sem-emulador (WahaOnly em coluna única e Emulator com
   // container ainda `not_created`). Fragmento (sem .phone-steps) pra o chamador embrulhar onde precisa.
   const provisionPrompt = (
@@ -305,6 +329,12 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           <a href={url} target="_blank" rel="noreferrer" className="phone-screen-link">
             abrir em nova aba
           </a>
+          {/* Instalar/Atualizar WhatsApp: sideload do APK oficial. Necessário quando cai na tela "baixe
+              o app oficial" (APK velho) ou num emulador novo sem o app. Não é destrutivo. */}
+          <button type="button" className="phone-reload" onClick={() => void installWhatsApp()} disabled={installing}>
+            {installing ? "Instalando… (1-2 min)" : "Instalar/Atualizar WhatsApp"}
+          </button>
+          {installMsg && <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>{installMsg}</p>}
           {/* Trocar chip: só quando o número atual foi restrito/queimado. Destrutivo → passa por modal. */}
           <button type="button" className="phone-reset-chip" onClick={() => setConfirmReset(true)} disabled={resetting}>
             {resetting ? "Trocando chip…" : "Trocar chip"}
