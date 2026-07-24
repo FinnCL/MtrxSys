@@ -57,10 +57,6 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   const [confirmReset, setConfirmReset] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
-  // "Resetar emulador" (nível 2): recria o aparelho do zero. Estado separado do "Trocar chip".
-  const [confirmWipe, setConfirmWipe] = useState(false);
-  const [wiping, setWiping] = useState(false);
-  const [wipeMsg, setWipeMsg] = useState<string | null>(null);
   // "Instalar/Atualizar WhatsApp": sideload do APK oficial (WhatsAppApkUrl / apk local) via o endpoint.
   // Necessário quando o WhatsApp está desatualizado e cai na tela "baixe o app oficial", ou num emulador
   // recém-recriado sem o app. Baixa ~130MB + instala → pode levar 1-2 min.
@@ -173,29 +169,6 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
     }
   }, []);
 
-  // "Resetar emulador" (nível 2): rm container + rm volume + provisiona do zero → aparelho NOVO. Apaga
-  // agenda, conta Google logada e WhatsApp. Depois precisa: logar o Google de novo, reinstalar o WhatsApp
-  // e registrar o número. Leva ~1-2 min pra bootar; o proxy in-guest volta pelo watchdog.
-  const resetEmulator = useCallback(async () => {
-    setConfirmWipe(false);
-    setWiping(true);
-    setWipeMsg(null);
-    try {
-      const r = await api.phoneResetEmulator();
-      if (r.blocked) {
-        // Emulador gerenciado por compose (ex.: o A): resetar por docker-run recriaria errado. A UI só
-        // avisa o caminho certo — não quebra nada.
-        setWipeMsg(r.message ?? "Reset bloqueado: emulador gerenciado pelo deploy. Use \"Trocar chip\".");
-      } else {
-        setWipeMsg("Emulador recriado. Aguarde o boot (~1-2 min) e o Proxy: OK; depois logue o Google, reinstale o WhatsApp e registre o novo número.");
-        setFrameKey((k) => k + 1);
-      }
-    } catch {
-      setWipeMsg("Falha ao resetar o emulador. Veja os logs do host (docker/KVM) e tente de novo.");
-    } finally {
-      setWiping(false);
-    }
-  }, []);
 
   // Instalar/Atualizar o WhatsApp oficial (sideload). Usado quando cai na tela "baixe o app oficial"
   // (APK velho) ou num emulador recém-recriado sem o app. Baixa ~130MB + instala → 1-2 min.
@@ -340,12 +313,6 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
             {resetting ? "Trocando chip…" : "Trocar chip"}
           </button>
           {resetMsg && <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>{resetMsg}</p>}
-          {/* Resetar emulador (nível 2): aparelho novo de verdade. Segunda linha — só se houver suspeita
-              de correlação por device (número novo morrendo rápido no mesmo aparelho). */}
-          <button type="button" className="phone-reset-chip" onClick={() => setConfirmWipe(true)} disabled={wiping}>
-            {wiping ? "Resetando…" : "Resetar emulador"}
-          </button>
-          {wipeMsg && <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>{wipeMsg}</p>}
         </div>
       )}
 
@@ -369,28 +336,6 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
         />
       )}
 
-      {confirmWipe && (
-        <ConfirmDialog
-          title="Resetar o emulador do zero?"
-          message={
-            <>
-              Recria o aparelho inteiro: apaga <b>a agenda, a conta Google logada, o WhatsApp e a
-              identidade do device</b>. Diferente de "Trocar chip", que só zera o WhatsApp.
-              <br /><br />
-              Depois você vai precisar <b>logar o Google de novo</b>, <b>reinstalar o WhatsApp</b> e
-              registrar o número. Leva <b>~1-2 min</b> pra bootar; o proxy volta sozinho.
-              <br /><br />
-              Use como <b>segunda linha</b>: só se um número novo morrer rápido no <b>mesmo aparelho</b>.
-              Pra troca comum, "Trocar chip" basta.
-            </>
-          }
-          confirmLabel="Sim, resetar emulador"
-          cancelLabel="Cancelar"
-          danger
-          onConfirm={() => void resetEmulator()}
-          onCancel={() => setConfirmWipe(false)}
-        />
-      )}
     </>
   );
 
