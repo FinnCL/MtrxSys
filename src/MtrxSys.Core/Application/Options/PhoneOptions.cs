@@ -24,6 +24,19 @@ public sealed class PhoneOptions
     /// suportado pela emulator_14.0.</summary>
     public string Device { get; set; } = "Samsung Galaxy S10";
 
+    /// <summary>Resolução do display do docker-android (SCREEN_WIDTH/HEIGHT/DEPTH ao provisionar). 404×850
+    /// casa EXATO com o aspect-ratio do iframe da aba Celular (404/850): a tela preenche sem sobrar faixa
+    /// lateral — onde a barra de controle do emulador apareceria. O default do budtmo é 500 (deixa ~98px
+    /// de faixa com a barra visível). O A foi criado com 404; sem setar isto, os stacks provisionados pela
+    /// aba caíam no 500 e a tela não ficava limpa como a do A. Ver o clean_screen do emulator-watchdog.sh.</summary>
+    public int ScreenWidth { get; set; } = 404;
+
+    /// <inheritdoc cref="ScreenWidth"/>
+    public int ScreenHeight { get; set; } = 850;
+
+    /// <inheritdoc cref="ScreenWidth"/>
+    public int ScreenDepth { get; set; } = 24;
+
     /// <summary>Porta do host pro noVNC (tela do Android) ao provisionar. Embutida na aba.</summary>
     public int NoVncPort { get; set; } = 6080;
 

@@ -92,6 +92,12 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
                 "--device", "/dev/kvm",
                 "-e", $"EMULATOR_DEVICE={Opts.Device}",
                 "-e", "WEB_VNC=true",
+                // Display 404×850 (= aspect-ratio do iframe da aba Celular): a tela preenche sem sobrar
+                // faixa lateral com a barra de controle do emulador. Sem isto o budtmo cai no default 500
+                // e a tela não fica limpa como a do A. Vale pra TODOS os stacks (todos usam este provision).
+                "-e", $"SCREEN_WIDTH={Opts.ScreenWidth}",
+                "-e", $"SCREEN_HEIGHT={Opts.ScreenHeight}",
+                "-e", $"SCREEN_DEPTH={Opts.ScreenDepth}",
                 // Bind em 127.0.0.1: o Caddy (rede host) alcança via loopback, mas o noVNC NÃO fica
                 // exposto direto na internet (furando o portão). Antes era "{porta}:6080" (= 0.0.0.0).
                 "-p", $"127.0.0.1:{Opts.NoVncPort}:6080",
