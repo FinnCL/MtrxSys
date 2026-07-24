@@ -23,11 +23,11 @@ MTRX_DOMAIN=$(getenv MTRX_DOMAIN)
 # vazio = link continua saindo em <letra>.<MTRX_DOMAIN>. Precisa casar com gen-config.sh (o Caddy só
 # atende <letra>.<MTRX_OPTOUT_DOMAIN> se este estiver setado lá também) + DNS de <a..j> apontado pro servidor.
 MTRX_OPTOUT_DOMAIN=$(getenv MTRX_OPTOUT_DOMAIN)
-# Quais stacks têm EMULADOR (disparo pela UI + proxy in-guest + gate de egresso). Lista de números
-# separados por espaço; default "1" = só o ambiente A. Pra ligar o B depois de provisionar o chip dele:
-# EMULATOR_STACKS="1 2" no .env.prod. Stack fora da lista fica WahaOnly (dispatcher sem docker.sock/Phone__,
-# sem tela de emulador na UI) — superfície mínima e sem a armadilha de mirar um emulador inexistente.
-EMULATOR_STACKS=$(getenv EMULATOR_STACKS); EMULATOR_STACKS=${EMULATOR_STACKS:-1}
+# Quais stacks têm EMULADOR (tela na UI + disparo pela UI + proxy in-guest + gate de egresso). Lista de
+# números separados por espaço; default = TODOS (paridade com o A: os 10 mostram a tela do emulador). A
+# tela fica em branco até o chip ser provisionado, e o gate fail-closed não deixa disparar sem emulador
+# real — então "todos" é seguro. Pra DESLIGAR num stack específico: EMULATOR_STACKS="1 2 3" no .env.prod.
+EMULATOR_STACKS=$(getenv EMULATOR_STACKS); EMULATOR_STACKS=${EMULATOR_STACKS:-"1 2 3 4 5 6 7 8 9 10"}
 emulator_on() { case " $EMULATOR_STACKS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # ── Guard de segredos (fail-closed) ──────────────────────────────────────────
@@ -123,27 +123,51 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   # Stack A: seed + PILOTO redroid (Phone__Engine=redroid). Sem este override, o deploy padrão
   # reverteria o A pra docker-android em silêncio. Some quando o redroid virar o default dos 10.
   [ "$n" = "1" ] && F+=(-f deploy/docker-compose.seed-a.yml -f deploy/docker-compose.redroid-a.yml)
-  # Modo EMULADOR nos stacks 2..10: dá ao DISPATCHER o que o stack A já tem na base (docker.sock +
-  # Phone__* + gate de egresso), via o overlay. As vars genéricas saem com o MESMO valor que a api do
-  # stack usa (PHONE_CONTAINER_${n} etc.), então dispatcher e api miram o MESMO container. Cria a pasta
-  # de saúde por-stack (o watchdog@${n} escreve nela) e liga o gate. Só quando o stack está em
-  # EMULATOR_STACKS; senão o dispatcher fica WahaOnly (sem overlay). O A (n=1) NÃO passa por aqui — o
-  # egresso dele segue dirigido pelo .env.prod (base docker-compose.yml), exatamente como sempre foi.
-  if [ "$n" != "1" ] && emulator_on "$n"; then
-    pc=$(getenv "PHONE_CONTAINER_${n}"); export PHONE_CONTAINER="${pc:-mtrx${n}-android}"
-    pe=$(getenv "PHONE_ENGINE_${n}");    export PHONE_ENGINE="${pe:-docker-android}"
-    # AdbPort só é usado pelo engine redroid (docker-android fala adb DENTRO do container); ainda assim
-    # o default segue a convenção única-por-stack (A=5555…J=5564) pra dois stacks redroid não colidirem.
-    pa=$(getenv "PHONE_ADB_PORT_${n}");  export PHONE_ADB_PORT="${pa:-$((5554 + n))}"
-    export EMULATOR_HEALTH_DIR="/home/ubuntu/emulator-health-${n}"
-    mkdir -p "$EMULATOR_HEALTH_DIR" 2>/dev/null || true
-    export EMULATOR_EGRESS_HEALTH_PATH="/proxy-health/proxy.health"
-    F+=(-f deploy/docker-compose.emulator-dispatch.yml)
+  # O ambiente A (n=1) usa SÓ a base + seed/redroid — NÃO recebe overlay por-stack (fica intocado, com
+  # as vars SEM sufixo do .env.prod). Limpa os genéricos pra nenhum valor de outro stack vazar pro A
+  # (A é o 1º do laço, mas a limpeza deixa isso robusto independente da ordem).
+  if [ "$n" = "1" ]; then
+    unset PHONE_CONTAINER PHONE_ENGINE PHONE_ADB_PORT EMULATOR_HEALTH_DIR EMULATOR_EGRESS_HEALTH_PATH \
+          ALERT_WEBHOOK_URL ALERT_LABEL COLLECTOR_SEARXNG_URL SERPER_API_KEY SEARXNG_CONTAINER \
+          ADDRBOOK_ENABLED ADDRBOOK_PROVIDER ADDRBOOK_GRACE \
+          ADDRBOOK_GOOGLE_CLIENT_ID ADDRBOOK_GOOGLE_CLIENT_SECRET ADDRBOOK_GOOGLE_REFRESH_TOKEN
   else
-    # Sem overlay (A usa a base; WahaOnly não tem emulador): limpa as vars genéricas pra NENHUM valor
-    # vazar de um stack pro próximo — em especial EMULATOR_EGRESS_HEALTH_PATH, que a base do A lê (o
-    # egresso do A vem do .env.prod, nunca herda de outro stack). Robusto independe da ordem do laço.
-    unset PHONE_CONTAINER PHONE_ENGINE PHONE_ADB_PORT EMULATOR_HEALTH_DIR EMULATOR_EGRESS_HEALTH_PATH
+    # ── Features COMUNS que o A tem na base e faltavam nos 9 (Alert/Coletor/Google sync) ──
+    # Valores POR-STACK vindos dos sufixos _N do .env.prod (vazio/false por padrão = desligado). O
+    # overlay usa estes nomes genéricos; cada n>1 re-exporta os seus antes do `up`, sem vazar.
+    export ALERT_WEBHOOK_URL="$(getenv ALERT_WEBHOOK_URL_${n})"
+    export ALERT_LABEL="$(getenv ALERT_LABEL_${n})"
+    export COLLECTOR_SEARXNG_URL="$(getenv COLLECTOR_SEARXNG_URL_${n})"
+    export SERPER_API_KEY="$(getenv SERPER_API_KEY_${n})"
+    export ADDRBOOK_ENABLED="$(getenv ADDRBOOK_ENABLED_${n})"
+    export ADDRBOOK_PROVIDER="$(getenv ADDRBOOK_PROVIDER_${n})"
+    export ADDRBOOK_GRACE="$(getenv ADDRBOOK_GRACE_${n})"
+    export ADDRBOOK_GOOGLE_CLIENT_ID="$(getenv ADDRBOOK_GOOGLE_CLIENT_ID_${n})"
+    export ADDRBOOK_GOOGLE_CLIENT_SECRET="$(getenv ADDRBOOK_GOOGLE_CLIENT_SECRET_${n})"
+    export ADDRBOOK_GOOGLE_REFRESH_TOKEN="$(getenv ADDRBOOK_GOOGLE_REFRESH_TOKEN_${n})"
+    # Nome do container do searxng por-stack (o serviço vem do overlay; o Coletor o alcança em searxng:8080).
+    export SEARXNG_CONTAINER="mtrx${n}-searxng"
+    F+=(-f deploy/docker-compose.common-features.yml)
+    # Remove o redis morto que JÁ esteja rodando: o profile 'disabled' impede o `up` de recriá-lo, mas não
+    # para o container que já está de pé. Nada depende dele (dead weight) → remoção segura, libera RAM.
+    docker rm -f "mtrx${n}-redis" >/dev/null 2>&1 || true
+    # ── Modo EMULADOR: dá ao DISPATCHER o que o A tem na base (docker.sock + Phone__* + gate de egresso).
+    # Genéricos com o MESMO valor que a api do stack usa (PHONE_CONTAINER_${n} etc.) → dispatcher e api
+    # miram o MESMO container. Cria a pasta de saúde (o watchdog@${n} escreve) e liga o gate. Aplicado a
+    # todo stack em EMULATOR_STACKS (default = todos). ──
+    if emulator_on "$n"; then
+      pc=$(getenv "PHONE_CONTAINER_${n}"); export PHONE_CONTAINER="${pc:-mtrx${n}-android}"
+      pe=$(getenv "PHONE_ENGINE_${n}");    export PHONE_ENGINE="${pe:-docker-android}"
+      # AdbPort só é usado pelo engine redroid (docker-android fala adb DENTRO do container); ainda assim
+      # o default segue a convenção única-por-stack (A=5555…J=5564) pra dois stacks redroid não colidirem.
+      pa=$(getenv "PHONE_ADB_PORT_${n}");  export PHONE_ADB_PORT="${pa:-$((5554 + n))}"
+      export EMULATOR_HEALTH_DIR="/home/ubuntu/emulator-health-${n}"
+      mkdir -p "$EMULATOR_HEALTH_DIR" 2>/dev/null || true
+      export EMULATOR_EGRESS_HEALTH_PATH="/proxy-health/proxy.health"
+      F+=(-f deploy/docker-compose.emulator-dispatch.yml)
+    else
+      unset PHONE_CONTAINER PHONE_ENGINE PHONE_ADB_PORT EMULATOR_HEALTH_DIR EMULATOR_EGRESS_HEALTH_PATH
+    fi
   fi
   echo "   -- ambiente ${L} --"
   docker compose "${EF[@]}" "${F[@]}" up -d --build

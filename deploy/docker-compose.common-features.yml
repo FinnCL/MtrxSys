@@ -1,0 +1,48 @@
+# Overlay que dá aos stacks 2..10 o que o ambiente A (base docker-compose.yml) tem e faltava nos composes
+# por-stack — pra paridade EXATA com o A. Aplicado a TODOS os n>1 pelo up-all-prod.sh. O A NÃO usa este
+# overlay (segue intacto). Os valores vêm por-stack (sufixo _N do .env.prod; ver .env.prod.example).
+#
+# Cobre: (1) features de env — Alert (api), Coletor (api), Google sync (dispatcher); (2) o SERVIÇO
+# searxng (motor do Coletor, que o A tem e os 9 não tinham); (3) DESLIGA o redis (o A não tem e nada
+# usa — dead weight; via profiles, sem precisar deletar dos 9 arquivos).
+services:
+  api:
+    environment:
+      # Alertas operacionais por webhook (vazio = desligado). Label identifica QUAL stack alertou.
+      Alert__WebhookUrl: ${ALERT_WEBHOOK_URL:-}
+      Alert__Label: ${ALERT_LABEL:-}
+      # Coletor: aponta pro searxng DESTE stack (serviço `searxng` abaixo, alcançável na rede do stack).
+      # Igual ao A. Serper segue como fonte opcional adicional (se a chave estiver setada).
+      Collector__SearxngBaseUrl: ${COLLECTOR_SEARXNG_URL:-http://searxng:8080}
+      Collector__SerperApiKey: ${SERPER_API_KEY:-}
+  dispatcher:
+    environment:
+      # Google Contacts sync (anti-463): salva o contato frio na agenda Google do chip antes de disparar.
+      # DESLIGADO por padrão (Enabled=false → provider NoOp). Credenciais Google são POR-STACK (cada chip
+      # tem a sua conta) — ver docs/google-contacts-sync.md. Validar 1 token no A antes de ligar nos 9.
+      AddressBookSync__Enabled: ${ADDRBOOK_ENABLED:-false}
+      AddressBookSync__Provider: ${ADDRBOOK_PROVIDER:-None}
+      AddressBookSync__GraceSeconds: ${ADDRBOOK_GRACE:-180}
+      AddressBookSync__Google__ClientId: ${ADDRBOOK_GOOGLE_CLIENT_ID:-}
+      AddressBookSync__Google__ClientSecret: ${ADDRBOOK_GOOGLE_CLIENT_SECRET:-}
+      AddressBookSync__Google__RefreshToken: ${ADDRBOOK_GOOGLE_REFRESH_TOKEN:-}
+
+  # Motor de busca do Coletor — mesmo serviço/imagem/config do A. Sem porta publicada (uso interno da api
+  # via http://searxng:8080; o A publica a 8888 só pra debug, dispensável nos 9). Monta SÓ o settings.yml
+  # do A (:ro) — não a pasta: o searxng lê a MESMA config, mas escreve seus arquivos transitórios (uwsgi
+  # etc.) na própria camada do container, sem corrida entre os 9 nem falha por :ro. O ./searxng resolve na
+  # raiz do repo (dir do 1º -f, docker-compose-N.yml), igual ao A.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: ${SEARXNG_CONTAINER:-mtrx-searxng-gen}
+    environment:
+      TZ: UTC
+      SEARXNG_BASE_URL: http://localhost/
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
+
+  # DESLIGA o redis: o A não tem, nenhum código/env/connection-string usa (dead weight). profiles impede
+  # o `up` de subi-lo (nunca ativamos o profile), sem precisar deletar o bloco dos 9 docker-compose-N.yml.
+  redis:
+    profiles: ["disabled"]
