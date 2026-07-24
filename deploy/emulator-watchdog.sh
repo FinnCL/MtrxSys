@@ -5,7 +5,8 @@
 # chamava o script sem args) byte-a-byte — mesmo container, mesmo proxy, mesma pasta de saúde.
 # So age em CRASH REAL (stop-after-pair DESLIGADO -> sem sono intencional -> sem churn):
 #   - Container EXITED (crashou) -> docker start (o entrypoint limpa os locks e reergue COM a conta).
-#   - Container Up mas Android nao booted por 4 checks (~80s, muito > boot normal ~24s) -> docker restart.
+#   - Container Up mas Android nao booted por 15 checks (~300s) -> docker restart. Generoso de PROPOSITO:
+#     cold boot pode levar 2-4 min; threshold curto reiniciava no meio do boot = LOOP (incidente A 2026-07-24).
 # NAO age em: boot em andamento (grace ~80s), adb ocupado no disparo (checa o CONTAINER primeiro), sono.
 #
 # + CLEANUP DURAVEL DA TELA (aba "Celular"/noVNC): quando o device esta booted, deixa SO o device
@@ -166,16 +167,16 @@ ensure_guest_proxy() {
 }
 
 # Locale pt-BR: o WhatsApp herda o idioma E o país (Brasil/+55) da entrada do número — sem isso o padrão
-# do docker-android é en-US (país cai nos EUA/+1). IDEMPOTENTE: só seta + reinicia o framework se ainda
-# NAO estiver pt-BR (senão restartaria a cada tick de 20s). persist.sys.locale persiste no /data, mas
-# recriação do container zera pro default da imagem -> o watchdog reaplica sozinho no 1º boot. Vale pros 10.
+# do docker-android é en-US (país cai nos EUA/+1). Só SETA a prop persistente; NÃO força stop;start.
+# ⚠️ Antes forçava um framework restart (stop;start), que deixava o Android "não-booted" e podia disparar
+# o docker restart do watchdog NO MEIO do boot = LOOP (foi o que quebrou o A em 2026-07-24). A prop
+# persiste e aplica no PRÓXIMO boot natural (keep-alive/crash/deploy) — sem instabilidade. Idempotente.
 ensure_locale() {
   local cur
   cur=$(docker exec "$CONTAINER" adb shell getprop persist.sys.locale 2>/dev/null | tr -d '\r')
   [ "$cur" = "pt-BR" ] && return 0
   docker exec "$CONTAINER" adb shell "su 0 setprop persist.sys.locale pt-BR" >/dev/null 2>&1
-  docker exec "$CONTAINER" adb shell "su 0 sh -c 'stop; start'" >/dev/null 2>&1
-  echo "[$(date -u +%FT%TZ)] [stack ${N}] locale setado pt-BR (framework reiniciando ~15-20s)." >&2
+  echo "[$(date -u +%FT%TZ)] [stack ${N}] locale pt-BR setado (aplica no próximo boot; sem forçar restart)." >&2
 }
 
 while true; do
@@ -193,7 +194,11 @@ while true; do
         ensure_locale
       else
         down=$((down + 1))
-        if [ "$down" -ge 4 ] && ! is_off; then
+        # Boot lento/frio (docker-android pode levar 2-4 min, ainda mais num AVD degradado ou após um
+        # framework restart) NÃO pode disparar docker restart no MEIO — senão vira LOOP (restart -> cold
+        # boot mais lento -> restart; foi o que travou o A em 2026-07-24). 15 checks (~300s) tolera o boot;
+        # travado de verdade ainda recupera em ~5 min.
+        if [ "$down" -ge 15 ] && ! is_off; then
           docker restart "$CONTAINER" >/dev/null 2>&1
           down=0
           sleep 60
