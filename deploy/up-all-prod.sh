@@ -23,6 +23,12 @@ MTRX_DOMAIN=$(getenv MTRX_DOMAIN)
 # vazio = link continua saindo em <letra>.<MTRX_DOMAIN>. Precisa casar com gen-config.sh (o Caddy só
 # atende <letra>.<MTRX_OPTOUT_DOMAIN> se este estiver setado lá também) + DNS de <a..j> apontado pro servidor.
 MTRX_OPTOUT_DOMAIN=$(getenv MTRX_OPTOUT_DOMAIN)
+# Quais stacks têm EMULADOR (disparo pela UI + proxy in-guest + gate de egresso). Lista de números
+# separados por espaço; default "1" = só o ambiente A. Pra ligar o B depois de provisionar o chip dele:
+# EMULATOR_STACKS="1 2" no .env.prod. Stack fora da lista fica WahaOnly (dispatcher sem docker.sock/Phone__,
+# sem tela de emulador na UI) — superfície mínima e sem a armadilha de mirar um emulador inexistente.
+EMULATOR_STACKS=$(getenv EMULATOR_STACKS); EMULATOR_STACKS=${EMULATOR_STACKS:-1}
+emulator_on() { case " $EMULATOR_STACKS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # ── Guard de segredos (fail-closed) ──────────────────────────────────────────
 # Os composes têm defaults FRACOS pra dev (PG=mtrx, WAHA dash admin/admin, api-key
@@ -91,16 +97,15 @@ echo "== [2/5] base dos 10 ambientes (build) =="
 for n in 1 2 3 4 5 6 7 8 9 10; do
   i=$((n-1)); L=${LETTERS[$i]}
   export WEB_PUBLIC_API_URL="https://${L}.${MTRX_DOMAIN}"
-  # SÓ o stack A tem emulador (docker-android). O toggle "Com emulador" agora COMANDA o disparo pela UI
-  # do emulador (fonte única) — mostrá-lo num stack SEM emulador é uma armadilha: ligar o modo faria o
-  # disparo tentar enviar por um emulador inexistente e falhar. Vazio nos demais = sem toggle (WahaOnly).
-  # Quando outro stack ganhar emulador, é só liberar a URL dele aqui.
+  # Tela do emulador na aba Celular + toggle "Com emulador" (que COMANDA o disparo pela UI): só nos
+  # stacks com emulador ligado (EMULATOR_STACKS). Mostrá-lo num stack SEM emulador é armadilha: ligar o
+  # modo faria o disparo mirar um emulador inexistente e falhar. Vazio nos demais = sem toggle (WahaOnly).
   # vnc_lite.html?scale=true (e NAO a raiz "/"): o cliente LEVE do noVNC nao tem barra de controle e,
   # com scale=true, ESCALA o desktop remoto pra caber no iframe preservando a proporcao. A raiz servia
   # a UI completa em tamanho fixo, e a aba Celular precisava recortar o iframe no CSS (transform +
   # overflow) pra esconder a barra — recorte que tambem comia conteudo do Android (topo/rodape). Com o
   # cliente certo o recorte deixou de existir: a tela cabe inteira e acompanha o tamanho do painel.
-  if [ "$n" = "1" ]; then export WEB_EMULATOR_URL="https://phone-${L}.${MTRX_DOMAIN}/vnc_lite.html?scale=true"; else export WEB_EMULATOR_URL=""; fi
+  if emulator_on "$n"; then export WEB_EMULATOR_URL="https://phone-${L}.${MTRX_DOMAIN}/vnc_lite.html?scale=true"; else export WEB_EMULATOR_URL=""; fi
   export "PHONE_VIEW_URL_${n}=https://phone-${L}.${MTRX_DOMAIN}"
   # Base do link de opt-out: subdomínio da MARCA quando MTRX_OPTOUT_DOMAIN está setado (mascara o nome
   # do sistema pro destinatário), senão o próprio domínio do stack. O token é por-stack, então cada
@@ -118,6 +123,28 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   # Stack A: seed + PILOTO redroid (Phone__Engine=redroid). Sem este override, o deploy padrão
   # reverteria o A pra docker-android em silêncio. Some quando o redroid virar o default dos 10.
   [ "$n" = "1" ] && F+=(-f deploy/docker-compose.seed-a.yml -f deploy/docker-compose.redroid-a.yml)
+  # Modo EMULADOR nos stacks 2..10: dá ao DISPATCHER o que o stack A já tem na base (docker.sock +
+  # Phone__* + gate de egresso), via o overlay. As vars genéricas saem com o MESMO valor que a api do
+  # stack usa (PHONE_CONTAINER_${n} etc.), então dispatcher e api miram o MESMO container. Cria a pasta
+  # de saúde por-stack (o watchdog@${n} escreve nela) e liga o gate. Só quando o stack está em
+  # EMULATOR_STACKS; senão o dispatcher fica WahaOnly (sem overlay). O A (n=1) NÃO passa por aqui — o
+  # egresso dele segue dirigido pelo .env.prod (base docker-compose.yml), exatamente como sempre foi.
+  if [ "$n" != "1" ] && emulator_on "$n"; then
+    pc=$(getenv "PHONE_CONTAINER_${n}"); export PHONE_CONTAINER="${pc:-mtrx${n}-android}"
+    pe=$(getenv "PHONE_ENGINE_${n}");    export PHONE_ENGINE="${pe:-docker-android}"
+    # AdbPort só é usado pelo engine redroid (docker-android fala adb DENTRO do container); ainda assim
+    # o default segue a convenção única-por-stack (A=5555…J=5564) pra dois stacks redroid não colidirem.
+    pa=$(getenv "PHONE_ADB_PORT_${n}");  export PHONE_ADB_PORT="${pa:-$((5554 + n))}"
+    export EMULATOR_HEALTH_DIR="/home/ubuntu/emulator-health-${n}"
+    mkdir -p "$EMULATOR_HEALTH_DIR" 2>/dev/null || true
+    export EMULATOR_EGRESS_HEALTH_PATH="/proxy-health/proxy.health"
+    F+=(-f deploy/docker-compose.emulator-dispatch.yml)
+  else
+    # Sem overlay (A usa a base; WahaOnly não tem emulador): limpa as vars genéricas pra NENHUM valor
+    # vazar de um stack pro próximo — em especial EMULATOR_EGRESS_HEALTH_PATH, que a base do A lê (o
+    # egresso do A vem do .env.prod, nunca herda de outro stack). Robusto independe da ordem do laço.
+    unset PHONE_CONTAINER PHONE_ENGINE PHONE_ADB_PORT EMULATOR_HEALTH_DIR EMULATOR_EGRESS_HEALTH_PATH
+  fi
   echo "   -- ambiente ${L} --"
   docker compose "${EF[@]}" "${F[@]}" up -d --build
 done

@@ -1,0 +1,28 @@
+# Overlay do DISPATCHER pro modo EMULADOR — aplicado por-stack SÓ quando o stack tem emulador ligado
+# (up-all-prod.sh: EMULATOR_STACKS). Dá ao dispatcher dos stacks 2..10 EXATAMENTE o que o dispatcher do
+# stack A (base docker-compose.yml) já tem: falar com o container do Android (docker.sock + Phone__*),
+# ENVIAR pela UI, e o gate de egresso (flag de saúde do watchdog). NÃO é aplicado nos stacks sem
+# emulador — o dispatcher deles fica WahaOnly, sem docker.sock nem Phone__ (superfície mínima).
+#
+# As vars genéricas (PHONE_*, EMULATOR_*) são exportadas por-stack pelo up-all-prod.sh no laço, com o
+# MESMO valor que a api do stack usa (PHONE_CONTAINER_N etc.) — dispatcher e api miram o MESMO container.
+# Aplicado assim (o up-all-prod.sh já faz isso quando emulator_on):
+#   docker compose -f docker-compose-N.yml ... -f deploy/docker-compose.emulator-dispatch.yml up -d
+services:
+  dispatcher:
+    environment:
+      # APARELHO VIRTUAL: no modo Emulator é o DISPATCHER que fala com o aparelho (grava contato na
+      # agenda, checa se o número tem WhatsApp, ENVIA pela UI) via `docker exec <container> adb ...`.
+      Phone__Engine: ${PHONE_ENGINE:-docker-android}
+      Phone__ContainerName: ${PHONE_CONTAINER}
+      Phone__AdbPort: ${PHONE_ADB_PORT:-5555}
+      # GATE DE EGRESSO (fail-closed): só envia no modo emulador se o flag do watchdog disser "ok"
+      # (proxy residencial de pé). VAZIO = DESLIGADO. up-all-prod aponta pro flag montado abaixo.
+      Dispatch__EmulatorEgressHealthPath: ${EMULATOR_EGRESS_HEALTH_PATH:-}
+    volumes:
+      # Flag de saúde do egresso (só-leitura), escrito pelo watchdog@N daquele stack em $EMULATOR_HEALTH_DIR.
+      # Diretório (não o arquivo) pra sobreviver à recriação do arquivo pelo watchdog sem virar mount órfão.
+      - ${EMULATOR_HEALTH_DIR}:/proxy-health:ro
+      # Socket do Docker: TODO o caminho do emulador (agenda, checar WhatsApp, ENVIAR pela UI) roda via
+      # `docker exec <container> adb ...`. Sem ele, cada chamada falha e o disparo NUNCA sai (em silêncio).
+      - /var/run/docker.sock:/var/run/docker.sock

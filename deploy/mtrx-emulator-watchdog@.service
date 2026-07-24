@@ -1,0 +1,30 @@
+# Watchdog do emulador POR-STACK (unit TEMPLATE do systemd). A instância (%i) é o NÚMERO do stack (1..10),
+# passado como $1 pro script — que dele deriva container (mtrxN-android; A=mtrx-dandroid), proxy
+# residencial (WAHA_PROXY_N) e pasta de saúde (/home/ubuntu/emulator-health[-N]).
+#
+# Instalar/ligar o watchdog de um stack (ex.: B = stack 2), DEPOIS de provisionar o chip dele:
+#   sudo cp /home/ubuntu/MtrxSys/deploy/mtrx-emulator-watchdog@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mtrx-emulator-watchdog@2
+#   journalctl -u mtrx-emulator-watchdog@2 -f      # logs vêm com o prefixo "[stack 2]"
+#
+# O ambiente A já roda como o serviço LEGADO mtrx-emulator-watchdog.service (script sem argumento =
+# stack 1) — pode continuar assim OU migrar pra mtrx-emulator-watchdog@1 (efeito idêntico) e remover o
+# legado. NÃO rode os dois pro mesmo stack ao mesmo tempo.
+[Unit]
+Description=MtrxSys emulator watchdog (stack %i)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+# %i = número do stack -> $1 do script (deriva container/proxy/pasta de saúde daquele stack).
+# Invoca via `bash` DE PROPÓSITO: os scripts do repo são versionados 100644 (sem bit +x) e a convenção
+# é chamá-los com `bash <script>` (ex.: up-all-prod.sh faz `bash deploy/gen-config.sh`). Execução direta
+# exigiria +x e daria "Permission denied" num checkout limpo do servidor.
+ExecStart=/bin/bash /home/ubuntu/MtrxSys/deploy/emulator-watchdog.sh %i
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target
