@@ -29,6 +29,11 @@ MTRX_OPTOUT_DOMAIN=$(getenv MTRX_OPTOUT_DOMAIN)
 # real — então "todos" é seguro. Pra DESLIGAR num stack específico: EMULATOR_STACKS="1 2 3" no .env.prod.
 EMULATOR_STACKS=$(getenv EMULATOR_STACKS); EMULATOR_STACKS=${EMULATOR_STACKS:-"1 2 3 4 5 6 7 8 9 10"}
 emulator_on() { case " $EMULATOR_STACKS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# CUTOVER pro TEMPLATE ÚNICO (docker-compose.stack.yml, extraído do A). Lista de stacks que usam o template
+# em vez do docker-compose-N.yml legado. Default VAZIO = nenhum (nada muda). Migre UM por vez: TEMPLATE_STACKS="2",
+# provado idêntico + dados preservados (volumes external), então "2 3", etc. O A (n=1) NUNCA usa template.
+TEMPLATE_STACKS=$(getenv TEMPLATE_STACKS); TEMPLATE_STACKS=${TEMPLATE_STACKS:-}
+template_on() { case " $TEMPLATE_STACKS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # ── Guard de segredos (fail-closed) ──────────────────────────────────────────
 # Os composes têm defaults FRACOS pra dev (PG=mtrx, WAHA dash admin/admin, api-key
@@ -90,6 +95,34 @@ LEDGERS=(docker-compose.ledger.yml docker-compose-2.ledger.yml docker-compose-3.
 export LANDING_ORIGIN="https://app.${MTRX_DOMAIN}"
 EF=(--env-file "$ENV_FILE")
 
+# Portas do web (array IRREGULAR — pula o 5175; espelha o WEB_PORTS do gen-config). As demais portas são
+# regulares (base + n-1) e saem por aritmética no wire_template.
+WEB_PORTS=(5173 5174 5176 5177 5178 5179 5180 5181 5182 5183)
+# Exporta as vars GENÉRICAS que o docker-compose.stack.yml consome, a partir dos valores POR-STACK do
+# .env.prod (PG${n}_PASS→PG_PASS, WAHA_PROXY_${n}→WAHA_PROXY…) + portas/volumes/nomes calculados. Os
+# volumes apontam pros EXISTENTES (mtrx${n}_pgdata${n} etc.) — dados preservados no cutover. Só no template.
+wire_template() {
+  local n="$1" i=$(( $1 - 1 )) L="${LETTERS[$(( $1 - 1 ))]}"
+  export STACK="mtrx${n}" STACK_LABEL="${L^^}"
+  export PG_PORT=$((5431 + n)) WAHA_PORT=$((2999 + n)) API_PORT=$((5079 + n)) NOVNC_PORT=$((6079 + n)) SCRCPY_PORT=$((7998 + n))
+  export WEB_PORT="${WEB_PORTS[$i]}"
+  export PG_VOLUME="mtrx${n}_pgdata${n}" WAHA_VOLUME="mtrx${n}_waha-sessions${n}"
+  export PG_PASS="$(getenv PG${n}_PASS)" JWT_SIGNING_KEY="$(getenv JWT${n}_SIGNING_KEY)"
+  export WAHA_API_KEY="$(getenv WAHA${n}_API_KEY)" WAHA_HOOK_TOKEN="$(getenv WAHA${n}_HOOK_TOKEN)"
+  export WAHA_DASH_USER="$(getenv WAHA${n}_DASH_USER)" WAHA_DASH_PASS="$(getenv WAHA${n}_DASH_PASS)"
+  export WAHA_SWAGGER_USER="$(getenv WAHA${n}_SWAGGER_USER)" WAHA_SWAGGER_PASS="$(getenv WAHA${n}_SWAGGER_PASS)"
+  export WAHA_PROXY="$(getenv WAHA_PROXY_${n})" WAHA_PROXY_USER="$(getenv WAHA_PROXY_${n}_USER)" WAHA_PROXY_PASS="$(getenv WAHA_PROXY_${n}_PASS)"
+  export SEED_ADMIN_EMAIL="$(getenv SEED${n}_ADMIN_EMAIL)" SEED_ADMIN_PASS="$(getenv SEED${n}_ADMIN_PASS)" SEED_ADMIN_NAME="$(getenv SEED${n}_ADMIN_NAME)"
+  export PHONE_VIEW_URL="https://phone-${L}.${MTRX_DOMAIN}"
+  local v
+  v=$(getenv "PHONE_NOVNC_PORT_${n}"); export PHONE_NOVNC_PORT="${v:-$((6079 + n))}"
+  v=$(getenv "PHONE_VOLUME_${n}");     export PHONE_VOLUME="${v:-android-data-${n}}"
+  v=$(getenv "MASK_CHIP_PHONE_${n}");  export MASK_CHIP_PHONE="${v:-false}"
+  export PHONE_WA_APK_URL="$(getenv PHONE_WA_APK_URL_${n})"
+  export EMULATOR_ME_PHONE="$(getenv EMULATOR_ME_PHONE_${n})" EMULATOR_ME_NAME="$(getenv EMULATOR_ME_NAME_${n})"
+  if [ -n "$MTRX_OPTOUT_DOMAIN" ]; then export OPTOUT_PUBLIC_URL="https://${L}.${MTRX_OPTOUT_DOMAIN}"; else export OPTOUT_PUBLIC_URL="https://${L}.${MTRX_DOMAIN}"; fi
+}
+
 echo "== [1/5] banco compartilhado (ledger) =="
 docker compose "${EF[@]}" -f docker-compose.shared.yml up -d
 
@@ -119,7 +152,18 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
   # ele, o webhook GLOBAL do WAHA POSTa os eventos SEM o header e a api recusa 401 (fail-closed) — nada
   # aparece no Chat. Stack 1 = WAHA_HOOK_TOKEN; demais = WAHA<n>_HOOK_TOKEN.
   if [ "$n" = "1" ]; then export STACK_HOOK_TOKEN=$(getenv WAHA_HOOK_TOKEN); else export STACK_HOOK_TOKEN=$(getenv "WAHA${n}_HOOK_TOKEN"); fi
-  F=(-f "${COMPOSES[$i]}" -f "${LEDGERS[$i]}" -f deploy/docker-compose.prod.yml -f deploy/docker-compose.hookfix.yml)
+  # Base do stack: TEMPLATE ÚNICO (docker-compose.stack.yml, extraído do A) quando o stack está em
+  # TEMPLATE_STACKS — cutover config-gated, um por vez; senão o docker-compose-N.yml legado. O A (n=1)
+  # NUNCA usa template. O template não tem `name:`, então precisa de `-p mtrxN` (senão o projeto cairia no
+  # default do diretório e colidiria); o legado/A pega o projeto do próprio `name:` do compose (não passa -p).
+  if [ "$n" != "1" ] && template_on "$n"; then
+    wire_template "$n"
+    P=(-p "mtrx${n}")
+    F=(-f docker-compose.stack.yml -f "${LEDGERS[$i]}" -f deploy/docker-compose.prod.yml -f deploy/docker-compose.hookfix.yml)
+  else
+    P=()
+    F=(-f "${COMPOSES[$i]}" -f "${LEDGERS[$i]}" -f deploy/docker-compose.prod.yml -f deploy/docker-compose.hookfix.yml)
+  fi
   # Stack A: seed + PILOTO redroid (Phone__Engine=redroid). Sem este override, o deploy padrão
   # reverteria o A pra docker-android em silêncio. Some quando o redroid virar o default dos 10.
   [ "$n" = "1" ] && F+=(-f deploy/docker-compose.seed-a.yml -f deploy/docker-compose.redroid-a.yml)
@@ -145,11 +189,9 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
     export ADDRBOOK_GOOGLE_CLIENT_ID="$(getenv ADDRBOOK_GOOGLE_CLIENT_ID_${n})"
     export ADDRBOOK_GOOGLE_CLIENT_SECRET="$(getenv ADDRBOOK_GOOGLE_CLIENT_SECRET_${n})"
     export ADDRBOOK_GOOGLE_REFRESH_TOKEN="$(getenv ADDRBOOK_GOOGLE_REFRESH_TOKEN_${n})"
-    # Nome do container do searxng por-stack (o serviço vem do overlay; o Coletor o alcança em searxng:8080).
+    # Nome do container do searxng por-stack (usado pelo overlay legado; o template usa ${STACK}-searxng).
     export SEARXNG_CONTAINER="mtrx${n}-searxng"
-    F+=(-f deploy/docker-compose.common-features.yml)
-    # Remove o redis morto que JÁ esteja rodando: o profile 'disabled' impede o `up` de recriá-lo, mas não
-    # para o container que já está de pé. Nada depende dele (dead weight) → remoção segura, libera RAM.
+    # Remove o redis morto que JÁ esteja rodando (só existe no caminho legado; o template nem declara redis).
     docker rm -f "mtrx${n}-redis" >/dev/null 2>&1 || true
     # ── Modo EMULADOR: dá ao DISPATCHER o que o A tem na base (docker.sock + Phone__* + gate de egresso).
     # Genéricos com o MESMO valor que a api do stack usa (PHONE_CONTAINER_${n} etc.) → dispatcher e api
@@ -164,13 +206,17 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
       export EMULATOR_HEALTH_DIR="/home/ubuntu/emulator-health-${n}"
       mkdir -p "$EMULATOR_HEALTH_DIR" 2>/dev/null || true
       export EMULATOR_EGRESS_HEALTH_PATH="/proxy-health/proxy.health"
-      F+=(-f deploy/docker-compose.emulator-dispatch.yml)
     else
       unset PHONE_CONTAINER PHONE_ENGINE PHONE_ADB_PORT EMULATOR_HEALTH_DIR EMULATOR_EGRESS_HEALTH_PATH
     fi
+    # Overlays SÓ no caminho LEGADO — o template já tem searxng/Alert/Coletor/Google-sync/emulador nativos.
+    if ! template_on "$n"; then
+      F+=(-f deploy/docker-compose.common-features.yml)
+      emulator_on "$n" && F+=(-f deploy/docker-compose.emulator-dispatch.yml)
+    fi
   fi
   echo "   -- ambiente ${L} --"
-  docker compose "${EF[@]}" "${F[@]}" up -d --build
+  docker compose "${P[@]}" "${EF[@]}" "${F[@]}" up -d --build
 done
 
 echo "== [3/5] Android (KVM) — provisionamento SOB DEMANDA (pela aba \"Celular\") =="

@@ -1,0 +1,261 @@
+# TEMPLATE ÚNICO de um ambiente (extraído do ambiente A, docker-compose.yml — a referência-ouro).
+# TODOS os 9 stacks (2..10) são instâncias DESTE arquivo, isolados por `-p <projeto>` e parametrizados
+# 100% por um .env por-stack (deploy/.env.<n>). "Iguais, separados, dinâmicos":
+#   docker compose -p mtrx2 --env-file deploy/.env.2 -f docker-compose.stack.yml -f deploy/docker-compose.prod.yml up -d
+# NÃO substitui o ambiente A: o A segue no docker-compose.yml próprio (intocado). Este template traz
+# searxng/Alert/Coletor/Google-sync/emulador NATIVOS (como o A), então NÃO usa os overlays common-features
+# nem emulator-dispatch — o que o A tem na base, aqui é da base também.
+#
+# O que muda por stack vive SÓ no .env.<n>: STACK (prefixo dos nomes), portas, volumes, proxy, segredos,
+# número. O que é igual pros 10 (topologia, imagens, healthchecks) mora AQUI, num lugar só.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: ${STACK}-postgres
+    environment:
+      POSTGRES_DB: mtrx
+      POSTGRES_USER: mtrx
+      POSTGRES_PASSWORD: ${PG_PASS:-mtrx}
+      TZ: UTC
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:${PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mtrx", "-d", "mtrx"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Builda a imagem do WAHA stub e sai. Só existe pra o `up --build` produzir a imagem. Taggeia sempre
+  # mtrxsys-waha-emulator:latest. Em prod o WAHA_IMAGE aponta pro WAHA real (devlikeapro/waha:latest).
+  waha-emulator-build:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.WahaEmulator/Dockerfile
+    image: mtrxsys-waha-emulator:latest
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
+  waha:
+    image: ${WAHA_IMAGE:-mtrxsys-waha-emulator:latest}
+    container_name: ${STACK}-waha
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:${WAHA_PORT:-3000}:3000"
+    environment:
+      TZ: UTC
+      # Lidas só quando WAHA_IMAGE = stub (o WAHA real ignora env desconhecida).
+      Emulator__AutoConnect: ${EMULATOR_AUTOCONNECT:-true}
+      Emulator__MePhone: ${EMULATOR_ME_PHONE:-5511999990000}
+      Emulator__MePushName: ${EMULATOR_ME_NAME:-Chip Emulado}
+      Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}
+      WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
+      WAHA_WEBJS_WEB_VERSION: ${WAHA_WEBJS_WEB_VERSION:-}
+      WAHA_LOG_LEVEL: ${WAHA_LOG_LEVEL:-info}
+      # Bypass do proxy pro host interno (api): sem isto o webhook (waha->api) iria pelo proxy externo e
+      # o "SAIR" pararia de chegar em silêncio (risco de ban). Ver docs/proxy.md.
+      NO_PROXY: "api,localhost,127.0.0.1"
+      no_proxy: "api,localhost,127.0.0.1"
+      WAHA_DASHBOARD_ENABLED: "true"
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASH_USER:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASH_PASS:-admin}
+      WHATSAPP_API_KEY: ${WAHA_API_KEY:-mtrxsys-dev-key}
+      WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://api:8080/webhooks/waha}
+      WHATSAPP_HOOK_EVENTS: ${WAHA_HOOK_EVENTS:-message,message.any,message.ack}
+      WHATSAPP_SWAGGER_USERNAME: ${WAHA_SWAGGER_USER:-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA_SWAGGER_PASS:-admin}
+    volumes:
+      - waha-sessions:/app/.sessions
+    depends_on:
+      api:
+        condition: service_healthy
+      waha-emulator-build:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Api/Dockerfile
+    container_name: ${STACK}-api
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:${API_PORT:-5080}:8080"
+    environment:
+      TZ: UTC
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+      Waha__WebhookCallbackUrl: "http://api:8080/webhooks/waha"
+      # Proxy por chip (anti-correlação de IP): aplicado na sessão WAHA pela api. ÚNICO por stack.
+      Waha__ProxyServer: ${WAHA_PROXY:-}
+      Waha__ProxyUsername: ${WAHA_PROXY_USER:-}
+      Waha__ProxyPassword: ${WAHA_PROXY_PASS:-}
+      Webhooks__WahaToken: ${WAHA_HOOK_TOKEN:-}
+      Alert__WebhookUrl: ${ALERT_WEBHOOK_URL:-}
+      Alert__Label: ${ALERT_LABEL:-}
+      HumanPhase__EffectiveFrom: ${HUMAN_PHASE_FROM:-}
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
+      # Admin semeado no 1º boot (login do dashboard). O A semeia via docker-compose.seed-a.yml; aqui é
+      # nativo (os 9 precisam de um admin próprio). Vazio = não semeia (o A, que usa o overlay, ignora).
+      Seed__Admin__Email: ${SEED_ADMIN_EMAIL:-}
+      Seed__Admin__Password: ${SEED_ADMIN_PASS:-}
+      Seed__Admin__DisplayName: ${SEED_ADMIN_NAME:-}
+      Collector__SearxngBaseUrl: ${COLLECTOR_SEARXNG_URL:-http://searxng:8080}
+      Collector__SerperApiKey: ${SERPER_API_KEY:-}
+      Phone__ContainerName: ${PHONE_CONTAINER:-${STACK}-android}
+      Phone__ViewUrl: ${PHONE_VIEW_URL:-}
+      Phone__NoVncPort: ${PHONE_NOVNC_PORT:-6080}
+      Phone__VolumeName: ${PHONE_VOLUME:-android-data}
+      Phone__WhatsAppApkUrl: ${PHONE_WA_APK_URL:-}
+      Phone__Engine: ${PHONE_ENGINE:-docker-android}
+      Phone__AdbPort: ${PHONE_ADB_PORT:-5555}
+      Presence__MaskChipPhone: ${MASK_CHIP_PHONE:-false}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+    restart: unless-stopped
+
+  dispatcher:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Dispatcher/Dockerfile
+    container_name: ${STACK}-dispatcher
+    environment:
+      TZ: UTC
+      DOTNET_ENVIRONMENT: Production
+      OptOut__PublicBaseUrl: ${OPTOUT_PUBLIC_URL:-}
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+      HumanPhase__EffectiveFrom: ${HUMAN_PHASE_FROM:-}
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
+      # ANTI-463: Google Contacts sync (DESLIGADO por padrão). Credenciais Google são POR-STACK.
+      AddressBookSync__Enabled: ${ADDRBOOK_ENABLED:-false}
+      AddressBookSync__Provider: ${ADDRBOOK_PROVIDER:-None}
+      AddressBookSync__GraceSeconds: ${ADDRBOOK_GRACE:-180}
+      AddressBookSync__Google__ClientId: ${ADDRBOOK_GOOGLE_CLIENT_ID:-}
+      AddressBookSync__Google__ClientSecret: ${ADDRBOOK_GOOGLE_CLIENT_SECRET:-}
+      AddressBookSync__Google__RefreshToken: ${ADDRBOOK_GOOGLE_REFRESH_TOKEN:-}
+      # APARELHO VIRTUAL: no modo Emulator é o DISPATCHER que fala com o aparelho (mesmas vars da api).
+      Phone__Engine: ${PHONE_ENGINE:-docker-android}
+      Phone__ContainerName: ${PHONE_CONTAINER:-${STACK}-android}
+      Phone__AdbPort: ${PHONE_ADB_PORT:-5555}
+      # GATE DE EGRESSO (fail-closed): só envia no modo emulador se o watchdog escreveu "ok". Vazio = off.
+      Dispatch__EmulatorEgressHealthPath: ${EMULATOR_EGRESS_HEALTH_PATH:-}
+    volumes:
+      # Flag de saúde do egresso (por-stack), escrito pelo watchdog@N do host. Diretório (não o arquivo).
+      - ${EMULATOR_HEALTH_DIR:-/home/ubuntu/emulator-health}:/proxy-health:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./src/mtrxsys-web
+      dockerfile: Dockerfile
+      args:
+        # Sobrescritos pelo deploy/docker-compose.prod.yml em produção (WEB_PUBLIC_API_URL/WEB_EMULATOR_URL).
+        VITE_API_URL: ${WEB_PUBLIC_API_URL:-http://localhost:5080}
+        VITE_APP_LABEL: ${STACK_LABEL:-}
+        VITE_EMULATOR_URL: ${WEB_EMULATOR_URL:-${PHONE_VIEW_URL:-}}
+        VITE_EMULATOR_KIND: ${PHONE_VIEWER_KIND:-}
+        VITE_PHONE_SERVER: ${PHONE_SERVER_OPTION:-}
+        VITE_EMULATOR_UDID: ${PHONE_UDID:-}
+    container_name: ${STACK}-web
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:${WEB_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Aparelho virtual estático (profile "phone", NÃO sobe no `up` normal) — o caminho ativo é o `docker
+  # run` da API pela aba "Celular". Mantido por paridade com o A.
+  android:
+    image: budtmo/docker-android:emulator_14.0
+    container_name: ${STACK}-android-static
+    profiles: ["phone"]
+    devices:
+      - /dev/kvm
+    environment:
+      EMULATOR_DEVICE: "Samsung Galaxy S10"
+      WEB_VNC: "true"
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:${NOVNC_PORT:-6080}:6080"
+    volumes:
+      - android-data:/home/androidusr
+    restart: unless-stopped
+
+  # Android LOCAL (Windows) via ws-scrcpy — profile "phone-local", experimento, não sobe no `up` normal.
+  scrcpy:
+    build:
+      context: ./ws-scrcpy
+      dockerfile: Dockerfile
+    image: mtrxsys-ws-scrcpy:latest
+    container_name: ${STACK}-scrcpy
+    profiles: ["phone-local"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${MTRX_BIND:-127.0.0.1}:${SCRCPY_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  # Motor de busca do Coletor — igual ao A. O caminho ./searxng resolve na raiz do repo (dir do 1º -f).
+  searxng:
+    image: searxng/searxng:latest
+    container_name: ${STACK}-searxng
+    environment:
+      TZ: UTC
+      SEARXNG_BASE_URL: http://localhost/
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
+
+  cli:
+    build:
+      context: .
+      dockerfile: src/MtrxSys.Cli/Dockerfile
+    image: mtrxsys-cli:latest
+    environment:
+      TZ: UTC
+      DOTNET_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=mtrx;Username=mtrx;Password=${PG_PASS:-mtrx}"
+      Waha__BaseUrl: "http://waha:3000"
+      Waha__ApiKey: ${WAHA_API_KEY:-mtrxsys-dev-key}
+    volumes:
+      - ./tmp:/work
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["tools"]
+
+volumes:
+  # pgdata/waha-sessions: EXTERNAL apontando pros volumes EXISTENTES (mtrx${n}_pgdata${n} etc.) — o cutover
+  # PRESERVA os dados. Volume plain viraria mtrx${n}_pgdata (nome DIFERENTE do atual) = banco vazio. Esses
+  # volumes existem (o stack já roda), então a validação do external passa.
+  pgdata:
+    external: true
+    name: ${PG_VOLUME:-pgdata}
+  waha-sessions:
+    external: true
+    name: ${WAHA_VOLUME:-waha-sessions}
+  # android-data: PLAIN (NÃO external). O serviço `android` estático é inerte (profile "phone"); o emulador
+  # ATIVO é dinâmico (ProvisionAsync faz `docker run -v android-data-N`). External aqui arriscaria FALHAR o
+  # `up` quando android-data-N ainda não existe (stack sem chip). Plain: compose só cria se o serviço rodar.
+  android-data:
