@@ -139,6 +139,61 @@ public static class PhoneEndpoints
         group.MapGet("/whatsapp-number", async (IPhoneOrchestrator phone, CancellationToken ct) =>
             Results.Ok(new { number = await phone.GetWhatsAppNumberAsync(ct) }));
 
+        // Estado da CONTA no emulador (registered/revoked/none/unknown) + se este aparelho aceita a
+        // limpeza por imagem-ouro. A tela usa isso pra oferecer o botão CERTO: "Trocar chip" (pm clear)
+        // numa troca por escolha, "Limpar aparelho restringido" quando o servidor derrubou a conta — ali
+        // o pm clear é insuficiente (mantém android_id/GSF do device queimado). Ver GetWhatsAppAccountStateAsync.
+        group.MapGet("/whatsapp-state", async (IPhoneOrchestrator phone, CancellationToken ct) =>
+        {
+            var st = await phone.GetWhatsAppAccountStateAsync(ct);
+            return Results.Ok(new
+            {
+                state = st.State,
+                phone = st.Phone,
+                revokedByServer = st.RevokedByServer,
+                cleanSupported = await phone.IsComposeManagedAsync(ct),
+            });
+        });
+
+        // "Limpar aparelho restringido": aparelho NOVO a partir da imagem-ouro (molde que nunca registrou
+        // número). Não recria nada aqui — grava o flag-volume e o emulator-watchdog executa pelo compose
+        // (ver RequestCleanDeviceAsync). TRAVA invertida em relação ao /reset-emulator: aqui só vale pro
+        // emulador COMPOSE-MANAGED (o A), que é quem tem watchdog + molde. Nos stacks docker-run o flag
+        // ficaria sem ninguém pra consumir, então bloqueia com mensagem em vez de fingir que funcionou.
+        group.MapPost("/clean-device", async (IPhoneOrchestrator phone, ISystemStateRepository stateRepo,
+            IUnitOfWork uow, CancellationToken ct) =>
+        {
+            if (!await phone.IsComposeManagedAsync(ct))
+            {
+                return Results.Ok(new
+                {
+                    blocked = true,
+                    paused = false,
+                    message = "Este emulador não é gerenciado por compose — a limpeza por imagem-ouro "
+                        + "existe só no stack A. Para um número novo aqui, use \"Trocar chip\".",
+                });
+            }
+
+            // PAUSA A FILA ANTES de pedir o aparelho novo. Sem isto o dispatcher segue disparando contra
+            // um container que está sendo APAGADO: os envios falham no adb, os contatos ficam marcados
+            // como tentados e o audit enche de erro — e depois do wipe não há chip nenhum, então TODOS
+            // falhariam até alguém perceber. Tem que ser ManualPauseReason: `IsManuallyPaused` (o que o
+            // DispatchEngine consulta) compara com ESSA constante — pausar com um motivo qualquer não
+            // pararia nada. Fica pausado de propósito: o operador retoma pelo botão do Disparo depois de
+            // registrar o chip novo, reconceder as permissões e re-importar os grupos.
+            var st = await stateRepo.GetAsync(ct);
+            st.Pause(SystemStateAggregate.ManualPauseReason);
+            await stateRepo.UpdateAsync(st, ct);
+            await uow.SaveChangesAsync(ct);
+
+            return Results.Ok(new
+            {
+                blocked = false,
+                paused = true,
+                message = await phone.RequestCleanDeviceAsync(ct),
+            });
+        });
+
         // Vínculo por QR via DEEP LINK (sem câmera, sem rate limit — engine GOWS): reinicia a sessão
         // pra QR fresco, pega a URL do QR (https://wa.me/settings/linked_devices#...) e abre no WhatsApp
         // do emulador via intent. Aparece "Deseja conectar um dispositivo?" — o usuário toca "Continuar"

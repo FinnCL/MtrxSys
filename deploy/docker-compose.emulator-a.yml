@@ -2,7 +2,14 @@
 # no AVD trava o boot). Na rede do stack (alcanca gost). Proxy aplicado pos-boot (http_proxy=gost).
 services:
   dandroid:
-    image: budtmo/docker-android:emulator_14.0
+    # TAG DE TRABALHO, nao a upstream. Ate 25/07 este campo era `budtmo/docker-android:emulator_14.0`
+    # e essa tag era SOBRESCRITA com commits do device em uso -> "recriar limpo" restaurava a
+    # identidade acumulada (android_id/GSF/phoneid de 05-06/07) e o chip novo herdava a ficha do
+    # queimado. Agora sao duas tags com papeis separados: `mtrx-android:golden` e o molde imutavel
+    # (nunca registrou numero, nunca recebe commit) e `mtrx-android:live` e o estado de trabalho.
+    # Construir/atualizar: deploy/build-golden-image-a.sh · aparelho novo: deploy/limpar-emulador-a.sh
+    # · salvar chip registrado: deploy/salvar-estado-emulador-a.sh
+    image: mtrx-android:live
     container_name: mtrx-dandroid
     # FIX self-healing: limpa o lock X travado (/tmp/.X0-lock do boot anterior) ANTES de subir o display.
     # Sem isso, o Xvfb vê o display :0 "em uso" e o d_screen/vnc/d_wm vão FATAL — era a causa raiz de:

@@ -667,14 +667,87 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return clean.Length == 0 ? "C" + fallbackDigits : clean;
     }
 
+    // ── Cache curto do dump das shared_prefs do WhatsApp ──────────────────────────────────────────
+    // Três consumidores leem os MESMOS prefs: o dispatcher (reconcile do aquecimento, a cada ciclo), o
+    // selo da aba Celular (poll) e o estado que decide o botão de recuperação. Sem cache, cada aba
+    // aberta multiplica `docker exec ... adb shell` — e o adb do emulador é recurso DISPUTADO: é o mesmo
+    // canal que o disparo usa pra enviar pela UI (uiautomator). Latência a mais ali significa envio mais
+    // lento e, no limite, timeout no meio de um envio.
+    //
+    // Single-flight: quem chega durante uma leitura em curso espera e aproveita o resultado, em vez de
+    // abrir um segundo `docker exec`. TTL curto (15s) porque isto muda raro — e as duas operações que
+    // MUDAM o estado (pm clear e pedido de aparelho novo) invalidam na hora, então a UI nunca mostra
+    // "registrado" depois de um clique que zerou a conta.
+    private const long PrefsTtlMs = 15_000;
+    private readonly SemaphoreSlim _prefsGate = new(1, 1);
+    private string? _prefsCache;
+    private long _prefsCachedAtTicks;
+
+    private void InvalidatePrefsCache() => Volatile.Write(ref _prefsCache, null);
+
+    private bool PrefsCacheFresh(out string? cached)
+    {
+        cached = Volatile.Read(ref _prefsCache);
+        return cached is not null && Environment.TickCount64 - Volatile.Read(ref _prefsCachedAtTicks) < PrefsTtlMs;
+    }
+
+    private async Task<string> ReadWhatsAppPrefsAsync(CancellationToken ct)
+    {
+        if (PrefsCacheFresh(out var hit)) { return hit!; }
+
+        await _prefsGate.WaitAsync(ct);
+        try
+        {
+            if (PrefsCacheFresh(out var second)) { return second!; }
+
+            // UMA ida ao device pra tudo. A sentinela sai ANTES do grep: se o adb não responder, ela não
+            // aparece e o Parse devolve "unknown" (fail-safe) em vez de "nunca registrou".
+            var (_, outp, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+                $"echo {WhatsAppAccountState.AdbSentinel}; grep -ah -E "
+                + $"'registration_jid|saved_user_before_logout|previously_logged_out_from_primary' "
+                + $"/data/data/{Opts.WhatsAppPackage}/shared_prefs/*.xml 2>/dev/null");
+            var text = outp ?? "";
+            Volatile.Write(ref _prefsCachedAtTicks, Environment.TickCount64);
+            Volatile.Write(ref _prefsCache, text);
+            return text;
+        }
+        finally
+        {
+            _prefsGate.Release();
+        }
+    }
+
     public async Task<string> GetWhatsAppNumberAsync(CancellationToken ct)
     {
-        // Lê o registration_jid dos prefs do WhatsApp no emulador — o número CANÔNICO da conta
-        // (o que o WhatsApp usa de fato). Auto-preenche o Passo 2 e evita digitar o número errado.
-        var (_, outp, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
-            "adb", "shell", $"grep -ah registration_jid /data/data/{Opts.WhatsAppPackage}/shared_prefs/*.xml 2>/dev/null");
-        var m = System.Text.RegularExpressions.Regex.Match(outp ?? "", @"registration_jid[^0-9]*([0-9]{12,13})");
-        return m.Success ? m.Groups[1].Value : "";
+        // O número CANÔNICO da conta (registration_jid) — auto-preenche o Passo 2 e é a fonte da verdade
+        // do reconcile do aquecimento no modo Emulador. Delega pro estado pra não haver DOIS parsers do
+        // mesmo arquivo: divergirem significaria o dispatcher e a UI discordarem sobre qual chip está
+        // logado, que é exatamente o tipo de furo anti-ban que já custou caro aqui.
+        var st = await GetWhatsAppAccountStateAsync(ct);
+        return st.State == "registered" ? st.Phone ?? "" : "";
+    }
+
+    // As chaves de logout são escritas pelo PRÓPRIO WhatsApp quando o servidor derruba a conta (medidas
+    // em 2026-07-25 no chip 557191071879) e sobrevivem ao logout — é o que distingue "o servidor tirou"
+    // de "deram pm clear aqui". A interpretação é FUNÇÃO PURA (WhatsAppAccountState.Parse) e tem teste;
+    // aqui fica só o I/O.
+    public async Task<WhatsAppAccountState> GetWhatsAppAccountStateAsync(CancellationToken ct) =>
+        WhatsAppAccountState.Parse(await ReadWhatsAppPrefsAsync(ct));
+
+    public async Task<string> RequestCleanDeviceAsync(CancellationToken ct)
+    {
+        InvalidatePrefsCache();
+        // Só GRAVA O PEDIDO (flag-volume). Quem executa é o emulator-watchdog no host — ver a nota do
+        // contrato: recriar daqui por docker-run montaria o container errado. O watchdog consome o flag,
+        // faz `mtrx-android:golden -> :live` e recria PELO COMPOSE, com rede/porta/entrypoint certos.
+        var flag = $"{Opts.ContainerName}-clean-request";
+        var (rc, _, err) = await DockerCli.DockerAsync(ct, "volume", "create", flag);
+        if (rc != 0)
+        {
+            return $"não consegui registrar o pedido de limpeza ({flag}): {err}";
+        }
+        return "Pedido registrado. O watchdog vai recriar o aparelho a partir da imagem-ouro em até ~20s; "
+            + "o boot leva ~2-3 min. Espere o selo \"Proxy do emulador: OK\" antes de registrar o chip.";
     }
 
     public async Task<string> OpenUrlAsync(string url, CancellationToken ct)
@@ -700,6 +773,9 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         // "Trocar chip": zera os dados do WhatsApp no emulador (pm clear) → volta pra tela de
         // boas-vindas, pronto pra registrar OUTRO número. A conta velha some do APP (não do servidor
         // do WhatsApp). Depois re-lança o app na tela de boas-vindas.
+        // Invalida o cache dos prefs: sem isto a UI seguiria mostrando "registrado" por até 15s DEPOIS
+        // do clique que zerou a conta — e o dispatcher leria o número velho no próximo ciclo.
+        InvalidatePrefsCache();
         var (rc, outp, err) = await DockerCli.DockerAsync(ct,
             "exec", Opts.ContainerName, "adb", "shell", "pm", "clear", Opts.WhatsAppPackage);
         if (rc != 0)

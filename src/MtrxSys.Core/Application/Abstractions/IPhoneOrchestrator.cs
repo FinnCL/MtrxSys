@@ -75,6 +75,25 @@ public interface IPhoneOrchestrator
     /// o Passo 2 e evitar digitar o número errado. Vazio se não achar. Default: não suportado.</summary>
     Task<string> GetWhatsAppNumberAsync(CancellationToken ct) => Task.FromResult("");
 
+    /// <summary>Estado da CONTA do WhatsApp dentro do emulador — distingue três situações que a tela
+    /// mostrava iguais (e cuja confusão custou um chip em 2026-07-25): conta viva, conta DERRUBADA pelo
+    /// servidor, e aparelho que nunca registrou. É o que decide qual botão de recuperação faz sentido:
+    /// "Trocar chip" (pm clear, mantém o device) resolve troca POR ESCOLHA, mas é insuficiente depois de
+    /// uma restrição — ali o `android_id`/GSF do device queimado sobrevivem ao pm clear e o chip novo
+    /// herda a ficha. Ver <see cref="RequestCleanDeviceAsync"/>. Default: "unknown".</summary>
+    Task<WhatsAppAccountState> GetWhatsAppAccountStateAsync(CancellationToken ct) =>
+        Task.FromResult(WhatsAppAccountState.Unknown);
+
+    /// <summary>Pede um APARELHO NOVO a partir da imagem-ouro (molde que nunca registrou número).
+    /// NÃO recria nada aqui de propósito: grava um flag-volume (`&lt;container&gt;-clean-request`) e quem
+    /// executa é o emulator-watchdog, no HOST. Motivo: recriar por `docker run` a partir do app produz um
+    /// container ERRADO (porta 6080 em vez de 6090, rede bridge que não alcança o gost, sem o
+    /// self-healing do X-lock, sem o mount do emulator.py) — foi o que aposentou o botão "Resetar
+    /// emulador". O watchdog tem o compose e recria certo. Mesmo padrão do flag `-off` do StopAsync.
+    /// Default: não suportado.</summary>
+    Task<string> RequestCleanDeviceAsync(CancellationToken ct) =>
+        Task.FromResult("limpeza por imagem-ouro não suportada neste engine.");
+
     /// <summary>Abre uma URL no WhatsApp do emulador via intent VIEW (adb am start) — o deep link de
     /// vínculo por QR (a URL do QR do WAHA), que abre "Deseja conectar um dispositivo?" SEM câmera nem
     /// rate limit; o usuário toca "Continuar". Default: não suportado.</summary>
@@ -115,6 +134,64 @@ public interface IPhoneOrchestrator
     /// Default: não suportado.</summary>
     Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
         Task.FromResult(WhatsAppSendResult.Fail("envio pela UI não suportado neste engine."));
+}
+
+/// <summary>Estado da conta do WhatsApp DENTRO do emulador, com o motivo quando não há conta.</summary>
+/// <param name="State">
+/// "registered" = conta viva (registration_jid preenchido) ·
+/// "revoked" = registration_jid VAZIO mas o app guarda marcas de logout do primário
+/// (`previously_logged_out_from_primary` / `pref_phone_number_of_logged_out_user`) → o SERVIDOR derrubou,
+/// ninguém limpou o app aqui · "none" = nunca registrou (aparelho novo ou pm clear recente) ·
+/// "unknown" = não deu pra saber (adb mudo, container fora) — a UI não deve alarmar nesse caso.
+/// </param>
+/// <param name="Phone">Número em dígitos: o registrado (registered) ou o que foi derrubado (revoked).</param>
+public sealed record WhatsAppAccountState(string State, string? Phone)
+{
+    public static readonly WhatsAppAccountState Unknown = new("unknown", null);
+
+    /// <summary>Marca que o engine imprime ANTES do dump pra provar que o adb respondeu. Sem ela, um adb
+    /// mudo (container fora, boot em andamento, adb ocupado no disparo) daria saída vazia — indistinguível
+    /// de "nunca registrou" — e a UI acusaria problema onde não há.</summary>
+    public const string AdbSentinel = "__ADB_OK__";
+
+    /// <summary>Foi o servidor que tirou a conta do ar — caso em que "Trocar chip" (pm clear) NÃO basta,
+    /// porque a identidade do device (android_id/GSF) sobrevive a ele.</summary>
+    public bool RevokedByServer => State == "revoked";
+
+    // Só o que interessa das shared_prefs. Compilados uma vez (static readonly) em vez dos helpers
+    // estáticos de Regex: isto roda a cada poll da aba Celular e a cada ciclo do dispatcher.
+    private static readonly System.Text.RegularExpressions.Regex JidRx =
+        new(@"registration_jid[^0-9]*([0-9]{12,13})", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex BurnedRx =
+        new(@"saved_user_before_logout[^0-9]*([0-9]{12,13})", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex LoggedOutFromPrimaryRx =
+        new(@"previously_logged_out_from_primary""\s+value=""true""", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Interpreta o dump das shared_prefs do WhatsApp. FUNÇÃO PURA de propósito: a decisão de
+    /// qual botão de recuperação a UI oferece mora aqui, e testá-la não pode depender de Docker/adb.
+    /// <para>Ordem importa: <c>registration_jid</c> vence (conta viva); só na ausência dele as marcas de
+    /// logout distinguem "o SERVIDOR derrubou" de "app zerado". Um <c>pm clear</c> apaga o diretório
+    /// inteiro, então nenhuma marca sobreviveria a ele — é isso que torna a distinção confiável.</para>
+    /// </summary>
+    public static WhatsAppAccountState Parse(string? prefsDump)
+    {
+        var text = prefsDump ?? "";
+        if (!text.Contains(AdbSentinel, StringComparison.Ordinal))
+        {
+            return Unknown;
+        }
+
+        var jid = JidRx.Match(text);
+        if (jid.Success)
+        {
+            return new WhatsAppAccountState("registered", jid.Groups[1].Value);
+        }
+
+        var burned = BurnedRx.Match(text);
+        return burned.Success || LoggedOutFromPrimaryRx.IsMatch(text)
+            ? new WhatsAppAccountState("revoked", burned.Success ? burned.Groups[1].Value : null)
+            : new WhatsAppAccountState("none", null);
+    }
 }
 
 /// <summary>Resultado do envio pela UI do WhatsApp (Caminho A). Contrato claro em vez de uma string

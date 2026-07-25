@@ -210,6 +210,25 @@ export const api = {
   // registrar um número diferente.
   phoneWhatsAppReset: () =>
     request<{ output: string }>("/api/phone/whatsapp/reset", { method: "POST" }),
+  // Estado da CONTA no emulador: "registered" (viva) · "revoked" (o SERVIDOR derrubou — restam as marcas
+  // de logout que o pm clear apagaria) · "none" (nunca registrou) · "unknown" (adb mudo → não alarmar).
+  // É o que decide qual botão de recuperação a tela oferece.
+  phoneWhatsAppState: () =>
+    request<{
+      state: "registered" | "revoked" | "none" | "unknown";
+      phone: string | null;
+      revokedByServer: boolean;
+      cleanSupported: boolean;
+    }>("/api/phone/whatsapp-state"),
+  // "Limpar aparelho restringido": aparelho NOVO a partir da imagem-ouro (molde que nunca registrou
+  // número). Não recria nada no ato — grava um flag e o emulator-watchdog recria pelo compose (~20s pra
+  // pegar + ~2-3 min de boot). Necessário depois de uma RESTRIÇÃO: o "Trocar chip" (pm clear) mantém
+  // android_id/GSF do device queimado, e o chip novo herda a ficha.
+  // `paused`: o endpoint PAUSA a fila junto (senão o dispatcher dispararia contra o container sendo
+  // apagado). Fica pausada até o operador retomar no Disparo, depois de registrar o chip e re-importar.
+  phoneCleanDevice: () =>
+    request<{ blocked: boolean; paused: boolean; message: string }>(
+      "/api/phone/clean-device", { method: "POST" }),
   // "Resetar emulador" (nível 2): remove o container + o volume de dados e provisiona do zero — aparelho
   // NOVO (apaga agenda, conta Google logada, WhatsApp e a identidade do device). Segunda linha, só quando
   // há suspeita de correlação por device. Retorna o PhoneStatus do container recém-criado (bootando).

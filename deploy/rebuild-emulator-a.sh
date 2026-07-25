@@ -16,6 +16,17 @@ COMPOSE=deploy/docker-compose.emulator-a.yml
 cd "$(dirname "$0")/.." || { echo "[rebuild-A] não achei a raiz do repo"; exit 1; }
 [ -f "$COMPOSE" ] || { echo "[rebuild-A] $COMPOSE não encontrado — rode da raiz do MtrxSys"; exit 1; }
 
+# MIGRAÇÃO (25/07): o compose passou a apontar pra `mtrx-android:live` (tag de trabalho) em vez da
+# upstream sobrescrita. Se `:live` ainda não existe — servidor que não rodou a migração —, criamos a
+# partir da imagem que o compose usava antes. Isso PRESERVA o comportamento atual (recria do estado
+# acumulado); quem quer aparelho SEM histórico usa deploy/limpar-emulador-a.sh, que parte do molde.
+LIVE=mtrx-android:live
+if ! docker image inspect "$LIVE" >/dev/null 2>&1; then
+  echo "[rebuild-A] $LIVE não existe — migrando da imagem antiga (preserva o estado atual)..."
+  docker tag budtmo/docker-android:emulator_14.0 "$LIVE" 2>/dev/null || {
+    echo "[rebuild-A] não achei imagem pra migrar. Rode: bash deploy/build-golden-image-a.sh"; exit 1; }
+fi
+
 echo "[rebuild-A] apagando o container corrompido ($CONTAINER)..."
 docker rm -f "$CONTAINER" >/dev/null 2>&1
 

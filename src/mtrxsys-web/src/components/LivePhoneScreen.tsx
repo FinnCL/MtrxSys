@@ -69,6 +69,13 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   const [confirmReset, setConfirmReset] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
+  // Estado da CONTA no emulador — o que distingue "eu quero trocar de número" de "o servidor derrubou".
+  // Depois de uma restrição o "Trocar chip" (pm clear) é INSUFICIENTE: ele mantém android_id/GSF do
+  // device, e o chip novo herda a ficha do queimado (custou um chip em 2026-07-25). Nesse caso a tela
+  // oferece "Limpar aparelho restringido", que troca o aparelho pela imagem-ouro.
+  const [waState, setWaState] = useState<Awaited<ReturnType<typeof api.phoneWhatsAppState>> | null>(null);
+  const [confirmClean, setConfirmClean] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   // Último `running` visto do container, pra detectar a VOLTA do emulador (false→true) e religar a
   // tela. Ref e não state: só é lido dentro do poll, e mudá-lo não deve provocar render.
   const runningRef = useRef<boolean | null>(null);
@@ -131,6 +138,19 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
     }
   }, 8000, active && emulatorMode);
 
+  // Estado da conta do WhatsApp no emulador. Poll lento (20s) e um pouco MAIOR que o TTL do cache do
+  // backend (15s): assim cada leitura tende a ser fresca sem que N abas abertas virem N chamadas adb —
+  // o adb é o mesmo canal que o disparo usa pra enviar pela UI. Falha silenciosa preserva o último
+  // valor; "unknown" já é o fail-safe do backend, e piscar alerta por um adb ocupado seria pior que
+  // atrasar a notícia.
+  usePoll(async () => {
+    try {
+      setWaState(await api.phoneWhatsAppState());
+    } catch {
+      /* ignora */
+    }
+  }, 20000, active && emulatorMode);
+
   // Proxy in-guest do emulador (gost+iptables DENTRO do Android) — o sinal de "seguro registrar o chip".
   // Só no modo emulador; falha silenciosa preserva o valor. É read-only: o watchdog é quem monta.
   usePoll(async () => {
@@ -169,7 +189,7 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
       await api.phoneWhatsAppReset();
       setResetMsg(
         "WhatsApp zerado. 1) Registre o novo número (só com o Proxy do emulador: OK). " +
-          "2) RE-IMPORTE os grupos com o chip novo — sem isso o disparo PULA todos os contatos " +
+          "2) RE-IMPORTE os grupos com o chip novo: sem isso o disparo PULA todos os contatos " +
           "do chip antigo (gate anti-463) e sai 0 envio.",
       );
       setFrameKey((k) => k + 1); // recarrega a tela pra já mostrar as boas-vindas
@@ -177,6 +197,29 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
       setResetMsg("Falha ao trocar o chip. Veja os logs do emulador e tente de novo.");
     } finally {
       setResetting(false);
+    }
+  }, []);
+
+  // "Limpar aparelho restringido": pede um APARELHO NOVO a partir da imagem-ouro. Não recria nada aqui
+  // nem no backend — o endpoint grava um flag e o emulator-watchdog (que roda no host e tem o compose)
+  // executa. Por isso a mensagem fala em espera: o efeito não é imediato como o do pm clear.
+  const cleanDevice = useCallback(async () => {
+    setConfirmClean(false);
+    setCleaning(true);
+    setResetMsg(null);
+    try {
+      const r = await api.phoneCleanDevice();
+      // O aviso da pausa vem junto: quem clicou precisa saber que a fila NÃO volta sozinha — ela fica
+      // parada de propósito até o chip novo estar registrado e os grupos re-importados.
+      setResetMsg(r.paused ? `${r.message} A fila de disparo foi PAUSADA — retome no Disparo.` : r.message);
+      if (!r.blocked) {
+        // A tela vai cair junto com o container; o poll de status religa o iframe quando ele voltar.
+        setWaState(null);
+      }
+    } catch {
+      setResetMsg("Falha ao pedir a limpeza do aparelho. Veja os logs da api e do watchdog.");
+    } finally {
+      setCleaning(false);
     }
   }, []);
 
@@ -294,10 +337,34 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           <button type="button" className="phone-reload" onClick={() => setFrameKey((k) => k + 1)}>
             Recarregar tela
           </button>
-          {/* Trocar chip: só quando o número atual foi restrito/queimado. Destrutivo → passa por modal. */}
+          {/* Trocar chip (pm clear): troca de número POR ESCOLHA — zera o app e MANTÉM o aparelho.
+              ⚠️ NÃO é o botão certo depois de uma restrição: o pm clear preserva android_id/GSF, e o chip
+              novo herda a ficha do queimado (2026-07-25: chip saudável morreu em 6h30, parado, num device
+              que horas antes hospedara um restringido). Nesse caso o certo é "Limpar aparelho restringido",
+              logo abaixo — e a dica sob os botões diz isso quando o estado indica revogação. */}
           <button type="button" className="phone-reset-chip" onClick={() => setConfirmReset(true)} disabled={resetting}>
             {resetting ? "Trocando chip…" : "Trocar chip"}
           </button>
+          {/* Aparelho novo pela imagem-ouro. Só aparece onde há molde + watchdog pra executar (stack A,
+              compose-managed) — nos stacks docker-run o backend bloquearia, então nem oferecemos. */}
+          {waState?.cleanSupported && (
+            <button
+              type="button"
+              className="phone-reset-chip"
+              onClick={() => setConfirmClean(true)}
+              disabled={cleaning}
+              title="Troca o APARELHO por um limpo (imagem-ouro): android_id e checkin do Google novos, sem rastro do chip anterior."
+            >
+              {cleaning ? "Pedindo limpeza…" : "Limpar aparelho restringido"}
+            </button>
+          )}
+          {waState?.revokedByServer && (
+            <p className="phone-off-hint" style={{ margin: "2px 0 0", color: "var(--warn)" }}>
+              O WhatsApp {waState.phone ? `do ${waState.phone} ` : ""}foi <b>derrubado pelo servidor</b> — ninguém
+              deslogou aqui. Nesse caso <b>“Trocar chip” não basta</b>: ele mantém a identidade do aparelho.
+              Use <b>“Limpar aparelho restringido”</b> antes de registrar outro número.
+            </p>
+          )}
           {resetMsg && <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>{resetMsg}</p>}
         </div>
       )}
@@ -319,6 +386,33 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           danger
           onConfirm={() => void resetChip()}
           onCancel={() => setConfirmReset(false)}
+        />
+      )}
+
+      {confirmClean && (
+        <ConfirmDialog
+          title="Trocar o APARELHO por um limpo?"
+          message={
+            <>
+              Recria o emulador a partir da <b>imagem-ouro</b> — um aparelho que <b>nunca registrou número</b>.
+              O <code>android_id</code> e o checkin do Google nascem novos, sem rastro do chip anterior.
+              <br /><br />
+              Use isto quando um chip foi <b>restringido</b>: o “Trocar chip” só apaga o app e mantém a
+              identidade do aparelho, então o número novo herdaria a ficha do queimado.
+              <br /><br />
+              <b>Perde tudo que está no emulador</b> (conta logada, agenda, contas Google). O boot leva
+              ~2-3 min; depois <b>espere o selo “Proxy do emulador: OK”</b> antes de registrar o chip novo,
+              reconceda as permissões de contatos e <b>re-importe os grupos</b>.
+              <br /><br />
+              A <b>fila de disparo é pausada</b> automaticamente (senão os envios falhariam contra o
+              aparelho sendo apagado). Retome no <b>Disparo</b> só depois de concluir os passos acima.
+            </>
+          }
+          confirmLabel="Sim, trocar o aparelho"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void cleanDevice()}
+          onCancel={() => setConfirmClean(false)}
         />
       )}
 

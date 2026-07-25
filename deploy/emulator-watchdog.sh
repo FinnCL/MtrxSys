@@ -75,6 +75,64 @@ clean_screen() {
 # "Desligar emulador"). Nesse caso o watchdog NÃO religa — só religa em CRASH real. O Start remove a flag.
 is_off() { docker volume inspect "${CONTAINER}-off" >/dev/null 2>&1; }
 
+# ── APARELHO NOVO pela IMAGEM-OURO (pedido pelo botão "Limpar aparelho restringido") ──────────────
+# O app NÃO recria o container: ele grava o flag-volume `<container>-clean-request` e QUEM EXECUTA É
+# AQUI. Motivo: recriar por `docker run` a partir do app monta o container ERRADO (porta 6080 em vez de
+# 6090, rede bridge que não alcança o gost, sem self-healing do X-lock, sem o mount do emulator.py) —
+# foi o que aposentou o botão "Resetar emulador". O watchdog roda no host e tem o compose.
+#
+# POR QUE existe: `pm clear` ("Trocar chip") zera o APP mas mantém `android_id` e o checkin do GSF. Depois
+# de uma restrição, são justamente esses que ligam o chip novo ao queimado — em 2026-07-25 um chip
+# SAUDÁVEL morreu em 6h30, parado, num device que horas antes hospedara um restringido. A imagem-ouro
+# (`mtrx-android:golden`, molde que NUNCA registrou número) troca o aparelho inteiro.
+#
+# SÓ NO STACK A: exige o compose do A e o molde. Nos stacks docker-run as duas checagens falham e o
+# pedido é descartado com aviso, em vez de recriar algo errado.
+#
+# ⚠️ NÃO REFATORAR pra chamar deploy/limpar-emulador-a.sh aqui — parece duplicação, mas é DEADLOCK:
+# aquele script espera o proxy in-guest subir, e quem monta o proxy é ESTE laço. Chamá-lo daqui
+# bloquearia o watchdog esperando algo que só ele mesmo faria depois. Por isso a versão daqui é a
+# mínima (tag + rm + compose up) e a espera/checklist fica só no script de linha de comando.
+CLEAN_FLAG="${CONTAINER}-clean-request"
+GOLDEN_IMAGE=mtrx-android:golden
+LIVE_IMAGE=mtrx-android:live
+CLEAN_COMPOSE=/home/ubuntu/MtrxSys/deploy/docker-compose.emulator-a.yml
+CLEAN_PROJECT=mtrxsys
+
+handle_clean_request() {
+  # TRAVA DE STACK: este script roda como template (mtrx-emulator-watchdog@N) e o $CLEAN_COMPOSE é o do
+  # A. Sem esta guarda, um flag criado para outro stack faria o watchdog daquele stack apagar o SEU
+  # container e subir o `dandroid` do A pelo compose errado — destruindo dois emuladores de uma vez.
+  # O endpoint /clean-device já bloqueia fora do A (IsComposeManagedAsync), mas defesa em profundidade:
+  # o lado que EXECUTA não deve depender de o chamador ter validado.
+  [ "$N" = 1 ] || return 1
+
+  docker volume inspect "$CLEAN_FLAG" >/dev/null 2>&1 || return 1
+
+  # CONSOME O FLAG PRIMEIRO. Se algo falhar depois, o pedido não se repete a cada 20s — um loop de
+  # recreate seria muito pior que um pedido perdido (o usuário reclica; o loop derruba o stack).
+  docker volume rm -f "$CLEAN_FLAG" >/dev/null 2>&1
+
+  if [ ! -f "$CLEAN_COMPOSE" ] || ! docker image inspect "$GOLDEN_IMAGE" >/dev/null 2>&1; then
+    echo "[$(date -u +%FT%TZ)] pedido de aparelho novo IGNORADO: falta $CLEAN_COMPOSE ou a imagem $GOLDEN_IMAGE (rode deploy/build-golden-image-a.sh)." >&2
+    return 0
+  fi
+
+  echo "[$(date -u +%FT%TZ)] aparelho novo pedido pela UI: $GOLDEN_IMAGE -> $LIVE_IMAGE + recreate pelo compose." >&2
+  docker tag "$GOLDEN_IMAGE" "$LIVE_IMAGE" >/dev/null 2>&1
+  # Limpa o "desligado de propósito": o aparelho novo não deve nascer marcado como off.
+  docker volume rm -f "${CONTAINER}-off" >/dev/null 2>&1
+  docker rm -f "$CONTAINER" >/dev/null 2>&1
+  if docker compose -p "$CLEAN_PROJECT" -f "$CLEAN_COMPOSE" up -d dandroid >/dev/null 2>&1; then
+    echo "[$(date -u +%FT%TZ)] aparelho novo de pé; boot leva ~2-3 min e o proxy in-guest sobe em seguida." >&2
+  else
+    echo "[$(date -u +%FT%TZ)] FALHA ao recriar pelo compose — cheque 'docker compose -p $CLEAN_PROJECT -f $CLEAN_COMPOSE up -d dandroid' na mão." >&2
+  fi
+  down=0
+  sleep 60   # deixa o boot começar antes do próximo ciclo julgar "não bootou"
+  return 0
+}
+
 # ── (REMOVIDO) proxy transparente na NETNS + container gost-tp ─────────────────────────────────────
 # Tentativa anterior de redirecionar o egresso na netns do container. NÃO funcionava pro que importa:
 # o socket de mensagens do WhatsApp é aberto pelo netsimd de um jeito que NÃO cai no OUTPUT da netns —
@@ -182,6 +240,11 @@ ensure_locale() {
 while true; do
   # Substring (não âncora): o filtro `name` do Docker casa contra o nome COM a barra inicial (/nome),
   # então "^nome$" pode não casar. Não há container superstring que colida com mtrx-dandroid/mtrxN-android.
+  # Pedido de aparelho novo vem ANTES de qualquer decisão sobre o container atual: não faz sentido
+  # avaliar boot/crash de um container que está prestes a ser substituído. `continue` porque a função
+  # já dormiu o bastante pro boot começar.
+  if handle_clean_request; then continue; fi
+
   status=$(docker ps -a --filter "name=${CONTAINER}" --format '{{.Status}}' 2>/dev/null)
   case "$status" in
     Up*)

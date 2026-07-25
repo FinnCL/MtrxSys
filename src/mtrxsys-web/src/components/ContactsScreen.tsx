@@ -272,7 +272,7 @@ export function ContactsScreen() {
             Validação: {validation.done}/{validation.total} · <strong>{validation.valid}</strong> com
             WhatsApp · <strong>{validation.invalid}</strong> descartados (sem conta)
             {validation.uncertain > 0 ? ` · ${validation.uncertain} indeterminados` : ""}
-            {validation.running ? " — em andamento…" : " — concluído"}
+            {validation.running ? " · em andamento…" : " · concluído"}
           </p>
         )}
         <p className="muted">
