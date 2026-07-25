@@ -272,9 +272,12 @@ public static class CampaignsEndpoints
             });
         });
 
-        dispatch.MapGet("/stats", async (IDispatchJobRepository repo, CancellationToken ct) =>
+        dispatch.MapGet("/stats", async (
+            IDispatchJobRepository repo, ISystemStateRepository state, CancellationToken ct) =>
         {
-            var stats = await repo.GetStatsAsync(ct);
+            // Chip conectado agora (WarmupPhone) → conta a fila DELE (só essa sai; o resto é "outro chip").
+            var currentChip = (await state.GetAsync(ct)).WarmupPhone;
+            var stats = await repo.GetStatsAsync(currentChip, ct);
             return Results.Ok(stats);
         });
 

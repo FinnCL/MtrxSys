@@ -250,6 +250,9 @@ export interface DispatchStats {
   failed: number;
   skipped: number;
   retrying: number;
+  // Quantos da fila (Pending+Retrying) são do chip conectado agora — só esses saem (gate anti-463).
+  // A UI desabilita "Iniciar envios" quando pending>0 mas este é 0 (fila 100% de outro chip).
+  pendingFromCurrentChip: number;
 }
 
 // Estado do aquecimento do chip (vindo de /api/dispatch/warmup). day é base-1.

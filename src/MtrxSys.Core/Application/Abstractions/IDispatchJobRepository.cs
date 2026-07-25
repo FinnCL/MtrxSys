@@ -10,7 +10,10 @@ public interface IDispatchJobRepository
     Task<DateTimeOffset?> GetEarliestPendingScheduledAtAsync(CancellationToken ct);
     Task AddAsync(DispatchJob job, CancellationToken ct);
     Task UpdateAsync(DispatchJob job, CancellationToken ct);
-    Task<DispatchStats> GetStatsAsync(CancellationToken ct);
+    /// <summary>Contadores da fila/histórico. <paramref name="currentChip"/> (WarmupPhone) permite contar
+    /// quantos da FILA são do chip conectado agora (só esses saem — gate anti-463); null = chip desconhecido
+    /// → conta todos como "do chip" (gate da UI fica OFF, igual ao motor, que só aplica o gate com chip conhecido).</summary>
+    Task<DispatchStats> GetStatsAsync(string? currentChip, CancellationToken ct);
     Task<IReadOnlyList<DispatchJob>> ListRecentAsync(int limit, CancellationToken ct);
     /// <summary>Relatório de envios (histórico + fila). <paramref name="engagedOnly"/> true (fase de
     /// aquecimento) restringe a SÓ respondedores — o mesmo público que a fila aceita nesses dias, pra a
@@ -42,7 +45,10 @@ public interface IDispatchJobRepository
     Task<int> DeleteEngagedHistoryAsync(CancellationToken ct);
 }
 
-public sealed record DispatchStats(int Pending, int Sent, int Failed, int Skipped, int Retrying);
+// PendingFromCurrentChip: quantos da fila (Pending+Retrying) são do chip conectado agora — só esses saem
+// (o gate anti-463 pula "outro chip"). A UI desabilita "Iniciar envios" quando Pending>0 mas este é 0
+// (fila 100% de outro chip → disparo sairia 0). Chip desconhecido → = Pending+Retrying (gate OFF).
+public sealed record DispatchStats(int Pending, int Sent, int Failed, int Skipped, int Retrying, int PendingFromCurrentChip);
 
 public sealed record DispatchReportItem(
     string? Phone,

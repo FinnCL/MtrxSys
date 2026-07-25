@@ -3,6 +3,7 @@ import { api, type ValidationStatus } from "../api/client";
 import { type Contact, type ContactGroupTag } from "../api/types";
 import { AddContactsModal } from "./AddContactsModal";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { GroupImportPanel } from "./GroupImportPanel";
 import { StatusBadge } from "./StatusBadge";
 
 export function ContactsScreen() {
@@ -24,6 +25,9 @@ export function ContactsScreen() {
   const [busy, setBusy] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  // "Importar de grupos" aqui na aba Contatos (mesmo painel da aba Grupos): re-importar retag os
+  // contatos pro chip conectado AGORA (habilita o disparo por ele). Colapsado por default.
+  const [showGroupImport, setShowGroupImport] = useState(false);
   // Círculo de Aquecimento: telefone (E.164) -> id do membro. Marca quais contatos SEUS re-enviam na
   // fase híbrida (dia 4+). Persistente — carregado uma vez e alterado pelos checkboxes.
   const [circle, setCircle] = useState<Map<string, string>>(new Map());
@@ -257,6 +261,11 @@ export function ContactsScreen() {
           <button type="button" onClick={() => void startValidation()} disabled={validation?.running}>
             {validation?.running ? "Validando…" : "Validar números"}
           </button>
+          {/* Importar de grupos aqui mesmo (mesmo painel da aba Grupos). Re-importar depois de trocar o
+              chip "move" os contatos pro chip novo (ImportedByPhone) e habilita o disparo por ele. */}
+          <button type="button" onClick={() => setShowGroupImport((v) => !v)}>
+            {showGroupImport ? "Fechar importar" : "Importar de grupos"}
+          </button>
         </div>
         {validation && (
           <p className="muted small">
@@ -276,6 +285,28 @@ export function ContactsScreen() {
           Contato frio nunca renova (envia 1× só). Desmarque para parar de renovar.
         </p>
       </header>
+
+      {showGroupImport && (
+        <section className="contacts-group-import">
+          <p className="muted small">
+            Importe os participantes de um grupo como contatos. <strong>Re-importar</strong> depois de
+            trocar o chip "move" os contatos pro chip conectado agora — sem isso o disparo os pula (são
+            de "outro chip", anti-463).
+          </p>
+          <GroupImportPanel
+            onImported={() => {
+              // Recarrega as listas: a lista do grupo importado passa a aparecer aqui.
+              void (async () => {
+                try {
+                  setGroups(await api.listContactGroupTags());
+                } catch {
+                  /* recarga é um extra; o import em si já foi */
+                }
+              })();
+            }}
+          />
+        </section>
+      )}
 
       {error && <p className="error">{error}</p>}
       {actionMsg && <p className="muted small">{actionMsg}</p>}

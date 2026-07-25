@@ -57,7 +57,7 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
     private IQueryable<DispatchJob> EngagedContactsOnly(IQueryable<DispatchJob> jobs) =>
         jobs.Where(j => db.Contacts.Any(c => c.Id == j.ContactId && !ContactStages.NonEngaged.Contains(c.Stage)));
 
-    public async Task<DispatchStats> GetStatsAsync(CancellationToken ct)
+    public async Task<DispatchStats> GetStatsAsync(string? currentChip, CancellationToken ct)
     {
         var grouped = await ExcludingDiscardedContacts(db.DispatchJobs)
             .GroupBy(j => j.Status)
@@ -68,7 +68,15 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         var failed = grouped.FirstOrDefault(g => g.Status == DispatchStatus.Failed)?.Count ?? 0;
         var skipped = grouped.FirstOrDefault(g => g.Status == DispatchStatus.Skipped)?.Count ?? 0;
         var retrying = grouped.FirstOrDefault(g => g.Status == DispatchStatus.Retrying)?.Count ?? 0;
-        return new DispatchStats(pending, sent, failed, skipped, retrying);
+        // Fila do chip conectado agora (só esses saem — gate anti-463). Chip desconhecido → conta todos
+        // (gate OFF, igual ao motor). Confiável: conta no banco, sem o cap/filtro do relatório paginado.
+        var pendingFromCurrentChip = string.IsNullOrWhiteSpace(currentChip)
+            ? pending + retrying
+            : await ExcludingDiscardedContacts(db.DispatchJobs)
+                .Where(j => (j.Status == DispatchStatus.Pending || j.Status == DispatchStatus.Retrying)
+                    && db.Contacts.Any(c => c.Id == j.ContactId && c.ImportedByPhone == currentChip))
+                .CountAsync(ct);
+        return new DispatchStats(pending, sent, failed, skipped, retrying, pendingFromCurrentChip);
     }
 
     public async Task<IReadOnlyList<DispatchJob>> ListRecentAsync(int limit, CancellationToken ct) =>

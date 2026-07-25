@@ -319,6 +319,12 @@ export function CampaignsScreen() {
   // contam como restantes (banner "Enviando", botão de adicionar, confirmação de limpar fila etc.).
   const pendingCount = stats ? stats.pending + stats.retrying : 0;
   const totalJobs = stats ? stats.pending + stats.sent + stats.failed + stats.skipped + stats.retrying : 0;
+  // GATE anti-disparo-vazio: a fila (Pending/Retrying) que É do chip conectado agora — só esses saem
+  // (o gate por chip pula "outro chip"). Se a fila TEM itens mas NENHUM é do chip atual, "Iniciar
+  // envios" mandaria 0 (tudo pulado) → desabilita e orienta a re-importar. Vem do BACKEND
+  // (stats.pendingFromCurrentChip) — confiável, sem o cap (1000) nem o filtro (status/aquecimento) do
+  // relatório paginado, que davam falso-positivo/bypass se usados pra esta decisão.
+  const onlyOtherChipQueued = pendingCount > 0 && !!stats && stats.pendingFromCurrentChip === 0;
 
   // Tabela de resultados: busca por telefone/nome e paginação, tudo sobre o que já foi carregado.
   const REPORT_PAGE_SIZE = 25;
@@ -758,11 +764,27 @@ export function CampaignsScreen() {
           </>
         ) : paused ? (
           <>
-            <p className="prepared-banner">
-              {pendingCount} {pendingCount === 1 ? "contato" : "contatos"} na fila. Revise em "Resultado dos envios" e inicie quando quiser.
+            <p className={`prepared-banner${onlyOtherChipQueued ? " zero" : ""}`}>
+              {onlyOtherChipQueued ? (
+                <>
+                  Todos os {pendingCount} na fila são de <strong>outro chip</strong> — o disparo os
+                  pularia (anti-463). Importe os grupos com o chip conectado agora (aba <strong>Contatos</strong>
+                  {" "}→ "Importar de grupos", ou a aba <strong>Grupos</strong>) pra habilitar o envio.
+                </>
+              ) : (
+                <>
+                  {pendingCount} {pendingCount === 1 ? "contato" : "contatos"} na fila. Revise em "Resultado dos envios" e inicie quando quiser.
+                </>
+              )}
             </p>
             <div className="dispatch-actions">
-              <button type="button" className="dispatch-btn" onClick={() => setConfirmStart(true)}>
+              <button
+                type="button"
+                className="dispatch-btn"
+                onClick={() => setConfirmStart(true)}
+                disabled={onlyOtherChipQueued}
+                title={onlyOtherChipQueued ? "A fila só tem contatos de outro chip — re-importe com o chip conectado pra habilitar." : undefined}
+              >
                 Iniciar envios
               </button>
               <button

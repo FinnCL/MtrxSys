@@ -51,6 +51,35 @@ public sealed class ReportDiscardedFilterE2ETests : IAsyncLifetime
         return c;
     }
 
+    private async Task SeedContactWithPendingJobAsync(string phone, string? importedByPhone)
+    {
+        var c = Contact.Create(Guid.NewGuid(), _phones.Validate(phone).Value!,
+            name: phone, groupTag: "G", theme: null, optInAt: Now, importedByPhone: importedByPhone);
+        _db.Contacts.Add(c);
+        _db.DispatchJobs.Add(DispatchJob.Schedule(Guid.NewGuid(), c.Id, Guid.NewGuid(), Now)); // Pending
+        await _db.SaveChangesAsync(Ct);
+    }
+
+    [Fact]
+    public async Task PendingFromCurrentChip_conta_so_a_fila_do_chip_conectado()
+    {
+        var jobs = new DispatchJobRepository(_db);
+        const string chipA = "+5511900000001";
+        const string chipB = "+5511900000002";
+        await SeedContactWithPendingJobAsync("11955551001", chipA);
+        await SeedContactWithPendingJobAsync("11955551002", chipA);
+        await SeedContactWithPendingJobAsync("11955551003", chipB); // outro chip → o motor pula
+
+        var statsA = await jobs.GetStatsAsync(chipA, Ct);
+        statsA.Pending.Should().Be(3, "os três estão na fila");
+        statsA.PendingFromCurrentChip.Should().Be(2, "só a fila do chip conectado sai; a de outro chip é pulada");
+
+        // Chip desconhecido (null) → conta todos como 'do chip' pra o gate da UI ficar OFF (igual ao motor,
+        // que só aplica o gate por chip quando o chip é conhecido).
+        var statsUnknown = await jobs.GetStatsAsync(null, Ct);
+        statsUnknown.PendingFromCurrentChip.Should().Be(3);
+    }
+
     [Fact]
     public async Task Contato_descartado_some_do_report_e_dos_contadores_mas_ativo_permanece()
     {
@@ -61,7 +90,7 @@ public sealed class ReportDiscardedFilterE2ETests : IAsyncLifetime
         var toDiscard = await SeedContactWithSentJobAsync("11955550002", "Descartar");
 
         // Antes de descartar: os dois enviados aparecem e contam.
-        var before = await jobs.GetStatsAsync(Ct);
+        var before = await jobs.GetStatsAsync(null, Ct);
         before.Sent.Should().Be(2);
         var reportBefore = await jobs.ListReportAsync(null, 1000, engagedOnly: false, Ct);
         reportBefore.Select(r => r.Phone).Should().Contain(new[] { active.Phone.E164, toDiscard.Phone.E164 });
@@ -70,7 +99,7 @@ public sealed class ReportDiscardedFilterE2ETests : IAsyncLifetime
         await contacts.DiscardByGroupTagAsync("Descartar", Now, Ct);
 
         // Depois: o descartado saiu do report E do contador; o ativo permanece nos dois.
-        var after = await jobs.GetStatsAsync(Ct);
+        var after = await jobs.GetStatsAsync(null, Ct);
         after.Sent.Should().Be(1, "o job do contato descartado não conta mais");
         var reportAfter = await jobs.ListReportAsync(null, 1000, engagedOnly: false, Ct);
         reportAfter.Select(r => r.Phone).Should().ContainSingle().Which.Should().Be(active.Phone.E164);

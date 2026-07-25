@@ -340,6 +340,9 @@ input[type="checkbox"], input[type="radio"] {
 .import-btn:hover:not(:disabled) { background: var(--accent); }
 /* Ações por grupo (importar + sair) lado a lado, sem quebrar o space-between da linha. */
 .group-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
+/* Import de grupos embutido na aba Contatos: painel destacado (o mesmo GroupImportPanel dos Grupos). */
+.contacts-group-import { margin: 4px 0 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); }
+.contacts-group-import .groups-header-row { justify-content: flex-start; margin-bottom: 8px; }
 .leave-btn { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 6px 14px; font-size: 13px; flex-shrink: 0; }
 .leave-btn:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
 /* Excluir contatos do grupo: link discreto, só dentro do grupo aberto (evita miss-click). */
@@ -795,6 +798,8 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
 .clear-btn { background: var(--bg-3); color: var(--fg); padding: 12px 20px; }
 .clear-btn:hover { background: var(--danger); }
 .prepared-banner { color: var(--warn); font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+/* Fila só com "outro chip": nada vai sair (gate anti-463) → cor de bloqueio + botão desabilitado. */
+.prepared-banner.zero { color: var(--danger); }
 .sending-banner { color: #22c55e; font-size: 13px; font-weight: 600; margin: 0 0 10px; }
 .add-new-row { margin-top: 12px; }
 /* Aviso do disjuntor: pausa automática por falhas, com horário de retomada. */
