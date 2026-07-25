@@ -44,8 +44,34 @@ if docker image inspect "$LIVE" >/dev/null 2>&1; then
   docker tag "$LIVE" "mtrx-android:live-$STAMP"
 fi
 
-say "commitando $CONTAINER -> $LIVE ..."
-docker commit "$CONTAINER" "$LIVE" >/dev/null || die "docker commit falhou."
+# ⚠️ TEM QUE DESLIGAR O ANDROID ANTES DE COMMITAR. O qemu mantém o `userdata-qemu.img` em buffer: um
+# commit com o emulador vivo grava o filesystem SEM o que ainda não foi persistido — e o chip registrado
+# é exatamente isso. Provado em 2026-07-25: um commit com o emulador rodando gerou uma imagem cujo
+# container nascia sem nem o WhatsApp instalado. Backup que não restaura é PIOR que não ter backup,
+# porque dá falsa segurança justo na hora de precisar.
+#
+# O flag `-off` entra antes de parar: sem ele o watchdog veria "Exited" como crash e religaria o
+# container no meio do commit.
+say "desligando o Android pra o disco ser gravado (o emulador volta no fim)..."
+docker volume create "${CONTAINER}-off" >/dev/null 2>&1
+docker exec "$CONTAINER" adb shell sync >/dev/null 2>&1
+docker exec "$CONTAINER" adb emu kill >/dev/null 2>&1
+for i in $(seq 1 18); do
+  sleep 5
+  docker exec "$CONTAINER" sh -lc 'pgrep -f qemu-system >/dev/null' 2>/dev/null || { say "  qemu encerrou em ~$((i * 5))s."; break; }
+done
+docker stop -t 60 "$CONTAINER" >/dev/null 2>&1
+
+say "commitando $CONTAINER (parado) -> $LIVE ..."
+docker commit "$CONTAINER" "$LIVE" >/dev/null || {
+  docker volume rm -f "${CONTAINER}-off" >/dev/null 2>&1
+  docker start "$CONTAINER" >/dev/null 2>&1
+  die "docker commit falhou (emulador religado)."
+}
+
+say "religando o emulador..."
+docker volume rm -f "${CONTAINER}-off" >/dev/null 2>&1
+docker start "$CONTAINER" >/dev/null 2>&1
 
 docker image inspect "$GOLDEN" >/dev/null 2>&1 \
   && say "molde $GOLDEN intacto (como deve ser)." \

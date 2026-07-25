@@ -342,7 +342,13 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
               novo herda a ficha do queimado (2026-07-25: chip saudável morreu em 6h30, parado, num device
               que horas antes hospedara um restringido). Nesse caso o certo é "Limpar aparelho restringido",
               logo abaixo — e a dica sob os botões diz isso quando o estado indica revogação. */}
-          <button type="button" className="phone-reset-chip" onClick={() => setConfirmReset(true)} disabled={resetting}>
+          <button
+            type="button"
+            className="phone-reset-chip"
+            onClick={() => setConfirmReset(true)}
+            disabled={resetting}
+            title="Apaga só o WhatsApp e mantém o mesmo aparelho. Leva segundos. Use para registrar outro número quando o anterior NÃO foi banido."
+          >
             {resetting ? "Trocando chip…" : "Trocar chip"}
           </button>
           {/* Aparelho novo pela imagem-ouro. Só aparece onde há molde + watchdog pra executar (stack A,
@@ -353,17 +359,10 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
               className="phone-reset-chip"
               onClick={() => setConfirmClean(true)}
               disabled={cleaning}
-              title="Troca o APARELHO por um limpo (imagem-ouro): android_id e checkin do Google novos, sem rastro do chip anterior."
+              title="Troca o aparelho inteiro por um limpo: android_id e conta Google novos, sem rastro do chip anterior. Use quando o número foi banido, caso em que 'Trocar chip' não basta. Apaga tudo, pausa a fila e leva ~3 min."
             >
               {cleaning ? "Pedindo limpeza…" : "Limpar aparelho restringido"}
             </button>
-          )}
-          {waState?.revokedByServer && (
-            <p className="phone-off-hint" style={{ margin: "2px 0 0", color: "var(--warn)" }}>
-              O WhatsApp {waState.phone ? `do ${waState.phone} ` : ""}foi <b>derrubado pelo servidor</b> — ninguém
-              deslogou aqui. Nesse caso <b>“Trocar chip” não basta</b>: ele mantém a identidade do aparelho.
-              Use <b>“Limpar aparelho restringido”</b> antes de registrar outro número.
-            </p>
           )}
           {resetMsg && <p className="phone-off-hint" style={{ margin: "2px 0 0" }}>{resetMsg}</p>}
         </div>

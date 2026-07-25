@@ -116,19 +116,66 @@ for perm in CAMERA READ_CONTACTS WRITE_CONTACTS; do
   docker exec "$TMP" adb shell "pm grant com.whatsapp android.permission.$perm" >/dev/null 2>&1
 done
 
-# ── PASSO 6: commitar ANTES de qualquer registro ──────────────────────────────────────────────────
-say "6/8 ⛔ NÃO abrimos o WhatsApp. Commitando o molde -> $GOLDEN"
-docker commit "$TMP" "$GOLDEN" >/dev/null || die "docker commit falhou."
+# ── PASSO 6: DESLIGAR o Android antes de commitar ─────────────────────────────────────────────────
+# ⚠️ NÃO COMMITAR COM O EMULADOR RODANDO. O qemu mantém a escrita do `userdata-qemu.img` em buffer: um
+# commit com ele vivo captura o filesystem ANTES de o app ter sido persistido. Sintoma exato (medido na
+# 1ª execução deste script, 2026-07-25): o `pm list packages` confirmava o WhatsApp instalado, o commit
+# rodava, e o container criado a partir do molde nascia SEM o app. `adb emu kill` desliga o emulador, e
+# só então o qemu grava o userdata (e o snapshot de quick-boot).
+say "6/9 desligando o Android pra o disco ser gravado (o commit não pega o que está em buffer)..."
+docker exec "$TMP" adb shell sync >/dev/null 2>&1
+docker exec "$TMP" adb emu kill >/dev/null 2>&1
+for i in $(seq 1 18); do
+  sleep 5
+  docker exec "$TMP" sh -lc 'pgrep -f qemu-system >/dev/null' 2>/dev/null || { say "    qemu encerrou em ~$((i * 5))s."; break; }
+done
+docker stop -t 60 "$TMP" >/dev/null 2>&1
 
-say "7/8 removendo o temporário..."
+say "7/9 commitando o molde (container PARADO) -> $GOLDEN"
+docker commit "$TMP" "$GOLDEN" >/dev/null || die "docker commit falhou."
 docker rm -f "$TMP" >/dev/null 2>&1
+
+# ── PASSO 8: PROVAR que o molde presta ────────────────────────────────────────────────────────────
+# Um molde quebrado só apareceria no pior momento: depois de apagar um aparelho bom. Custa ~2 min de
+# boot verificar agora e evita descobrir com o emulador de produção já destruído.
+say "8/9 verificando o molde (sobe um container dele e confere)..."
+VERIFY=mtrx-dandroid-verify
+docker rm -f "$VERIFY" >/dev/null 2>&1
+docker run -d --name "$VERIFY" --device /dev/kvm:/dev/kvm \
+  -v "$EMULATOR_PY":/home/androidusr/docker-android/cli/src/device/emulator.py \
+  -e EMULATOR_DEVICE="Samsung Galaxy S10" -e WEB_VNC=true -e EMULATOR_NO_SKIN=true \
+  -e SCREEN_WIDTH=404 -e SCREEN_HEIGHT=850 -e SCREEN_DEPTH=24 \
+  -e EMULATOR_ADDITIONAL_ARGS="-gpu swangle_indirect" \
+  --entrypoint sh "$GOLDEN" \
+  -c 'rm -f /tmp/.X*-lock 2>/dev/null; rm -rf /tmp/.X11-unix/* /home/androidusr/emulator/*.lock 2>/dev/null; exec "$APP_PATH"/mixins/scripts/run.sh' \
+  >/dev/null || die "não subiu o container de verificação."
+
+vok=0
+for i in $(seq 1 30); do
+  sleep 10
+  b=$(docker exec "$VERIFY" adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+  [ "$b" = "1" ] && { vok=1; break; }
+done
+if [ "$vok" != 1 ]; then
+  docker rm -f "$VERIFY" >/dev/null 2>&1
+  die "o molde NÃO bootou. A imagem $GOLDEN está quebrada — NÃO use. Investigue antes de limpar nada."
+fi
+
+wa=$(docker exec "$VERIFY" adb shell "pm list packages | grep whatsapp" 2>/dev/null | tr -d '\r')
+jid=$(docker exec "$VERIFY" adb shell \
+        "grep -ah -E 'registration_jid|saved_user_before_logout' /data/data/com.whatsapp/shared_prefs/*.xml 2>/dev/null" 2>/dev/null)
+docker rm -f "$VERIFY" >/dev/null 2>&1
+
+[ -n "$wa" ] || die "o molde bootou mas está SEM o WhatsApp — foi o bug do commit-com-emulador-vivo. NÃO use $GOLDEN."
+[ -z "$jid" ] || die "o molde tem RASTRO de conta ($jid). Um molde precisa nunca ter registrado. NÃO use $GOLDEN."
+say "    ✅ molde verificado: boota, tem o WhatsApp e NÃO tem rastro de conta."
 
 # `:live` é a tag de TRABALHO (o compose aponta pra ela). Se ainda não existe, nasce do molde.
 if ! docker image inspect "$LIVE" >/dev/null 2>&1; then
-  say "8/8 criando a tag de trabalho $LIVE a partir do molde"
+  say "9/9 criando a tag de trabalho $LIVE a partir do molde"
   docker tag "$GOLDEN" "$LIVE"
 else
-  say "8/8 $LIVE já existe (estado de trabalho atual) — preservada."
+  say "9/9 $LIVE já existe (estado de trabalho atual) — preservada."
 fi
 
 cat <<EOF
