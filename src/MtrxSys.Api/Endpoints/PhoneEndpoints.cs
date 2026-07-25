@@ -139,6 +139,28 @@ public static class PhoneEndpoints
         group.MapGet("/whatsapp-number", async (IPhoneOrchestrator phone, CancellationToken ct) =>
             Results.Ok(new { number = await phone.GetWhatsAppNumberAsync(ct) }));
 
+        // Grupos lidos DIRETO do aparelho (sem WAHA). O emulador é o dono da conta, então ele já tem os
+        // grupos — listar por aqui remove a necessidade de manter um companion vinculado ao chip só pra
+        // importar. Ver ListGroupsAsync.
+        group.MapGet("/groups", async (IPhoneOrchestrator phone, CancellationToken ct) =>
+            Results.Ok(new { groups = await phone.ListGroupsAsync(ct) }));
+
+        // Mensagens RECEBIDAS lidas do aparelho, de forma incremental — a fonte do "ouvir" sem depender
+        // do webhook do WAHA. `afterRowId` é o último `message._id` já processado (0 = desde o começo);
+        // o chamador guarda o maior rowId devolvido e usa na próxima chamada.
+        group.MapGet("/inbound", async (IPhoneOrchestrator phone, long? afterRowId, int? limit,
+            CancellationToken ct) =>
+        {
+            var msgs = await phone.ReadInboundMessagesAsync(afterRowId ?? 0, limit ?? 100, ct);
+            return Results.Ok(new
+            {
+                messages = msgs,
+                // Devolvido pronto pra o chamador NÃO ter que calcular o próximo marco (e errar quando o
+                // lote vem vazio, caso em que o marco tem que permanecer onde estava).
+                nextAfterRowId = msgs.Count > 0 ? msgs[^1].RowId : afterRowId ?? 0,
+            });
+        });
+
         // Estado da CONTA no emulador (registered/revoked/none/unknown) + se este aparelho aceita a
         // limpeza por imagem-ouro. A tela usa isso pra oferecer o botão CERTO: "Trocar chip" (pm clear)
         // numa troca por escolha, "Limpar aparelho restringido" quando o servidor derrubou a conta — ali

@@ -4,6 +4,7 @@ using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Domain.Contacts;
+using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Validation;
 using NSubstitute;
 
@@ -38,8 +39,13 @@ public sealed class ImportGroupMembersUseCaseTests
             .Returns(new Dictionary<string, Contact>(StringComparer.Ordinal));
         _contacts.AddAsync(Arg.Do<Contact>(_added.Add), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
+        // Modo WahaOnly explícito: estes testes cobrem a fonte WAHA. O caminho do emulador (aparelho
+        // como fonte dos participantes) é escolhido pelo DispatchMode e tem cobertura própria.
+        var state = Substitute.For<ISystemStateRepository>();
+        state.GetAsync(Arg.Any<CancellationToken>()).Returns(SystemStateAggregate.CreateInitial());
         return new ImportGroupMembersUseCase(
-            _waha, _contacts, Substitute.For<IUnitOfWork>(), new FixedClock(),
+            _waha, Substitute.For<IPhoneOrchestrator>(), state,
+            _contacts, Substitute.For<IUnitOfWork>(), new FixedClock(),
             new BrazilPhoneValidator(),
             Options.Create(new DispatchOptions { SessionId = Session, OnlyBrazilianContacts = true }));
     }

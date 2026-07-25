@@ -1,6 +1,7 @@
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Contacts;
+using MtrxSys.Core.Domain.SystemState;
 using Microsoft.Extensions.Options;
 
 namespace MtrxSys.Api.Endpoints;
@@ -11,11 +12,26 @@ public static class GroupsEndpoints
     {
         var group = app.MapGroup("/api/groups");
 
+        // FONTE POR MODO: no modo Emulador o aparelho é o dono da conta e já tem os grupos no próprio
+        // banco — listar por ali dispensa manter um companion WAHA vinculado ao chip só pra isso. Nos 9
+        // stacks WahaOnly nada muda. Mesma decisão do ImportGroupMembersUseCase, pra a tela e o import
+        // nunca divergirem sobre QUAIS grupos existem.
         group.MapGet("/", async (
             IWahaClient waha,
+            IPhoneOrchestrator phone,
+            ISystemStateRepository systemState,
             IOptions<DispatchOptions> dispatch,
             CancellationToken ct) =>
         {
+            var state = await systemState.GetAsync(ct);
+            if (state.DispatchMode == PhoneDispatchMode.Emulator)
+            {
+                var fromDevice = await phone.ListGroupsAsync(ct);
+                return Results.Ok(fromDevice
+                    .Select(g => new GroupDto(g.Jid, g.Subject ?? g.Jid, g.ParticipantsCount))
+                    .OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase));
+            }
+
             var sessionId = dispatch.Value.SessionId;
             var groups = await waha.ListGroupsAsync(sessionId, ct);
             var dtos = groups
@@ -29,9 +45,24 @@ public static class GroupsEndpoints
         group.MapGet("/{groupId}/participants", async (
             string groupId,
             IWahaClient waha,
+            IPhoneOrchestrator phone,
+            ISystemStateRepository systemState,
             IOptions<DispatchOptions> dispatch,
             CancellationToken ct) =>
         {
+            // Modo Emulador: lê do aparelho, com o telefone real já resolvido a partir do @lid. Quem não
+            // tem telefone resolvível é DESCARTADO na origem — então a contagem aqui pode ser menor que a
+            // do card do grupo, e isso é proposital (ver PhoneGroup.ParticipantsCount).
+            var st = await systemState.GetAsync(ct);
+            if (st.DispatchMode == PhoneDispatchMode.Emulator)
+            {
+                var members = await phone.ListGroupParticipantsAsync(groupId, ct);
+                return Results.Ok(members
+                    .Select(m => new GroupMemberDto(m.Phone, null, m.IsAdmin))
+                    .OrderBy(m => m.Phone, StringComparer.Ordinal)
+                    .ToList());
+            }
+
             // "Ver membros" DEGRADA em vez de estourar 500 no browser: um grupo-fantasma (que o WAHA já
             // não acha via getChatById, mesmo com o @g.us) ou a sessão fora fazem o /participants do WAHA
             // responder erro. Sem isto o 500 aparece no console (e o header CORS some na resposta de erro).

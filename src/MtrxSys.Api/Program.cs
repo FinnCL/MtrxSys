@@ -41,6 +41,9 @@ builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WahaProxyEnsure
 // Vigia a saúde da sessão: alerta (log + webhook) quando o chip sai/volta de WORKING.
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.SessionHealthWatchService>();
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WarmingDailyResetService>();
+// "Ouvir" sem WAHA: lê as recebidas do banco do próprio emulador e entrega à ingestão do webhook.
+// Inerte fora do modo Emulador (checa o modo a cada ciclo, não no boot).
+builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.EmulatorInboundPollerService>();
 // Motor de aquecimento de conversa (pool). No-op quando WarmupEngine:Enabled=false.
 builder.Services.AddHostedService<MtrxSys.Api.BackgroundServices.WarmupWorker>();
 // Envio automático da Fase Humana (chip conversando com o círculo de contatos salvos, via Chat).

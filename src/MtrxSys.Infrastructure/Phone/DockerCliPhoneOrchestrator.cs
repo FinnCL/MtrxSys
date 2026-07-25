@@ -734,6 +734,227 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
     public async Task<WhatsAppAccountState> GetWhatsAppAccountStateAsync(CancellationToken ct) =>
         WhatsAppAccountState.Parse(await ReadWhatsAppPrefsAsync(ct));
 
+    // ── Leitura do banco do WhatsApp DENTRO do aparelho (substitui o WAHA no "ouvir" e no "listar") ──
+    // O emulador é o DONO da conta, então grupos e mensagens já estão no banco dele. Ler daqui elimina a
+    // necessidade de vincular um aparelho conectado (companion) ao chip só pra conseguir importar grupos
+    // ou receber mensagens — um vínculo a menos pendurado numa conta que precisa durar.
+    //
+    // Três decisões que valem explicação:
+    //  • SNAPSHOT antes de ler: o banco está em modo WAL e o app escreve nele o tempo todo. Ler o arquivo
+    //    vivo devolveria dados truncados ou erro de lock. Copiamos db + -wal + -shm (os TRÊS: sem o -wal
+    //    as escritas recentes, que são justamente as mensagens novas, não apareceriam).
+    //  • Saída JSON (`sqlite3 -json`): texto de mensagem contém `|`, aspas e quebras de linha. Qualquer
+    //    parsing por delimitador quebraria no primeiro contato com uma mensagem real.
+    //  • `message._id` como marco incremental: é crescente e estável. `timestamp` empata entre mensagens
+    //    do mesmo segundo e `key_id` é opaco — nenhum dos dois serve pra "me dá o que veio depois".
+    private const string DbSnapshotDir = "/data/local/tmp/mtrx-wadb";
+    private readonly SemaphoreSlim _dbGate = new(1, 1);
+    private string _dbFingerprint = "";
+
+    /// <summary>Garante um snapshot ATUAL, copiando só quando o banco de fato mudou.</summary>
+    /// <remarks>
+    /// Copiar a cada leitura não escala: o msgstore cresce pra centenas de MB com uso real, e um poller
+    /// de mensagens ficaria movendo isso continuamente DENTRO do Android emulado — disputando I/O com o
+    /// próprio WhatsApp e com o adb que o disparo usa pra enviar. Um `stat` (mtime:tamanho do .db e do
+    /// -wal) custa uma fração disso e diz se a cópia anterior ainda serve. O -wal é o que muda a cada
+    /// mensagem nova, então ele é o sinal sensível.
+    /// Single-flight: leituras simultâneas compartilham uma cópia em vez de disputarem o mesmo destino.
+    /// </remarks>
+    private async Task<bool> EnsureDbSnapshotAsync(CancellationToken ct)
+    {
+        var dbDir = $"/data/data/{Opts.WhatsAppPackage}/databases";
+        var (statRc, statOut, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            $"su 0 stat -c %Y:%s {dbDir}/msgstore.db {dbDir}/msgstore.db-wal");
+        var fingerprint = statRc == 0 ? (statOut ?? "").Replace("\r", "").Replace("\n", " ").Trim() : "";
+        if (fingerprint.Length == 0)
+        {
+            return false; // adb mudo / sem root / app sem banco — o chamador devolve vazio
+        }
+
+        await _dbGate.WaitAsync(ct);
+        try
+        {
+            if (fingerprint == _dbFingerprint)
+            {
+                return true; // nada mudou desde a última cópia
+            }
+            var (rc, _, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+                $"su 0 sh -c 'rm -rf {DbSnapshotDir}; mkdir -p {DbSnapshotDir}; cp {dbDir}/msgstore.db* {DbSnapshotDir}/'");
+            if (rc != 0)
+            {
+                _dbFingerprint = ""; // não marque como válido o que não foi copiado
+                return false;
+            }
+            _dbFingerprint = fingerprint;
+            return true;
+        }
+        finally
+        {
+            _dbGate.Release();
+        }
+    }
+
+    private async Task<string> QueryWhatsAppDbAsync(string sql, CancellationToken ct)
+    {
+        if (!await EnsureDbSnapshotAsync(ct))
+        {
+            return "";
+        }
+
+        var (rc, outp, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            $"su 0 sqlite3 -json {DbSnapshotDir}/msgstore.db \"{sql}\"");
+        if (rc != 0)
+        {
+            // ESTADO PRESO evitado: o fingerprint diz "a cópia anterior serve", mas se ela sumiu (limpeza
+            // de /data/local/tmp, recreate do container, disco cheio) a consulta falharia a cada chamada
+            // até o banco mudar sozinho — o que num aparelho parado pode levar horas. Invalidar aqui faz
+            // a próxima chamada recopiar.
+            _dbFingerprint = "";
+            return "";
+        }
+        // O `adb shell` traduz LF em CRLF na saída. Aqui os \r só caem ENTRE os elementos do JSON (texto
+        // com quebra de linha vem escapado pelo sqlite como \\n), então são espaço em branco inofensivo —
+        // mas tirá-los deixa o payload limpo e imune a um parser menos tolerante no futuro.
+        // sqlite não imprime NADA quando o resultado é vazio: ausência de linhas, não erro.
+        return (outp ?? "").Replace("\r", "").Trim();
+    }
+
+    // Instância única: as opções são imutáveis aqui e o serializador guarda metadados de tipo em cache
+    // por instância — criar uma nova a cada leitura jogaria esse cache fora e re-refletiria os records
+    // toda vez (é o que o CA1869 aponta). Isto roda a cada poll de mensagens, então importa.
+    private static readonly System.Text.Json.JsonSerializerOptions DbJson =
+        new() { PropertyNameCaseInsensitive = true };
+
+    private static List<T> ParseRows<T>(string json)
+    {
+        if (json.Length == 0 || json[0] != '[')
+        {
+            return [];
+        }
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<T>>(json, DbJson) ?? [];
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Banco meio-copiado ou schema diferente numa versão futura do app: devolver vazio deixa o
+            // chamador tratar como "não há nada agora" em vez de derrubar o disparo por causa de leitura.
+            return [];
+        }
+    }
+
+    public async Task<IReadOnlyList<PhoneGroup>> ListGroupsAsync(CancellationToken ct)
+    {
+        // Grupo = jid com server 'g.us'. O `subject` mora no chat, não no jid.
+        const string Sql =
+            "select j.user || '@' || j.server as jid, c.subject as subject, "
+            + "coalesce(c.created_timestamp, 0) as createdTimestamp, "
+            + "(select count(*) from group_participant_user gp where gp.group_jid_row_id = j._id) "
+            + "as participantsCount "
+            + "from chat c join jid j on j._id = c.jid_row_id "
+            + "where j.server = 'g.us' order by c.sort_timestamp desc";
+        return ParseRows<PhoneGroup>(await QueryWhatsAppDbAsync(Sql, ct));
+    }
+
+    // ÚNICO ponto onde entrada do usuário chega ao SQL: o `groupJid` vem da rota `/api/groups/{groupId}`.
+    // Em vez de escapar aspas (fácil de errar em camadas shell→sqlite), aceita SÓ o formato canônico e
+    // recusa o resto. Lista de permissão é mais segura que lista de proibição quando o valor tem forma
+    // conhecida — e jid tem.
+    private static readonly System.Text.RegularExpressions.Regex SafeJidRx =
+        new(@"^[0-9][0-9\-]{0,31}@(g\.us|s\.whatsapp\.net|lid)$",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    public async Task<IReadOnlyList<PhoneGroupMember>> ListGroupParticipantsAsync(
+        string groupJid, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(groupJid) || !SafeJidRx.IsMatch(groupJid))
+        {
+            return [];
+        }
+
+        // O participante quase sempre é `@lid` (identificador opaco que o WhatsApp usa no lugar do
+        // número). O próprio app mantém `jid_map` ligando lid → jid real — medido no aparelho em
+        // 2026-07-25: 115 mapeamentos, ex. 84972371214521@lid → 553884108545. O `coalesce` cobre os dois
+        // casos: participante já em `s.whatsapp.net` usa o próprio user; em `@lid`, usa o resolvido.
+        // SEM essa resolução o import gravaria o lid como se fosse telefone — número inexistente, que é
+        // o padrão de lista suja ligado a ban aqui.
+        // `pending = 0`: convidado que nunca entrou não é membro e não deve virar contato.
+        //
+        // ⚠️ DESCARTA LID NÃO RESOLVIDO. Nem todo @lid tem entrada no `jid_map` — medido no aparelho:
+        // entre três participantes, um voltou como `107752827420703`, que NÃO é telefone, é o próprio lid.
+        // Sem o filtro abaixo, o `coalesce` entregaria isso como número e o import criaria contatos
+        // inexistentes; disparar pra número que não existe é justamente o padrão de lista suja associado
+        // a ban aqui. Preferimos PERDER um participante a inventar um número: o descarte é silencioso do
+        // ponto de vista do contato, mas o envio pra número inválido é ruidoso do ponto de vista do chip.
+        var sql =
+            "select coalesce(pj.user, uj.user) as phone, "
+            + "case when gp.rank > 0 then 1 else 0 end as isAdmin "
+            + "from group_participant_user gp "
+            + "join jid gj on gj._id = gp.group_jid_row_id "
+            + "join jid uj on uj._id = gp.user_jid_row_id "
+            + "left join jid_map m on m.lid_row_id = uj._id "
+            + "left join jid pj on pj._id = m.jid_row_id "
+            + $"where gj.user || '@' || gj.server = '{groupJid}' and coalesce(gp.pending, 0) = 0 "
+            + "and (pj.user is not null or uj.server = 's.whatsapp.net')";
+        return ParseRows<PhoneGroupMember>(await QueryWhatsAppDbAsync(sql, ct));
+    }
+
+    // Mesmos filtros da leitura incremental (from_me e a sentinela do chat_row_id) — se divergissem, o
+    // marco poderia ser posicionado num id que a leitura nunca devolveria, e o poller ficaria parado num
+    // ponto inalcançável.
+    private sealed record MaxRow(long MaxRowId);
+
+    public async Task<long> GetLastInboundRowIdAsync(CancellationToken ct)
+    {
+        const string Sql =
+            "select coalesce(max(m._id), 0) as maxRowId from message m "
+            + "where m.from_me = 0 and m.chat_row_id > 0";
+        var rows = ParseRows<MaxRow>(await QueryWhatsAppDbAsync(Sql, ct));
+        return rows.Count > 0 ? rows[0].MaxRowId : 0;
+    }
+
+    public async Task<IReadOnlyList<PhoneInboundMessage>> ReadInboundMessagesAsync(
+        long afterRowId, int limit, CancellationToken ct)
+    {
+        // from_me=0 → só o que CHEGOU. Ordem crescente por _id pra o chamador poder avançar o marco de
+        // forma segura mesmo se processar em lotes. Sem interpolação de texto: os dois parâmetros são
+        // numéricos e passam por Math.Clamp, então não há caminho de injeção.
+        //
+        // ⚠️ O JOIN é INTERNO DE PROPÓSITO e o `chat_row_id > 0` é redundante com ele — os dois existem
+        // pra filtrar a LINHA-SENTINELA que o WhatsApp cria no banco: `_id=1, chat_row_id=-1, from_me=0`
+        // com message_type, timestamp e text_data todos NULL (verificado no aparelho em 2026-07-25).
+        // Ela conta como "recebida" num `count(*)` ingênuo e viraria uma mensagem fantasma no Chat.
+        // NÃO troque por `left join` "pra não perder nada": o que se perderia é exatamente o lixo.
+        var take = Math.Clamp(limit, 1, 500);
+        var after = Math.Max(0, afterRowId);
+        // `sender_jid_row_id` só é preenchido em GRUPO (em 1:1 o remetente é a própria conversa), por isso
+        // o coalesce: quem consome recebe sempre um remetente válido, sem ter que adivinhar.
+        //
+        // ⚠️ RESOLVE @lid → TELEFONE nos dois lados. Medido com mensagem REAL em 2026-07-25: o WhatsApp
+        // guarda a conversa 1:1 como `91672436301905@lid`, não como o número. Sem resolver, todo opt-out e
+        // toda marcação de "respondeu" seriam atribuídos a um identificador opaco — a pessoa de verdade
+        // (5511921404487) nunca seria encontrada, e continuaria recebendo depois de pedir pra sair.
+        //
+        // DIFERENÇA PROPOSITAL para o import de participantes: lá, lid não resolvido é DESCARTADO (criar
+        // contato com número inventado é dano permanente). Aqui ele CAI PRO BRUTO como último recurso —
+        // descartar uma mensagem recebida perderia informação que já existe, e o não-casamento com um
+        // contato é o mesmo comportamento que o sistema já tem para remetente desconhecido.
+        // Importar CRIA; ouvir OBSERVA. Inventar dado é pior que observar algo sem par.
+        var sql =
+            "select m._id as rowId, "
+            + "coalesce(cp.user, j.user) || '@' || coalesce(cp.server, j.server) as chatJid, "
+            + "coalesce(sp.user, sj.user, cp.user, j.user) || '@' || "
+            + "coalesce(sp.server, sj.server, cp.server, j.server) as senderJid, "
+            + "coalesce(m.timestamp, 0) as timestamp, m.text_data as text, "
+            + "coalesce(m.message_type, -1) as messageType "
+            + "from message m join chat c on c._id = m.chat_row_id join jid j on j._id = c.jid_row_id "
+            + "left join jid_map cm on cm.lid_row_id = j._id left join jid cp on cp._id = cm.jid_row_id "
+            + "left join jid sj on sj._id = m.sender_jid_row_id "
+            + "left join jid_map sm on sm.lid_row_id = sj._id left join jid sp on sp._id = sm.jid_row_id "
+            + $"where m.from_me = 0 and m.chat_row_id > 0 and m._id > {after} order by m._id limit {take}";
+        return ParseRows<PhoneInboundMessage>(await QueryWhatsAppDbAsync(sql, ct));
+    }
+
     // Nome da imagem-ouro. Fixo de propósito: quem constrói (deploy/build-golden-image-a.sh) e quem
     // consome (deploy/emulator-watchdog.sh) usam a mesma string literal, e transformá-la em config daria
     // três lugares pra divergir num caminho destrutivo.

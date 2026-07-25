@@ -22,6 +22,8 @@ internal sealed class SystemStateConfiguration : IEntityTypeConfiguration<System
         b.Property(x => x.WarmupBonusToday).HasColumnName("warmup_bonus_today").HasDefaultValue(0);
         b.Property(x => x.WarmupPhone).HasColumnName("warmup_phone").HasMaxLength(32);
         b.Property(x => x.PhonePrimaryLastOnlineUtc).HasColumnName("phone_primary_last_online_utc");
+        // Marco do poller de entrada do emulador (substitui o webhook do WAHA no modo Emulador).
+        b.Property(x => x.InboundLastRowId).HasColumnName("inbound_last_row_id").HasDefaultValue(0L);
         b.Property(x => x.WarmupEngineEnabled).HasColumnName("warmup_engine_enabled").HasDefaultValue(false);
         b.Property(x => x.HumanPhaseAutoSendEnabled)
             .HasColumnName("human_phase_auto_send_enabled").HasDefaultValue(false);

@@ -84,6 +84,37 @@ public interface IPhoneOrchestrator
     Task<WhatsAppAccountState> GetWhatsAppAccountStateAsync(CancellationToken ct) =>
         Task.FromResult(WhatsAppAccountState.Unknown);
 
+    /// <summary>Grupos do WhatsApp lidos DIRETO do aparelho, sem WAHA. O emulador é o dono da conta —
+    /// ele já tem os grupos no próprio banco, então listar por aqui elimina a dependência de ter um
+    /// aparelho conectado (companion) vinculado ao chip só pra conseguir importar. Vazio quando não dá
+    /// pra ler (adb mudo, sem root, app sem dados) — nunca lança. Default: não suportado.</summary>
+    Task<IReadOnlyList<PhoneGroup>> ListGroupsAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PhoneGroup>>([]);
+
+    /// <summary>Participantes de um grupo, lidos do aparelho, com o telefone REAL já resolvido.
+    /// <para>⚠️ O participante costuma vir como <c>@lid</c> (identificador opaco), não como telefone. A
+    /// implementação resolve pelo mapa que o próprio app mantém — sem isso, importar devolveria "números"
+    /// que não existem, que é o padrão de lista suja associado a ban neste projeto. Ver [[br-phone-traps]].</para>
+    /// Vazio quando o jid é inválido ou não dá pra ler. Default: não suportado.</summary>
+    Task<IReadOnlyList<PhoneGroupMember>> ListGroupParticipantsAsync(string groupJid, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PhoneGroupMember>>([]);
+
+    /// <summary>Mensagens RECEBIDAS (from_me=0) lidas do banco do aparelho, para consumo incremental.
+    /// Substitui o webhook do WAHA como fonte do "ouvir" (Chat, opt-out, marcação de quem respondeu).
+    /// <para><paramref name="afterRowId"/> é o `message._id` do último já processado — o chamador guarda
+    /// esse marco e pede só o que veio depois. É crescente e estável, ao contrário de timestamp (que
+    /// empata) e de key_id (que é opaco).</para></summary>
+    Task<IReadOnlyList<PhoneInboundMessage>> ReadInboundMessagesAsync(long afterRowId, int limit, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PhoneInboundMessage>>([]);
+
+    /// <summary>Maior `message._id` de entrada que já existe no aparelho (0 se não há nenhum).
+    /// <para>Serve pra POSICIONAR o marco na primeira vez, sem ingerir. Um leitor de fila que começa do
+    /// zero num banco com histórico reprocessaria conversas antigas como se fossem novas — criando chats
+    /// velhos e, pior, marcando gente como "respondeu" por causa de mensagem de meses atrás, o que a
+    /// jogaria na fila quente. Disparar pra quem não fala com você há meses é perfil de queima de chip.</para>
+    /// Default: 0 (engines sem esse conceito começam do início, que é o comportamento anterior).</summary>
+    Task<long> GetLastInboundRowIdAsync(CancellationToken ct) => Task.FromResult(0L);
+
     /// <summary>A imagem-ouro existe e está pronta pra ser usada? Sem ela o watchdog DESCARTA o pedido de
     /// limpeza (com aviso no log dele), e do lado do usuário a operação vira falha muda: a tela confirma,
     /// a fila fica pausada e o aparelho não muda. Por isso é checado ANTES de pausar qualquer coisa, e
@@ -141,6 +172,36 @@ public interface IPhoneOrchestrator
     Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
         Task.FromResult(WhatsAppSendResult.Fail("envio pela UI não suportado neste engine."));
 }
+
+/// <summary>Grupo lido do banco do WhatsApp do emulador.</summary>
+/// <param name="Jid">Identificador canônico (`&lt;id&gt;@g.us`).</param>
+/// <param name="Subject">Nome do grupo; null se o aparelho ainda não sincronizou o assunto.</param>
+/// <param name="CreatedTimestamp">Criação, em ms desde a época (0 quando desconhecido).</param>
+/// <param name="ParticipantsCount">Quantos membros o aparelho conhece. É a contagem BRUTA do grupo — o
+/// import costuma trazer menos, porque descarta quem não tem telefone resolvível (ver
+/// <see cref="PhoneGroupMember"/>). Divergência entre este número e o importado é esperada, não bug.</param>
+public sealed record PhoneGroup(string Jid, string? Subject, long CreatedTimestamp, int ParticipantsCount);
+
+/// <summary>Participante de grupo lido do aparelho, com o telefone já resolvido a partir do @lid.</summary>
+/// <param name="Phone">Dígitos do número (sem "+"), como o app o conhece.</param>
+/// <param name="IsAdmin">Administrador do grupo (`rank` &gt; 0 no banco do app).</param>
+public sealed record PhoneGroupMember(string Phone, bool IsAdmin);
+
+/// <summary>Mensagem recebida, lida do banco do WhatsApp do emulador.</summary>
+/// <param name="RowId">`message._id` — o marco incremental que o consumidor guarda pra pedir "o que veio
+/// depois". Crescente e estável.</param>
+/// <param name="ChatJid">Conversa de origem (`&lt;numero&gt;@s.whatsapp.net` ou `&lt;id&gt;@g.us`).</param>
+/// <param name="SenderJid">QUEM escreveu. Em conversa 1:1 é igual ao <paramref name="ChatJid"/>; em GRUPO
+/// é o participante, e é ele que importa — atribuir um "SAIR" ao jid do grupo suprimiria o grupo inteiro
+/// em vez da pessoa. Por isso os dois campos existem separados desde o começo.</param>
+/// <param name="Timestamp">Quando chegou, em ms desde a época.</param>
+/// <param name="Text">Texto; null em mídia/sistema (o consumidor decide se ignora).</param>
+/// <param name="MessageType">`message_type` do banco do app. MEDIDOS com mensagem real em 2026-07-25:
+/// <c>0</c> = texto, <c>1</c> = imagem; <c>7</c> apareceu numa mensagem de SISTEMA. Os demais seguem a
+/// convenção do app e NÃO foram observados aqui — por isso quem consome deve tratar desconhecido como
+/// "ignorar", nunca como "provavelmente mídia".</param>
+public sealed record PhoneInboundMessage(
+    long RowId, string ChatJid, string SenderJid, long Timestamp, string? Text, int MessageType);
 
 /// <summary>Estado da conta do WhatsApp DENTRO do emulador, com o motivo quando não há conta.</summary>
 /// <param name="State">

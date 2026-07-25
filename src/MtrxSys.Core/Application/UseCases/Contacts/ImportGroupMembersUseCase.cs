@@ -2,12 +2,15 @@ using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Domain.Contacts;
+using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Core.Application.UseCases.Contacts;
 
 public sealed class ImportGroupMembersUseCase(
     IWahaClient waha,
+    IPhoneOrchestrator phone,
+    ISystemStateRepository systemState,
     IContactRepository contacts,
     IUnitOfWork uow,
     IClock clock,
@@ -17,10 +20,36 @@ public sealed class ImportGroupMembersUseCase(
     public async Task<ImportResult> ExecuteAsync(string groupId, string? groupTag, CancellationToken ct)
     {
         var sessionId = opts.Value.SessionId;
-        var members = await waha.ListGroupParticipantsAsync(sessionId, groupId, ct);
-        // Número conectado ("me"): serve pra NÃO importar o próprio número como destinatário e pra
-        // marcar quem importou cada contato.
-        var ownNumber = await waha.GetOwnPhoneE164Async(sessionId, ct);
+
+        // FONTE DOS MEMBROS POR MODO. No modo Emulador quem é dono da conta é o aparelho: ele tem os
+        // participantes no próprio banco, então importar por ali dispensa manter um aparelho conectado
+        // (companion WAHA) vinculado ao chip só pra listar gente. Um vínculo a menos pendurado numa conta
+        // que precisa durar. No modo WahaOnly (os 9 stacks) nada muda.
+        // O tipo `WahaParticipant` é reusado de propósito: o nome é legado, o CONTRATO (id, telefone,
+        // nome, admin) é o mesmo, e mantê-lo deixa todo o corpo deste método intocado — menos risco que
+        // renomear o tipo em todos os chamadores no meio de uma troca de fonte.
+        var state = await systemState.GetAsync(ct);
+        var emulatorMode = state.DispatchMode == PhoneDispatchMode.Emulator;
+
+        IReadOnlyList<WahaParticipant> members;
+        string? ownNumber;
+        if (emulatorMode)
+        {
+            members = [.. (await phone.ListGroupParticipantsAsync(groupId, ct))
+                .Select(m => new WahaParticipant($"{m.Phone}@s.whatsapp.net", m.Phone, null, m.IsAdmin))];
+            // O aparelho devolve DÍGITOS (registration_jid), sem "+". A comparação lá embaixo é contra
+            // `PhoneNumber.E164`, que TEM o "+": sem normalizar aqui, o filtro do próprio número nunca
+            // casaria e o chip entraria na lista como destinatário — auto-envio silencioso.
+            var own = await phone.GetWhatsAppNumberAsync(ct);
+            ownNumber = string.IsNullOrWhiteSpace(own) ? null : $"+{own}";
+        }
+        else
+        {
+            members = await waha.ListGroupParticipantsAsync(sessionId, groupId, ct);
+            // Número conectado ("me"): serve pra NÃO importar o próprio número como destinatário e pra
+            // marcar quem importou cada contato.
+            ownNumber = await waha.GetOwnPhoneE164Async(sessionId, ct);
+        }
         // Sem o número do chip, PARA. Não é preciosismo: `ImportedByPhone` nulo é lido pelo motor
         // como "contato legado, de chip desconhecido", e o gate anti-463 PULA esses. Importar assim
         // criaria contatos que o disparo nunca alcança — a tela diria "5 importados" e o envio

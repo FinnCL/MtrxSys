@@ -31,6 +31,12 @@ public sealed class SystemStateAggregate : Entity<int>
     // se o número conectado mudar, o aquecimento reinicia sozinho (chip novo = frio de novo).
     public string? WarmupPhone { get; private set; }
 
+    // Último `message._id` do banco do EMULADOR já ingerido pelo poller de entrada. É o marco que
+    // substitui o webhook do WAHA no modo Emulador: o poller pede "o que veio depois disto" e avança
+    // daqui. Persistido porque reiniciar a api não pode reprocessar a caixa inteira nem, pior, PULAR
+    // mensagens. 0 = nunca leu (começa do início).
+    public long InboundLastRowId { get; private set; }
+
     // UTC da última vez que o PRINCIPAL (emulador) esteve online — no pareamento ou num keep-alive.
     // Governa quando o próximo keep-alive é devido (janela de ~14 dias do WhatsApp, senão o companion
     // WAHA é deslogado). Null = nunca pareado (nada a manter vivo ainda).
@@ -94,6 +100,26 @@ public sealed class SystemStateAggregate : Entity<int>
 
     // Troca o modo da aba "Celular" (toggle único). Persistido pelo endpoint /api/phone/mode.
     public void SetDispatchMode(PhoneDispatchMode mode) => DispatchMode = mode;
+
+    /// <summary>Avança o marco de leitura da caixa de entrada do emulador.</summary>
+    /// <remarks>
+    /// Só avança PRA FRENTE. Um valor menor chegando aqui significaria reprocessar o que já foi
+    /// ingerido — e embora a ingestão deduplique por id de mensagem, retroceder o marco faria o poller
+    /// varrer a caixa inteira a cada ciclo, gastando adb (o mesmo canal do disparo) sem produzir nada.
+    /// O caso real que isto cobre: o banco do app é recriado numa troca de chip e os `_id` voltam a
+    /// contar do 1 — aí o marco é zerado de propósito por <see cref="ResetInboundMarker"/>, não por um
+    /// avanço acidental para trás.
+    /// </remarks>
+    public void AdvanceInboundMarker(long rowId)
+    {
+        if (rowId > InboundLastRowId)
+        {
+            InboundLastRowId = rowId;
+        }
+    }
+
+    /// <summary>Zera o marco — usado quando o aparelho/chip troca e a numeração do banco recomeça.</summary>
+    public void ResetInboundMarker() => InboundLastRowId = 0;
 
     // Reinicia o aquecimento a partir de hoje — a curva volta ao dia 0. Usado ao
     // trocar de chip (número novo é "frio" de novo). Zera também qualquer liberação extra.
@@ -160,6 +186,11 @@ public sealed class SystemStateAggregate : Entity<int>
         // chamado pelo botão manual "reiniciar aquecimento" no MESMO chip: ali o operador só quer
         // recomeçar a curva, e desligar o robô junto pararia o aquecimento sem ninguém perceber.
         HumanPhaseAutoSendEnabled = false;
+        // Chip novo = banco de mensagens novo no aparelho, com os `_id` recomeçando do 1. Manter o marco
+        // antigo (que pode estar em milhares) faria o poller nunca mais achar nada: ele pediria "o que
+        // veio depois do 5000" num banco cujo maior id é 3, e o "ouvir" morreria em SILÊNCIO — sem erro,
+        // sem log, só nenhuma mensagem chegando nunca mais.
+        ResetInboundMarker();
         WarmupPhone = connectedPhone;
         return true;
     }

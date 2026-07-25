@@ -8,6 +8,7 @@ using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Application.UseCases.Groups;
 using MtrxSys.Core.Domain.Groups;
+using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Validation;
 using MtrxSys.Infrastructure.Persistence;
 using MtrxSys.Infrastructure.Persistence.Repositories;
@@ -123,8 +124,13 @@ public sealed class CollectorPipelineE2ETests : IAsyncLifetime
 
     private async Task<ImportResult> ImportAsync(WahaClient waha, string groupId)
     {
+        // Estado inicial = modo WahaOnly, que é o caminho que este E2E exercita (import pelo WAHA).
+        var stateRepo = Substitute.For<ISystemStateRepository>();
+        stateRepo.GetAsync(Arg.Any<CancellationToken>()).Returns(SystemStateAggregate.CreateInitial());
         var useCase = new ImportGroupMembersUseCase(
             waha,
+            Substitute.For<IPhoneOrchestrator>(),
+            stateRepo,
             new ContactRepository(_db),
             new UnitOfWork(_db),
             new FixedClock(),
