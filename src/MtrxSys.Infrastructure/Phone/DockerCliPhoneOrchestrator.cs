@@ -734,6 +734,17 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
     public async Task<WhatsAppAccountState> GetWhatsAppAccountStateAsync(CancellationToken ct) =>
         WhatsAppAccountState.Parse(await ReadWhatsAppPrefsAsync(ct));
 
+    // Nome da imagem-ouro. Fixo de propósito: quem constrói (deploy/build-golden-image-a.sh) e quem
+    // consome (deploy/emulator-watchdog.sh) usam a mesma string literal, e transformá-la em config daria
+    // três lugares pra divergir num caminho destrutivo.
+    private const string GoldenImage = "mtrx-android:golden";
+
+    public async Task<bool> IsGoldenImageReadyAsync(CancellationToken ct)
+    {
+        var (rc, _, _) = await DockerCli.DockerAsync(ct, "image", "inspect", GoldenImage);
+        return rc == 0;
+    }
+
     public async Task<string> RequestCleanDeviceAsync(CancellationToken ct)
     {
         InvalidatePrefsCache();

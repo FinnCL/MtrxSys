@@ -40,6 +40,34 @@ if [ -n "${num:-}" ]; then
   read -r ok; [ "$ok" = "SIM" ] || { say "abortado — nada foi tocado."; exit 0; }
 fi
 
+# ── GUARDA: a fila NÃO pode estar disparando ──────────────────────────────────────────────────────
+# O botão da aba Celular pausa a fila antes de pedir a limpeza; este caminho de linha de comando não
+# passa por lá, então a proteção precisa existir aqui também — senão o dispatcher segue enviando contra
+# um container que está sendo APAGADO: falha no adb, contatos marcados como tentados, audit cheio de
+# erro, e depois do wipe não há chip nenhum. Só LEEMOS o banco: escrever a pausa pelo shell acopla o
+# script ao schema, e a decisão do projeto é que quem pausa é o app.
+# "Não consegui consultar" e "a fila está ativa" são situações DIFERENTES e merecem mensagens
+# diferentes — as duas pedem confirmação (fail-closed), mas dizer "a fila está ativa" quando na verdade
+# o psql falhou manda o operador procurar problema no lugar errado.
+if raw=$(docker exec mtrx-postgres psql -U mtrx -d mtrx -t -A \
+            -c "select coalesce(paused_reason,'') from system_state" 2>/dev/null); then
+  paused=$(printf '%s' "$raw" | head -1 | tr -d '[:space:]')
+  if [ -n "$paused" ]; then
+    say "fila pausada ('$paused') — ok."
+  else
+    say "⚠️  A FILA DE DISPARO ESTÁ ATIVA. Limpar agora faz o dispatcher enviar contra um aparelho que"
+    say "    está sendo apagado — envios falham e os contatos ficam marcados como tentados."
+    say "    Pause no Disparo antes (ou siga por sua conta)."
+    printf "[limpar-A] Continuar mesmo com a fila ativa? (digite SIM): "
+    read -r ok2; [ "$ok2" = "SIM" ] || { say "abortado — nada foi tocado."; exit 0; }
+  fi
+else
+  say "⚠️  Não consegui consultar o estado da fila (postgres fora do ar? nome do container mudou?)."
+  say "    Não dá pra garantir que o disparo está parado."
+  printf "[limpar-A] Continuar assim mesmo? (digite SIM): "
+  read -r ok2; [ "$ok2" = "SIM" ] || { say "abortado — nada foi tocado."; exit 0; }
+fi
+
 say "1/4 apontando o estado de trabalho pro molde ($GOLDEN -> $LIVE)"
 docker tag "$GOLDEN" "$LIVE" || die "falha ao retagar."
 

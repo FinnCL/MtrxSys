@@ -84,6 +84,12 @@ public interface IPhoneOrchestrator
     Task<WhatsAppAccountState> GetWhatsAppAccountStateAsync(CancellationToken ct) =>
         Task.FromResult(WhatsAppAccountState.Unknown);
 
+    /// <summary>A imagem-ouro existe e está pronta pra ser usada? Sem ela o watchdog DESCARTA o pedido de
+    /// limpeza (com aviso no log dele), e do lado do usuário a operação vira falha muda: a tela confirma,
+    /// a fila fica pausada e o aparelho não muda. Por isso é checado ANTES de pausar qualquer coisa, e
+    /// governa se o botão sequer aparece. Default: false (engines sem esse conceito nunca oferecem).</summary>
+    Task<bool> IsGoldenImageReadyAsync(CancellationToken ct) => Task.FromResult(false);
+
     /// <summary>Pede um APARELHO NOVO a partir da imagem-ouro (molde que nunca registrou número).
     /// NÃO recria nada aqui de propósito: grava um flag-volume (`&lt;container&gt;-clean-request`) e quem
     /// executa é o emulator-watchdog, no HOST. Motivo: recriar por `docker run` a partir do app produz um

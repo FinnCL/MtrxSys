@@ -52,6 +52,16 @@ fi
 #
 # O flag `-off` entra antes de parar: sem ele o watchdog veria "Exited" como crash e religaria o
 # container no meio do commit.
+# REDE DE SEGURANÇA: entre o `stop` e o `start` o emulador fica FORA e marcado como "desligado de
+# propósito" — estado em que o watchdog NÃO o reergue. Se o script morrer aí (Ctrl-C, ssh caindo, commit
+# estourando disco), o emulador ficaria parado indefinidamente e ninguém receberia alerta: o watchdog
+# estaria obedecendo o flag. O trap garante que qualquer saída remove o flag e religa.
+restaurar() {
+  docker volume rm -f "${CONTAINER}-off" >/dev/null 2>&1
+  docker start "$CONTAINER" >/dev/null 2>&1
+}
+trap restaurar EXIT INT TERM
+
 say "desligando o Android pra o disco ser gravado (o emulador volta no fim)..."
 docker volume create "${CONTAINER}-off" >/dev/null 2>&1
 docker exec "$CONTAINER" adb shell sync >/dev/null 2>&1
@@ -63,15 +73,11 @@ done
 docker stop -t 60 "$CONTAINER" >/dev/null 2>&1
 
 say "commitando $CONTAINER (parado) -> $LIVE ..."
-docker commit "$CONTAINER" "$LIVE" >/dev/null || {
-  docker volume rm -f "${CONTAINER}-off" >/dev/null 2>&1
-  docker start "$CONTAINER" >/dev/null 2>&1
-  die "docker commit falhou (emulador religado)."
-}
+docker commit "$CONTAINER" "$LIVE" >/dev/null || die "docker commit falhou (o trap religa o emulador)."
 
 say "religando o emulador..."
-docker volume rm -f "${CONTAINER}-off" >/dev/null 2>&1
-docker start "$CONTAINER" >/dev/null 2>&1
+restaurar
+trap - EXIT INT TERM
 
 docker image inspect "$GOLDEN" >/dev/null 2>&1 \
   && say "molde $GOLDEN intacto (como deve ser)." \

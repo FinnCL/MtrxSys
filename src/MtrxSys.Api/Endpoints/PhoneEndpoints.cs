@@ -151,7 +151,10 @@ public static class PhoneEndpoints
                 state = st.State,
                 phone = st.Phone,
                 revokedByServer = st.RevokedByServer,
-                cleanSupported = await phone.IsComposeManagedAsync(ct),
+                // Precisa das DUAS coisas: emulador gerenciado por compose (só o A tem watchdog pra
+                // executar) E o molde construído. Sem o molde o pedido seria descartado em silêncio, então
+                // é melhor o botão nem aparecer do que aparecer e não fazer nada.
+                cleanSupported = await phone.IsComposeManagedAsync(ct) && await phone.IsGoldenImageReadyAsync(ct),
             });
         });
 
@@ -171,6 +174,22 @@ public static class PhoneEndpoints
                     paused = false,
                     message = "Este emulador não é gerenciado por compose — a limpeza por imagem-ouro "
                         + "existe só no stack A. Para um número novo aqui, use \"Trocar chip\".",
+                });
+            }
+
+            // O MOLDE PRECISA EXISTIR. Sem ele o watchdog descarta o pedido (só loga), e o usuário ficaria
+            // com a fila pausada, a tela dizendo "pedido registrado" e o aparelho intacto — falha muda, o
+            // padrão que mais custou tempo neste projeto. Checado ANTES de pausar: recusar sem efeito
+            // colateral é melhor que aceitar e deixar o sistema num meio-estado.
+            if (!await phone.IsGoldenImageReadyAsync(ct))
+            {
+                return Results.Ok(new
+                {
+                    blocked = true,
+                    paused = false,
+                    message = "A imagem-ouro ainda não existe neste servidor. Rode "
+                        + "`bash deploy/build-golden-image-a.sh` (uma vez) antes de usar a limpeza. "
+                        + "Nada foi alterado e a fila NÃO foi pausada.",
                 });
             }
 
