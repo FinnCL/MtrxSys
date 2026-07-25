@@ -28,6 +28,10 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
     // Serializa as operações de UI (o emulador não roda 2 uiautomator dump ao mesmo tempo, e o dump usa
     // um arquivo fixo). O provider é singleton; garante 1 envio por vez por emulador. Ver SendWhatsApp.
     private readonly SemaphoreSlim _uiLock = new(1, 1);
+    // 0/1 (Interlocked): já concedeu READ/WRITE_CONTACTS ao WhatsApp nesta instância? Um chip novo /
+    // pm clear RESETA as permissões; sem contatos o WhatsApp não monta o espelho da agenda → o disparo
+    // pula TODOS os números ("não tem WhatsApp") → 0 envios (provado 2026-07-24). Concede lazy no 1º save.
+    private int _contactsGranted;
 
     public void Dispose() => _uiLock.Dispose();
 
@@ -363,8 +367,26 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return m.Success ? m.Groups[1].Value : null;
     }
 
+    // Concede READ/WRITE_CONTACTS ao WhatsApp (idempotente). Sem isso ele não lê a agenda do emulador →
+    // espelho vazio → todo número cai como "não tem WhatsApp". Retorna true se ambos os grants deram OK.
+    private async Task<bool> GrantContactsPermissionAsync(CancellationToken ct)
+    {
+        var (r1, _, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            "pm", "grant", Opts.WhatsAppPackage, "android.permission.READ_CONTACTS");
+        var (r2, _, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            "pm", "grant", Opts.WhatsAppPackage, "android.permission.WRITE_CONTACTS");
+        return r1 == 0 && r2 == 0;
+    }
+
     public async Task<string> SaveContactAsync(string phoneE164, string? name, CancellationToken ct)
     {
+        // Garante o READ/WRITE_CONTACTS do WhatsApp na 1ª vez (retenta até conseguir, depois cacheia via
+        // flag). Sem isso o WhatsApp não constrói o espelho da agenda e o disparo pula todos os números.
+        if (Volatile.Read(ref _contactsGranted) == 0 && await GrantContactsPermissionAsync(ct))
+        {
+            Interlocked.Exchange(ref _contactsGranted, 1);
+        }
+
         // Grava o número na AGENDA do Android do emulador (contacts provider) — NÃO na UI do WhatsApp.
         // Objetivo: o disparo sai pra um "contato salvo" (perfil menos-robô, ajuda anti-ban). Chamado
         // pelo DispatchEngine ANTES de cada envio, então é IDEMPOTENTE (não duplica) e best-effort
@@ -683,6 +705,13 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         // "Conectar com número de telefone" sem interrupção.
         await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
             "pm", "grant", Opts.WhatsAppPackage, "android.permission.CAMERA");
+        // Contatos também: sem READ_CONTACTS o WhatsApp não monta o espelho da agenda → o disparo pula
+        // todos ("não tem WhatsApp") → 0 envios. Concedido ANTES do relaunch pra o sync já rodar com a
+        // permissão; marca a flag pra o SaveContactAsync não repetir.
+        if (await GrantContactsPermissionAsync(ct))
+        {
+            Interlocked.Exchange(ref _contactsGranted, 1);
+        }
         await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
             "monkey", "-p", Opts.WhatsAppPackage, "-c", "android.intent.category.LAUNCHER", "1");
         return "ok";
