@@ -40,6 +40,15 @@ public sealed class PhoneOptions
     /// <summary>Porta do host pro noVNC (tela do Android) ao provisionar. Embutida na aba.</summary>
     public int NoVncPort { get; set; } = 6080;
 
+    /// <summary>Args extras passados ao emulador (EMULATOR_ADDITIONAL_ARGS do docker-android, appendados
+    /// DEPOIS dos args default). Default "-gpu swangle_indirect": troca o renderizador default
+    /// (swiftshader_indirect), que jogava GL_INVALID_OPERATION (0x502) em rajada e CRASHAVA o qemu ao
+    /// abrir o WhatsApp (provado no A 2026-07-24). Como o emulator.py appenda estes args por último e o
+    /// último "-gpu" vence, isto sobrescreve o default sem tocar a imagem. Vale pros 10 (o A já usa via
+    /// emulator-a.yml; aqui garante o mesmo pros B-J provisionados por docker-run). Vazio = default da
+    /// imagem (NÃO recomendado — reintroduz o crash). Ver docs/rebuild-emulator-a.md.</summary>
+    public string EmulatorAdditionalArgs { get; set; } = "-gpu swangle_indirect";
+
     /// <summary>Volume Docker que guarda o estado do Android (app + sessão do WhatsApp).</summary>
     public string VolumeName { get; set; } = "android-data";
 

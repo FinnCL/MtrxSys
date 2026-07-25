@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ChipIdentity, type PhoneMode, type PhoneStatus } from "../api/client";
 import { usePoll } from "../hooks/usePoll";
 import { HumanPhaseCard } from "./HumanPhaseCard";
@@ -52,6 +52,18 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   // (NÃO registre o chip); true = seguro. O watchdog do stack monta o proxy SOZINHO ~20s após o boot —
   // este sinal só CONFIRMA pro usuário; ninguém roda comando no servidor.
   const [proxyUp, setProxyUp] = useState<boolean | null>(null);
+  // Timer do "montando…": segundos desde que o proxy está NÃO-pronto (proxyUp=false). Dá feedback ao
+  // usuário (normal ~20-40s após o boot; se passar de ~2 min, o watchdog/emulador travou). Reseta quando
+  // fica OK (true) ou verificando (null).
+  const [montandoSecs, setMontandoSecs] = useState(0);
+  useEffect(() => {
+    if (proxyUp !== false) {
+      setMontandoSecs(0);
+      return;
+    }
+    const t = setInterval(() => setMontandoSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [proxyUp]);
   // "Trocar chip": modal de confirmação + estado do pm clear. Ação destrutiva (apaga a conta logada do
   // app), por isso passa por confirmação. `resetMsg` mostra o retorno (ok/erro) sob o botão.
   const [confirmReset, setConfirmReset] = useState(false);
@@ -155,7 +167,11 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
     setResetMsg(null);
     try {
       await api.phoneWhatsAppReset();
-      setResetMsg("WhatsApp zerado. Registre o novo número — só com o Proxy do emulador: OK.");
+      setResetMsg(
+        "WhatsApp zerado. 1) Registre o novo número (só com o Proxy do emulador: OK). " +
+          "2) RE-IMPORTE os grupos com o chip novo — sem isso o disparo PULA todos os contatos " +
+          "do chip antigo (gate anti-463) e sai 0 envio.",
+      );
       setFrameKey((k) => k + 1); // recarrega a tela pra já mostrar as boas-vindas
     } catch {
       setResetMsg("Falha ao trocar o chip. Veja os logs do emulador e tente de novo.");
@@ -213,7 +229,10 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           ) : proxyUp ? (
             <span className="phone-badge ok">OK, seguro registrar o chip</span>
           ) : (
-            <span className="phone-badge off">montando… NÃO registre ainda (sairia pelo datacenter)</span>
+            <span className="phone-badge off">
+              montando… NÃO registre ainda · {montandoSecs}s
+              {montandoSecs > 120 ? " (demorando — cheque o watchdog/emulador)" : " (sai pelo datacenter)"}
+            </span>
           )}
         </p>
       )}

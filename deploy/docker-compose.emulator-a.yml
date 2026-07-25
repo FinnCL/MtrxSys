@@ -24,6 +24,12 @@ services:
       SCREEN_WIDTH: "404"
       SCREEN_HEIGHT: "850"
       SCREEN_DEPTH: "24"
+      # GPU: swangle_indirect (render ANGLE) em vez do swiftshader_indirect default. O swiftshader estava
+      # jogando GL_INVALID_OPERATION (0x502) em rajada no glAttachShader/resize e crashando o qemu ao abrir
+      # o WhatsApp (conflito de resoluções 1440x3040 / 1696x3296 / 1624x720 num display 404x850 — provado
+      # 2026-07-24). O emulator.py appenda EMULATOR_ADDITIONAL_ARGS DEPOIS do -gpu default, então o último
+      # -gpu vence (sem editar o emulator.py do host). Ver docs/rebuild-emulator-a.md.
+      EMULATOR_ADDITIONAL_ARGS: "-gpu swangle_indirect"
     volumes:
       - /home/ubuntu/emulator.py:/home/androidusr/docker-android/cli/src/device/emulator.py
     ports:

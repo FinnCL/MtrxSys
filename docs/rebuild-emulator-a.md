@@ -17,9 +17,14 @@ O que **NÃO** é (já descartado num incidente 2026-07-24): OOM (`OOMKilled=fal
 KVM (nada no `dmesg`), lock stale de AVD (o `emulator.py` self-healing está mountado). É **estado gráfico
 corrompido** — acumulado por churn (reset/recreate/adb pesado em sequência). O rebuild **reseta** esse estado.
 
-> Os **GL 0x502 são ruído normal** do render de software — aparecem mesmo num emulador são e são "ignored".
-> Eles **não** são a causa do crash; a causa é o **estado corrompido + carga**. Não troque a config (GPU/
-> resolução) por causa deles: a config atual (`swiftshader_indirect`, S10, 404x850) é a que funciona.
+> **GPU (atualizado 2026-07-24):** a causa raiz do crash-ao-abrir-o-WhatsApp era o renderizador
+> **`swiftshader_indirect`** (default do docker-android) jogando **GL 0x502 em rajada** no
+> `glAttachShader`/resize. A config agora usa **`-gpu swangle_indirect`** (ANGLE) — provado: abrir o
+> WhatsApp deixa o qemu VIVO e **não gera nenhum GL 0x502 novo**. No A vem do `EMULATOR_ADDITIONAL_ARGS`
+> do `emulator-a.yml`; nos B-J vem do default `PhoneOptions.EmulatorAdditionalArgs` (docker-run). Um
+> nível baixo de 0x502 residual ainda é ruído "ignored"; o que importa é **não subir** ao abrir o app.
+> Se o rebuild sozinho não estabilizar, confirme que o `-gpu swangle_indirect` está no processo do qemu
+> (`docker exec mtrx-dandroid sh -lc 'ps -ef | grep qemu | grep -o "\-gpu [a-z_]*"'` → o ÚLTIMO vence).
 
 ## O que ele faz
 

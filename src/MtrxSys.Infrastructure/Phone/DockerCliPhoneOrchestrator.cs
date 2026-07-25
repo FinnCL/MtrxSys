@@ -106,8 +106,14 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
                 // exposto direto na internet (furando o portão). Antes era "{porta}:6080" (= 0.0.0.0).
                 "-p", $"127.0.0.1:{Opts.NoVncPort}:6080",
                 "-v", $"{Opts.VolumeName}:/home/androidusr",
-                Opts.Image,
             ]);
+            // GPU/args extras (default -gpu swangle_indirect): sobrescreve o swiftshader que crashava o
+            // qemu ao abrir o WhatsApp. Só entra se não-vazio → paridade com o A sem quebrar quem zera.
+            if (!string.IsNullOrWhiteSpace(Opts.EmulatorAdditionalArgs))
+            {
+                args.AddRange(["-e", $"EMULATOR_ADDITIONAL_ARGS={Opts.EmulatorAdditionalArgs}"]);
+            }
+            args.Add(Opts.Image);
             await DockerCli.DockerAsync(ct, args.ToArray());
             return await GetStatusAsync(ct);
         }

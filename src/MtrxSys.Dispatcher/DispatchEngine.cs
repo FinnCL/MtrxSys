@@ -706,19 +706,32 @@ public sealed class DispatchEngine(
     {
         try
         {
-            var phone = await waha.GetOwnPhoneE164Async(sessionId, ct);
-            if (string.IsNullOrWhiteSpace(phone))
+            var state = await systemState.GetAsync(ct);
+            // FONTE DA VERDADE do chip que está ENVIANDO agora, escolhida pelo MODO:
+            //  • Emulador: quem envia é o PRÓPRIO emulador (envio pela UI dele) → lê o número dele
+            //    PRIMEIRO (registration_jid via adb), WAHA só como fallback. Crítico: após um "Trocar
+            //    chip" (pm clear + re-registro) o WAHA fica STALE no chip ANTIGO até deslogar; se ele
+            //    ainda devolvesse o número velho NÃO-vazio, o reconcile-por-WAHA esconderia a troca e o
+            //    chip NOVO herdaria o platô do velho → disparo agressivo = ban (o exato risco anti-ban).
+            //  • WahaOnly (9 stacks): quem envia é o WAHA → ele vem primeiro; o emulador pode estar
+            //    desligado/stale. GetWhatsAppNumberAsync devolve "" em stack sem emulador → fallback inerte.
+            // Ambas as fontes retornam "+" + dígitos-crus do MESMO número canônico (PhoneFromChatId e
+            // registration_jid) → comparação Ordinal do ReconcileWarmupPhone casa; WAHA↔emulador não flapa.
+            var emulatorMode = state.DispatchMode == PhoneDispatchMode.Emulator;
+            var connectedPhone = emulatorMode
+                ? await ReadEmulatorPhoneE164Async(ct) ?? await waha.GetOwnPhoneE164Async(sessionId, ct)
+                : await waha.GetOwnPhoneE164Async(sessionId, ct) ?? await ReadEmulatorPhoneE164Async(ct);
+            if (string.IsNullOrWhiteSpace(connectedPhone))
             {
                 return;
             }
-            var state = await systemState.GetAsync(ct);
-            var changed = state.ReconcileWarmupPhone(phone, IClock.ToBrasiliaDate(clock.UtcNow));
+            var changed = state.ReconcileWarmupPhone(connectedPhone, IClock.ToBrasiliaDate(clock.UtcNow));
             await systemState.UpdateAsync(state, ct); // persiste também o 1º registro do número
             await uow.SaveChangesAsync(ct);
             if (changed)
             {
                 log.LogInformation(
-                    "Chip trocado (número conectado {Phone}); aquecimento reiniciado — nasce frio.", phone);
+                    "Chip trocado (número conectado {Phone}); aquecimento reiniciado — nasce frio.", connectedPhone);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -731,6 +744,19 @@ public sealed class DispatchEngine(
             log.LogWarning(ex, "Não reconciliei o número do aquecimento; sigo com o estado atual.");
         }
 #pragma warning restore CA1031
+    }
+
+    // Número registrado no PRÓPRIO emulador, em "+E.164" — o mesmo formato que o WAHA devolve
+    // (PhoneFromChatId), pra a comparação Ordinal do reconcile casar entre as duas fontes. Devolve
+    // null quando não há número (stack sem emulador, ou emulador ainda bootando) → deixa o fallback agir.
+    private async Task<string?> ReadEmulatorPhoneE164Async(CancellationToken ct)
+    {
+        var digits = await phone.GetWhatsAppNumberAsync(ct);
+        if (string.IsNullOrWhiteSpace(digits))
+        {
+            return null;
+        }
+        return digits.StartsWith('+') ? digits : "+" + digits;
     }
 
     // Checa se o número existe no WhatsApp, best-effort: qualquer erro na checagem devolve null (= "não
