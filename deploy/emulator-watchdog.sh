@@ -237,6 +237,41 @@ ensure_locale() {
   echo "[$(date -u +%FT%TZ)] [stack ${N}] locale pt-BR setado (aplica no próximo boot; sem forçar restart)." >&2
 }
 
+# Permissões que o WhatsApp precisa ter ANTES de alguém registrar um chip. Idempotente (pm grant já
+# concedido é no-op), roda a cada boot — é o que cobre o aparelho vindo da IMAGEM-OURO, que não passa
+# pelo ClearWhatsAppAsync e por isso nascia sem elas.
+#
+# 🔴 GET_ACCOUNTS custou uma hora em 2026-07-26: sem ela o WhatsApp NÃO ENXERGA a conta Google do
+# aparelho e o registro trava PARA SEMPRE em "procurando backup no Google Drive" — spinner numa tela
+# branca, sem erro no logcat, sem botão de pular. Relógio corrigido, reboot e re-adicionar a conta não
+# destravaram, porque a conta nunca foi o problema: o ACESSO a ela é que estava bloqueado.
+# Só se manifesta quando EXISTE conta Google no aparelho — que é justamente o que se recomenda ter
+# (é ela que faz os contatos sobreviverem à troca de chip). Seguir a recomendação ativava a armadilha.
+ensure_wa_permissions() {
+  for p in android.permission.GET_ACCOUNTS \
+           android.permission.READ_CONTACTS \
+           android.permission.WRITE_CONTACTS \
+           android.permission.CAMERA; do
+    docker exec "$CONTAINER" adb shell "pm grant com.whatsapp $p" >/dev/null 2>&1
+  done
+}
+
+# Relógio do guest. O emulador NASCE com a hora congelada no momento em que a imagem-ouro foi
+# construída — medido em 2026-07-26: 20h44min de atraso, com `auto_time=1` ligado e sem sincronizar em
+# mais de uma hora de aparelho no ar. Relógio errado quebra autenticação Google (token fora da janela
+# de validade), e é candidato a explicar outras falhas de aparelho recriado.
+# Corrige só quando a diferença passa de 60s, pra não escrever no guest a cada ciclo.
+ensure_clock() {
+  local host guest diff
+  host=$(date -u +%s)
+  guest=$(docker exec "$CONTAINER" adb shell date -u +%s 2>/dev/null | tr -d '\r')
+  case "$guest" in ''|*[!0-9]*) return 0 ;; esac   # leitura ruim: não mexe
+  diff=$(( host > guest ? host - guest : guest - host ))
+  [ "$diff" -le 60 ] && return 0
+  docker exec "$CONTAINER" adb shell "su 0 date -u $(date -u +%m%d%H%M%Y.%S)" >/dev/null 2>&1
+  echo "[$(date -u +%FT%TZ)] [stack ${N}] relógio do guest estava ${diff}s fora; acertado." >&2
+}
+
 while true; do
   # Substring (não âncora): o filtro `name` do Docker casa contra o nome COM a barra inicial (/nome),
   # então "^nome$" pode não casar. Não há container superstring que colida com mtrx-dandroid/mtrxN-android.
@@ -255,6 +290,9 @@ while true; do
         ensure_guest_proxy
         clean_screen
         ensure_locale
+        # Antes das permissões: relógio errado contamina a autenticação de tudo que vem depois.
+        ensure_clock
+        ensure_wa_permissions
       else
         down=$((down + 1))
         # Boot lento/frio (docker-android pode levar 2-4 min, ainda mais num AVD degradado ou após um

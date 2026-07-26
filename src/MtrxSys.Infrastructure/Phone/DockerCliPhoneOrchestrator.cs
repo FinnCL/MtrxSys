@@ -1026,6 +1026,18 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         {
             Interlocked.Exchange(ref _contactsGranted, 1);
         }
+        // GET_ACCOUNTS: sem ela o WhatsApp NÃO ENXERGA a conta Google do aparelho e o registro TRAVA
+        // para sempre na tela "procurando backup no Google Drive"
+        // (`RestoreFromBackupActivity` + `gdrive_looking_for_backup_progress_bar`), sem erro no logcat
+        // e sem botão de pular — só um spinner numa tela branca. MEDIDO em 2026-07-26: 1h+ travado,
+        // e nem relógio corrigido, nem reboot, nem re-adicionar a conta destravaram, porque a conta
+        // nunca foi o problema — o ACESSO a ela é que estava bloqueado.
+        //
+        // Só se manifesta quando EXISTE conta Google no aparelho, e a conta é justamente o que se
+        // recomenda ter (é ela que faz os contatos sobreviverem à troca de chip). Ou seja: seguir a
+        // recomendação era o que ativava a armadilha.
+        await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            "pm", "grant", Opts.WhatsAppPackage, "android.permission.GET_ACCOUNTS");
         await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
             "monkey", "-p", Opts.WhatsAppPackage, "-c", "android.intent.category.LAUNCHER", "1");
         return "ok";
