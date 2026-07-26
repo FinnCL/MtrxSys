@@ -63,6 +63,23 @@ const STAT_CHIPS: { key: DispatchJobStatus; label: string; cls: string }[] = [
 const reportStatusRank = (i: DispatchReportItem) =>
   i.status === "Sent" ? 0 : i.status === "Pending" || i.status === "Retrying" ? 1 : 2;
 
+/// A saída pra "fila cheia de contato de outro chip", dita nos DOIS lugares onde esse beco aparece
+/// (o banner da fila e a tabela de resultados vazia). Componente, e não a frase copiada: as duas cópias
+/// já divergiram uma vez — uma delas mandava importar grupo "em Contatos", aba que não tem mais esse
+/// botão — e orientação errada num beco sem saída é pior que orientação nenhuma.
+///
+/// DOIS caminhos, de propósito. Re-importar é o preferido porque PROVA o vínculo com o chip; mas só
+/// existe se houver grupo, e contato adicionado à mão nunca veio de grupo nenhum. Oferecendo só ele, o
+/// operador fica sem saída olhando uma fila parada — foi a lacuna que a migração (passo 3) preencheu.
+function OtherChipWayOut() {
+  return (
+    <>
+      Re-importe o grupo com o chip atual em <strong>Grupos</strong> — ou, se não houver grupo para
+      importar, use <strong>"Migrar contatos para este chip"</strong> na aba <strong>Contatos</strong>.
+    </>
+  );
+}
+
 export function CampaignsScreen() {
   const [messages, setMessages] = useState<MessageTemplate[]>([]);
   const [groupTags, setGroupTags] = useState<ContactGroupTag[]>([]);
@@ -778,8 +795,8 @@ export function CampaignsScreen() {
             <p className={`prepared-banner${onlyOtherChipQueued ? " zero" : ""}`}>
               {onlyOtherChipQueued ? (
                 <>
-                  Os {pendingCount} da fila são de <strong>outro chip</strong> e não seriam enviados.
-                  Importe os grupos com o chip atual em <strong>Contatos</strong> ou <strong>Grupos</strong>.
+                  Os {pendingCount} da fila são de <strong>outro chip</strong> e não seriam enviados.{" "}
+                  <OtherChipWayOut />
                 </>
               ) : (
                 <>
@@ -920,7 +937,7 @@ export function CampaignsScreen() {
             {searchedReport.length === 1
               ? "O único contato da fila é de outro chip"
               : `Os ${searchedReport.length} contatos da fila são de outro chip`}{" "}
-            e não seriam enviados, então não aparecem aqui. Importe os grupos com o chip atual.
+            e não seriam enviados, então não aparecem aqui. <OtherChipWayOut />
           </p>
         ) : reportPageRows.length === 0 ? (
           <p className="muted">Nenhum contato encontrado para "{reportSearch.trim()}".</p>

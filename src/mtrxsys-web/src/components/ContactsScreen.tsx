@@ -332,8 +332,15 @@ export function ContactsScreen() {
               <h3>
                 Validar os números <span className="contacts-step-flag">essencial</span>
               </h3>
+              {/* Diz SOBRE O QUE ele roda. Sem isso a leitura natural é "valida o que eu acabei de
+                  colar", e quem tem a base vazia clica esperando algo e recebe 0/0 sem entender por quê.
+                  O runner varre todo contato em estágio Lead não-optado, de QUALQUER origem (passo 1 ou
+                  importação na aba Grupos) — quem já respondeu não é re-checado, porque conversar já
+                  prova que a conta existe. */}
               <p className="contacts-step-sub">
-                Confere um a um quem tem conta no WhatsApp e descarta os que não têm.{" "}
+                Roda sobre os contatos <strong>já cadastrados</strong> (do passo 1 ou importados em
+                Grupos) que ainda não responderam — não é preciso importar de grupo pra usar. Confere um
+                a um quem tem conta no WhatsApp e descarta os que não têm.{" "}
                 <strong>Disparar para número inexistente é o que queima o chip.</strong> Leva alguns
                 minutos.
               </p>
