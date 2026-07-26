@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
@@ -9,7 +10,8 @@ namespace MtrxSys.Infrastructure.Phone;
 /// socket), os métodos devolvem "unavailable" em vez de estourar — assim a aba "Celular" degrada de
 /// forma limpa. Exige um host com /dev/kvm (servidor Linux) pra o Android de fato bootar. Os helpers
 /// de processo/download ficam em <see cref="DockerCli"/> (compartilhados com o engine redroid).</summary>
-internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IHttpClientFactory http)
+internal sealed class DockerCliPhoneOrchestrator(
+    IOptions<PhoneOptions> opts, IHttpClientFactory http, ILogger<DockerCliPhoneOrchestrator> log)
     : IPhoneOrchestrator, IDisposable
 {
     // Quanto tempo o WhatsApp pode levar pra reconhecer um contato novo da agenda. MEDIDO em produção
@@ -819,13 +821,50 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         return (outp ?? "").Replace("\r", "").Trim();
     }
 
+    /// <summary>Aceita o booleano do SQLite, que é INTEIRO (0/1), além de true/false.</summary>
+    /// <remarks>
+    /// SQLite NÃO TEM tipo booleano: `case when ... then 1 else 0 end` sai como número, e o `-json` o
+    /// escreve como número. O System.Text.Json recusa 0 → bool e lança — o que o <c>ParseRows</c> engolia,
+    /// devolvendo lista VAZIA.
+    /// <para>🔴 Custou o diagnóstico de 2026-07-26: 126 participantes de grupo viraram ZERO em silêncio.
+    /// A tela dizia "Nenhum membro com número visível" e a importação, "0 importados · 0 duplicados" —
+    /// as duas verdadeiras do ponto de vista delas, as duas enganosas. O SQL estava certo (verificado no
+    /// aparelho: 4845 bytes de JSON válido), o snapshot estava certo, a API é que devolvia `[]`.</para>
+    /// Registrado nas OPÇÕES e não no SQL de propósito: a incompatibilidade é do SQLite inteiro, não desta
+    /// consulta. Corrigir o `case when` resolveria uma linha e deixaria a próxima armadilha armada —
+    /// `PhoneGroupMember.IsAdmin` é hoje o único `bool` lido do aparelho, e o próximo a ser adicionado
+    /// cairia igual, com o mesmo silêncio.
+    /// </remarks>
+    private sealed class SqliteBoolConverter : System.Text.Json.Serialization.JsonConverter<bool>
+    {
+        public override bool Read(
+            ref System.Text.Json.Utf8JsonReader reader, Type _, System.Text.Json.JsonSerializerOptions __) =>
+            reader.TokenType switch
+            {
+                System.Text.Json.JsonTokenType.True => true,
+                System.Text.Json.JsonTokenType.False => false,
+                System.Text.Json.JsonTokenType.Number => reader.GetInt64() != 0,
+                // "0"/"1"/"true" como TEXTO: o sqlite emite string quando a coluna é TEXT ou quando a
+                // expressão passa por json(). Tolerar aqui evita reabrir este mesmo bug por outra porta.
+                System.Text.Json.JsonTokenType.String => reader.GetString() is { } s
+                    && !string.Equals(s, "0", StringComparison.Ordinal)
+                    && !string.Equals(s, "false", StringComparison.OrdinalIgnoreCase)
+                    && s.Length > 0,
+                _ => false,
+            };
+
+        public override void Write(
+            System.Text.Json.Utf8JsonWriter writer, bool value, System.Text.Json.JsonSerializerOptions _) =>
+            writer.WriteBooleanValue(value);
+    }
+
     // Instância única: as opções são imutáveis aqui e o serializador guarda metadados de tipo em cache
     // por instância — criar uma nova a cada leitura jogaria esse cache fora e re-refletiria os records
     // toda vez (é o que o CA1869 aponta). Isto roda a cada poll de mensagens, então importa.
     private static readonly System.Text.Json.JsonSerializerOptions DbJson =
-        new() { PropertyNameCaseInsensitive = true };
+        new() { PropertyNameCaseInsensitive = true, Converters = { new SqliteBoolConverter() } };
 
-    private static List<T> ParseRows<T>(string json)
+    private List<T> ParseRows<T>(string json)
     {
         if (json.Length == 0 || json[0] != '[')
         {
@@ -835,10 +874,18 @@ internal sealed class DockerCliPhoneOrchestrator(IOptions<PhoneOptions> opts, IH
         {
             return System.Text.Json.JsonSerializer.Deserialize<List<T>>(json, DbJson) ?? [];
         }
-        catch (System.Text.Json.JsonException)
+        catch (System.Text.Json.JsonException ex)
         {
             // Banco meio-copiado ou schema diferente numa versão futura do app: devolver vazio deixa o
             // chamador tratar como "não há nada agora" em vez de derrubar o disparo por causa de leitura.
+            //
+            // ⚠️ MAS LOGA. Este catch existia MUDO e escondeu por um dia inteiro um erro de CONTRATO entre
+            // o SQL e o record (bool × inteiro do SQLite): a tela dizia "nenhum membro" e ninguém tinha
+            // como saber que o problema era desserialização. Tolerar a falha é certo; escondê-la não.
+            log.LogWarning(ex,
+                "Leitura do banco do aparelho não desserializou para {Tipo} — tratando como vazio. "
+                + "Se isto repetir, o SQL e o record divergiram (schema novo do app, ou tipo incompatível).",
+                typeof(T).Name);
             return [];
         }
     }
