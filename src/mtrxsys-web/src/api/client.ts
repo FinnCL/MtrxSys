@@ -220,10 +220,12 @@ export const api = {
       revokedByServer: boolean;
       cleanSupported: boolean;
     }>("/api/phone/whatsapp-state"),
-  // "Limpar aparelho restringido": aparelho NOVO a partir da imagem-ouro (molde que nunca registrou
+  // "Limpar aparelho restringido": restaura o aparelho a partir da imagem-ouro (molde que nunca registrou
   // número). Não recria nada no ato — grava um flag e o emulator-watchdog recria pelo compose (~20s pra
-  // pegar + ~2-3 min de boot). Necessário depois de uma RESTRIÇÃO: o "Trocar chip" (pm clear) mantém
-  // android_id/GSF do device queimado, e o chip novo herda a ficha.
+  // pegar + ~2-3 min de boot). Necessário depois de uma RESTRIÇÃO: o "Trocar chip" (pm clear) apaga só o
+  // app e deixa todo o histórico de contas do device.
+  // ⚠️ NÃO troca o `android_id` — o molde tem identidade FIXA (medido 2026-07-26: igual antes e depois).
+  // O que ela remove é o RASTRO DE CONTA. Ficha nova só reconstruindo o molde (build-golden-image-a.sh).
   // `paused`: o endpoint PAUSA a fila junto (senão o dispatcher dispararia contra o container sendo
   // apagado). Fica pausada até o operador retomar no Disparo, depois de registrar o chip e re-importar.
   phoneCleanDevice: () =>

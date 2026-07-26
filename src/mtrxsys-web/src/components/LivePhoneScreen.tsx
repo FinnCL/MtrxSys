@@ -70,9 +70,12 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
   const [resetting, setResetting] = useState(false);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
   // Estado da CONTA no emulador — o que distingue "eu quero trocar de número" de "o servidor derrubou".
-  // Depois de uma restrição o "Trocar chip" (pm clear) é INSUFICIENTE: ele mantém android_id/GSF do
-  // device, e o chip novo herda a ficha do queimado (custou um chip em 2026-07-25). Nesse caso a tela
-  // oferece "Limpar aparelho restringido", que troca o aparelho pela imagem-ouro.
+  // Depois de uma restrição o "Trocar chip" (pm clear) é INSUFICIENTE: ele apaga só o app e deixa todo o
+  // histórico de contas do device (custou um chip em 2026-07-25). Nesse caso a tela oferece "Limpar
+  // aparelho restringido", que restaura o aparelho a partir da imagem-ouro.
+  // ⚠️ MAS NENHUM DOS DOIS TROCA O `android_id`: o molde tem identidade FIXA (medido 2026-07-26 — antes
+  // e depois da limpeza, `6d2c8d865b293f7f`). A limpeza tira o RASTRO DE CONTA, não a ficha do aparelho.
+  // Identidade nova só com `deploy/build-golden-image-a.sh` (reconstrói o molde), que não tem botão.
   const [waState, setWaState] = useState<Awaited<ReturnType<typeof api.phoneWhatsAppState>> | null>(null);
   const [confirmClean, setConfirmClean] = useState(false);
   const [cleaning, setCleaning] = useState(false);
@@ -337,10 +340,11 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
             Recarregar tela
           </button>
           {/* Trocar chip (pm clear): troca de número POR ESCOLHA — zera o app e MANTÉM o aparelho.
-              ⚠️ NÃO é o botão certo depois de uma restrição: o pm clear preserva android_id/GSF, e o chip
-              novo herda a ficha do queimado (2026-07-25: chip saudável morreu em 6h30, parado, num device
+              ⚠️ NÃO é o botão certo depois de uma restrição: o pm clear apaga só o app e deixa todo o
+              histórico de contas do device (2026-07-25: chip saudável morreu em 6h30, parado, num device
               que horas antes hospedara um restringido). Nesse caso o certo é "Limpar aparelho restringido",
-              logo abaixo — e a dica sob os botões diz isso quando o estado indica revogação. */}
+              logo abaixo — e a dica sob os botões diz isso quando o estado indica revogação.
+              (Nem um nem outro troca o `android_id`; ver a nota no botão de limpeza.) */}
           <button
             type="button"
             className="phone-reset-chip"
@@ -351,14 +355,21 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
             {resetting ? "Trocando chip…" : "Trocar chip"}
           </button>
           {/* Aparelho novo pela imagem-ouro. Só aparece onde há molde + watchdog pra executar (stack A,
-              compose-managed) — nos stacks docker-run o backend bloquearia, então nem oferecemos. */}
+              compose-managed) — nos stacks docker-run o backend bloquearia, então nem oferecemos.
+
+              ⚠️ O TÍTULO PROMETIA "android_id NOVO" E ISSO ERA FALSO (corrigido 2026-07-26). A limpeza
+              RESTAURA o molde, e o molde tem identidade FIXA — medido: antes e depois da limpeza o
+              android_id ficou em `6d2c8d865b293f7f`, o mesmo aparelho que já hospedou DOIS chips
+              restringidos. Quem lê "android_id novo" conclui que a correlação por device foi resolvida e
+              registra outro número sobre a mesma ficha. Identidade nova só sai de
+              `deploy/build-golden-image-a.sh`, que RECONSTRÓI o molde — é passo separado e não tem botão. */}
           {waState?.cleanSupported && (
             <button
               type="button"
               className="phone-reset-chip"
               onClick={() => setConfirmClean(true)}
               disabled={cleaning}
-              title="Troca o aparelho inteiro por um limpo: android_id e conta Google novos, sem rastro do chip anterior. Use quando o número foi banido, caso em que 'Trocar chip' não basta. Apaga tudo, pausa a fila e leva ~3 min."
+              title="Apaga a conta do WhatsApp, a conta Google e a agenda, restaurando o aparelho-molde. Use quando o número foi restringido/banido. ATENÇÃO: a identidade do aparelho (android_id) é PRESERVADA — se um chip já queimou aqui, o próximo nasce com a mesma ficha; nesse caso é preciso reconstruir o molde antes. Pausa a fila e leva ~3 min."
             >
               {cleaning ? "Pedindo limpeza…" : "Limpar aparelho restringido"}
             </button>
@@ -393,10 +404,15 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           message={
             <>
               Recria o emulador a partir da <b>imagem-ouro</b> — um aparelho que <b>nunca registrou número</b>.
-              O <code>android_id</code> e o checkin do Google nascem novos, sem rastro do chip anterior.
+              Apaga a conta do WhatsApp, as contas Google e a agenda.
               <br /><br />
-              Use isto quando um chip foi <b>restringido</b>: o “Trocar chip” só apaga o app e mantém a
-              identidade do aparelho, então o número novo herdaria a ficha do queimado.
+              Use isto quando um chip foi <b>restringido</b>: o “Trocar chip” apaga só o app, deixando para
+              trás o histórico de contas do aparelho.
+              <br /><br />
+              <b>⚠️ O <code>android_id</code> NÃO muda.</b> O molde tem identidade fixa, então a limpeza
+              devolve <b>o mesmo aparelho</b> — apenas sem rastro de conta. Se um chip <b>já queimou aqui</b>,
+              o próximo nasce com a mesma ficha: nesse caso é preciso <b>reconstruir o molde</b> antes
+              (<code>deploy/build-golden-image-a.sh</code>), que é o único caminho que gera identidade nova.
               <br /><br />
               <b>Perde tudo que está no emulador</b> (conta logada, agenda, contas Google). O boot leva
               ~2-3 min; depois <b>espere o selo “Proxy do emulador: OK”</b> antes de registrar o chip novo,
