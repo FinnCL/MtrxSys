@@ -326,27 +326,35 @@ export function ContactsScreen() {
           {/* Validar lista (pré-voo anti-463): confirma quais têm WhatsApp e descarta os inexistentes
               ANTES do disparo. Paced (8-20s/número) — some do grupo raspado o que não tem conta.
               É o passo DESTACADO: sem ele o disparo trabalha contra o próprio chip. */}
-          <li className="contacts-step contacts-step-key">
+          <li className="contacts-step">
             <span className="contacts-step-num" aria-hidden="true">2</span>
             <div className="contacts-step-body">
               <h3>
-                Validar os números <span className="contacts-step-flag">essencial</span>
+                Validar os números{" "}
+                <span className="contacts-step-flag is-muted">opcional</span>
               </h3>
-              {/* Diz SOBRE O QUE ele roda. Sem isso a leitura natural é "valida o que eu acabei de
-                  colar", e quem tem a base vazia clica esperando algo e recebe 0/0 sem entender por quê.
-                  O runner varre todo contato em estágio Lead não-optado, de QUALQUER origem (passo 1 ou
-                  importação na aba Grupos) — quem já respondeu não é re-checado, porque conversar já
-                  prova que a conta existe. */}
+              {/* ⚠️ NÃO chamar de "essencial" nem dizer que ele evita queimar o chip — foi o texto que
+                  esteve aqui até 2026-07-26, e era falso em dois níveis. (1) A PROTEÇÃO NÃO É DELE: o
+                  motor checa cada número na hora do envio e pula os inexistentes sozinho
+                  (`MarkSkipped("número não existe no WhatsApp")`), gastando zero da cota diária. (2) No
+                  modo Emulador ele nem roda — depende do check-exists do WAHA, e é justamente o WAHA que
+                  não está lá. Marcar como indispensável um botão que aborta ao ser clicado é pior que
+                  não ter o botão: leva o operador a desconfiar do sistema inteiro.
+                  O ganho REAL é de higiene, e é específico: sem validar, o motor GRAVA o contato na
+                  agenda do aparelho ANTES de descobrir que ele não tem WhatsApp — então cada número morto
+                  fica lá para sempre. */}
               <p className="contacts-step-sub">
                 Roda sobre os contatos <strong>já cadastrados</strong> (do passo 1 ou importados em
-                Grupos) que ainda não responderam — não é preciso importar de grupo pra usar. Confere um
-                a um quem tem conta no WhatsApp e descarta os que não têm.{" "}
-                <strong>Disparar para número inexistente é o que queima o chip.</strong> Leva alguns
-                minutos.
+                Grupos) que ainda não responderam. Confere um a um quem tem conta no WhatsApp e{" "}
+                <strong>descarta</strong> os que não têm.
+                <br />
+                Não é obrigatório: o disparo já pula número inexistente sozinho, sem gastar envio. Serve
+                para <strong>limpar a base antes</strong> — evita encher a agenda do aparelho com números
+                mortos e sujar o relatório. Leva alguns minutos e o descarte só se desfaz re-importando o
+                grupo.
               </p>
               <button
                 type="button"
-                className="contacts-step-cta"
                 onClick={() => void startValidation()}
                 disabled={validation?.running}
               >

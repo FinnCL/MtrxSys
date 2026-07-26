@@ -681,7 +681,6 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
 }
 /* "Respondeu": mesmo padrão de chip do status "Enviada" (.stat-chip), com cor própria (azul --info)
    pra NÃO se confundir com o verde do "Enviado" nem com o verde do accent quando aparecem lado a lado. */
-.stat-engaged { margin-left: 6px; background: rgba(83, 189, 235, 0.18); color: var(--info); white-space: nowrap; }
 .contacts-table .mono { font-family: ui-monospace, monospace; }
 .reactivate-btn { padding: 3px 10px; font-size: 12px; background: var(--bg-3); color: var(--fg); }
 .reactivate-btn:hover { background: var(--accent); }
@@ -975,11 +974,8 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
    descendente (0,1,1) venceria o `.contacts-step-warn` (0,1,0) — zerando justo a margem dele. */
 .contacts-step-status { margin: 0; }
 
-/* O passo ESSENCIAL: borda e número em verde de ação, botão maior. O destaque é do passo inteiro,
-   não só do botão — quem varre a tela lê o cartão antes de ler o rótulo. */
-.contacts-step-key { border-color: var(--accent-strong); background: rgba(0, 168, 132, 0.06); }
-.contacts-step-key .contacts-step-num { background: var(--accent-strong); color: #fff; }
-.contacts-step-cta { padding: 8px 18px; font-weight: 600; }
+/* `.contacts-step-key` e `.contacts-step-cta` saíram em 2026-07-26 junto com o "essencial" do passo 2:
+   nenhum passo desta aba é indispensável, e destacar um deles afirmava uma hierarquia falsa. */
 .contacts-step-flag {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
   padding: 2px 7px; border-radius: 999px; background: var(--accent-strong); color: #fff;

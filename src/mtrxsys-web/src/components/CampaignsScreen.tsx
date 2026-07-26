@@ -376,7 +376,12 @@ export function CampaignsScreen() {
     }
     // Sem desempate por `fromCurrentChip`: a lista já só tem contatos do chip conectado, então esse
     // critério seria sempre zero.
-    return (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0);
+    //
+    // E sem desempate por `engaged`: ele existia pra acompanhar o selo "Respondeu", que saiu daqui.
+    // Ordenar por uma propriedade que não aparece em lugar nenhum da linha deixa a tabela com uma ordem
+    // que o operador não consegue explicar — pior que ordem nenhuma. O sort é ESTÁVEL, então devolver 0
+    // preserva a ordem que o servidor já mandou.
+    return 0;
   });
   const reportTotalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
   // Clamp na leitura (sem setState): se o poll de 5s muda o total, a página nunca "estoura".
@@ -963,11 +968,6 @@ export function CampaignsScreen() {
                     <span className={`stat-chip stat-${i.status.toLowerCase()}`}>
                       {DISPATCH_STATUS_LABELS[i.status]}
                     </span>
-                    {i.engaged && (
-                      <span className="stat-chip stat-engaged" title="Contato que já respondeu ou avançou; público seguro (o único liberado na fase de aquecimento).">
-                        Respondeu
-                      </span>
-                    )}
                     {(i.status === "Retrying" || i.status === "Failed") && i.attemptCount > 0 && (
                       <span className="muted small"> · {i.attemptCount + 1}ª tentativa</span>
                     )}
