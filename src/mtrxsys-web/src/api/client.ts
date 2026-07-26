@@ -137,18 +137,6 @@ export interface ChipIdentity {
   proxyReal?: string | null;
 }
 
-// Progresso da "Validar lista" (pré-voo anti-463): quantos Leads foram checados no WhatsApp e quantos
-// foram descartados por não ter conta. Espelha o ValidationStatus do backend.
-export interface ValidationStatus {
-  running: boolean;
-  total: number;
-  done: number;
-  valid: number;
-  invalid: number;
-  uncertain: number;
-  message: string | null;
-}
-
 export const api = {
   login: (email: string, password: string) =>
     request<LoginResponse>("/api/auth/login", {
@@ -494,19 +482,14 @@ export const api = {
       members: { name: string; phone: string; sentToday: number }[];
     }>("/api/warmup/status"),
   startWarmupEngine: () => request<{ running: boolean }>("/api/warmup/start", { method: "POST" }),
-  // "Validar lista" (pré-voo anti-463): dispara a validação dos Leads pelo check-exists e reporta progresso.
-  contactsValidateStart: () =>
-    request<{ started: boolean; status: ValidationStatus }>("/api/contacts/validate/start", { method: "POST" }),
-  contactsValidateStatus: () => request<ValidationStatus>("/api/contacts/validate/status"),
-  // Regrava o "dono" (ImportedByPhone) dos contatos para o chip conectado agora, liberando o disparo por
-  // eles. ⚠️ Afrouxa a trava anti-463 de propósito: só use quando o chip atual de fato tem relação com
-  // esses contatos. O caminho honesto é re-importar o grupo (que PROVA o vínculo); isto existe pro caso
-  // que a re-importação nunca resolve — contato adicionado à mão, que nunca veio de grupo.
-  // `requeued`: jobs que o gate já tinha PULADO e voltaram pra fila. "Pulado" é estado final, então sem
-  // isso migrar não recuperaria quem já tinha sido barrado — e a fila continuaria vazia sem explicação.
-  contactsReassignToCurrentChip: () =>
-    request<{ moved: number; total: number; requeued: number; chip: string }>(
-      "/api/contacts/reassign-to-current-chip", { method: "POST" }),
+  // ⚠️ Saíram daqui em 2026-07-26, junto com o passo a passo da aba Contatos:
+  //   contactsValidateStart / contactsValidateStatus  → "Validar números"
+  //   contactsReassignToCurrentChip                   → "Migrar contatos para este chip"
+  // Os ENDPOINTS continuam vivos na api. O de migração é o mais sensível: ele regrava o dono de TODOS os
+  // contatos e ressuscita jobs pulados, afrouxando a trava anti-463 — e foi um envio a contato sem
+  // vínculo que restringiu um chip nesse mesmo dia. Sem UI, ninguém o chama por engano; se um dia voltar,
+  // volta com o risco escrito na tela, como estava. O fluxo saudável é importar do grupo, que PROVA o
+  // vínculo em vez de declará-lo.
   stopWarmupEngine: () => request<{ running: boolean }>("/api/warmup/stop", { method: "POST" }),
 
   // FASE HUMANA (dias 1-3 do chip novo): o disparo fica travado enquanto o operador conversa à mão

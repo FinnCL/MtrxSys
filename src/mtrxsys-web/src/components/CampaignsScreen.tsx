@@ -65,17 +65,18 @@ const reportStatusRank = (i: DispatchReportItem) =>
 
 /// A saída pra "fila cheia de contato de outro chip", dita nos DOIS lugares onde esse beco aparece
 /// (o banner da fila e a tabela de resultados vazia). Componente, e não a frase copiada: as duas cópias
-/// já divergiram uma vez — uma delas mandava importar grupo "em Contatos", aba que não tem mais esse
-/// botão — e orientação errada num beco sem saída é pior que orientação nenhuma.
+/// já divergiram uma vez (uma mandava importar grupo "em Contatos", aba que não tem mais esse botão), e
+/// orientação errada num beco sem saída é pior que orientação nenhuma.
 ///
-/// DOIS caminhos, de propósito. Re-importar é o preferido porque PROVA o vínculo com o chip; mas só
-/// existe se houver grupo, e contato adicionado à mão nunca veio de grupo nenhum. Oferecendo só ele, o
-/// operador fica sem saída olhando uma fila parada — foi a lacuna que a migração (passo 3) preencheu.
+/// ⚠️ Apontava também pra "Migrar contatos para este chip", REMOVIDO da aba Contatos em 2026-07-26.
+/// Manter a menção deixaria o operador procurando um botão que não existe. E a remoção foi deliberada:
+/// migrar DECLARA um vínculo que o WhatsApp não vê, e foi o que restringiu um chip naquele mesmo dia.
+/// Hoje o único caminho é o que PROVA o vínculo, que é importar do grupo.
 function OtherChipWayOut() {
   return (
     <>
-      Re-importe o grupo com o chip atual em <strong>Grupos</strong> — ou, se não houver grupo para
-      importar, use <strong>"Migrar contatos para este chip"</strong> na aba <strong>Contatos</strong>.
+      Re-importe o grupo com o chip atual na aba <strong>Grupos</strong>. Se o chip ainda não está no
+      grupo, entre nele primeiro pelo WhatsApp e depois importe.
     </>
   );
 }
@@ -1082,7 +1083,7 @@ export function CampaignsScreen() {
               <strong>não</strong> serão enviados.
               <br />
               <br />
-              Os contatos e os envios já feitos não são afetados — dá pra preparar a fila de novo quando quiser.
+              Os contatos e os envios já feitos não são afetados. Dá pra preparar a fila de novo quando quiser.
             </>
           }
           confirmLabel="Sim, limpar"
