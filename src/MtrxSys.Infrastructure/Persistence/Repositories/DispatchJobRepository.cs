@@ -79,6 +79,28 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
         return new DispatchStats(pending, sent, failed, skipped, retrying, pendingFromCurrentChip);
     }
 
+    // Uma instrução SQL, como as demais operações em massa daqui. Casa pelo motivo EXATO (constante
+    // compartilhada com o motor) e não por status apenas: pulo por opt-out, descarte ou aquecimento tem
+    // outra causa, continua valendo, e ressuscitá-los faria o motor pulá-los de novo no ciclo seguinte —
+    // ruído e trabalho à toa.
+    //
+    // ⚠️ NÃO MEXE NO ScheduledAt. Ele não é "quando enviar" (o ritmo é do DelayPolicy): ele ORDENA a
+    // fila, e essa ordem carrega a intercalação seed/frio que o enfileirador montou — misturar quente e
+    // frio é medida anti-ban. Gravar a mesma data em todos os revividos colapsaria essa ordem num
+    // EMPATE, o motor os processaria em ordem arbitrária e vários frios poderiam sair em sequência.
+    // Preservando o valor original, cada job volta exatamente para o lugar que já tinha.
+    // ExcludingDiscardedContacts: job de contato descartado NÃO volta. Ele seria pulado de novo no ciclo
+    // seguinte (agora com motivo "descartado"), gerando exatamente o ruído que a filtragem por motivo
+    // exato existe pra evitar — e ainda contaria como "voltou pra fila" numa mensagem que promete envio.
+    public Task<int> RequeueSkippedByChipGateAsync(string chipPhoneE164, CancellationToken ct) =>
+        ExcludingDiscardedContacts(db.DispatchJobs)
+            .Where(j => j.Status == DispatchStatus.Skipped
+                && j.ErrorReason == DispatchSkipReasons.OtherChip
+                && db.Contacts.Any(c => c.Id == j.ContactId && c.ImportedByPhone == chipPhoneE164))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(j => j.Status, DispatchStatus.Pending)
+                .SetProperty(j => j.ErrorReason, (string?)null), ct);
+
     public async Task<IReadOnlyList<DispatchJob>> ListRecentAsync(int limit, CancellationToken ct) =>
         await db.DispatchJobs
             .OrderByDescending(j => j.SentAt ?? j.ScheduledAt)

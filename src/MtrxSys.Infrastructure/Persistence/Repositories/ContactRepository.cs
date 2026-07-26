@@ -62,6 +62,19 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
 
     // "Renovar lista": zera o LastSentAt de quem tinha recebido, pra o selo voltar a "Novo"
     // junto com a fila zerada. Não toca em Stage/OptOut (respondeu/saiu continuam).
+    // Uma instrução SQL em vez de materializar a base inteira: o caminho ingênuo (carregar todos os
+    // contatos rastreados, mutar e salvar) custa memória e tempo proporcionais à base, e este método
+    // existe justamente pra rodar sobre TODA ela. Mesmo padrão do ClearLastSentAsync logo abaixo.
+    //
+    // ⚠️ O `!=` sozinho NÃO pegaria os legados: em SQL, `NULL <> 'x'` é NULL (não é verdadeiro), então
+    // contato sem marca — exatamente quem mais precisa migrar — ficaria de fora. Por isso o `== null`
+    // explícito, sem depender de como o provedor traduz a comparação.
+    public Task<int> ReassignToChipAsync(string chipPhoneE164, CancellationToken ct) =>
+        db.Contacts
+            .Where(c => c.DeletedAt == null
+                && (c.ImportedByPhone == null || c.ImportedByPhone != chipPhoneE164))
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.ImportedByPhone, chipPhoneE164), ct);
+
     public Task<int> ClearLastSentAsync(CancellationToken ct) =>
         db.Contacts
             .Where(c => c.LastSentAt != null)

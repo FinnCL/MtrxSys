@@ -5,6 +5,12 @@ namespace MtrxSys.Core.Application.Abstractions;
 public interface IDispatchJobRepository
 {
     Task<DispatchJob?> DequeueNextPendingAsync(DateTimeOffset until, CancellationToken ct);
+
+    /// <summary>Devolve à fila os jobs PULADOS pelo gate anti-463 cujo contato agora pertence ao chip
+    /// informado. Usado depois da migração de contatos: "Pulado" é estado FINAL, então sem isto migrar
+    /// não recuperaria quem já tinha sido pulado — e a fila continuaria vazia sem explicação. Preserva o
+    /// ScheduledAt (que carrega a ORDEM da fila, não o horário de envio). Retorna quantos voltaram.</summary>
+    Task<int> RequeueSkippedByChipGateAsync(string chipPhoneE164, CancellationToken ct);
     /// <summary>Menor ScheduledAt entre os jobs ainda na fila (Pending/Retrying), ou null se a fila
     /// está vazia. Usado pra enfileirar novos importados NO TOPO (com ScheduledAt anterior a este).</summary>
     Task<DateTimeOffset?> GetEarliestPendingScheduledAtAsync(CancellationToken ct);
@@ -49,6 +55,7 @@ public interface IDispatchJobRepository
 // (o gate anti-463 pula "outro chip"). A UI desabilita "Iniciar envios" quando Pending>0 mas este é 0
 // (fila 100% de outro chip → disparo sairia 0). Chip desconhecido → = Pending+Retrying (gate OFF).
 public sealed record DispatchStats(int Pending, int Sent, int Failed, int Skipped, int Retrying, int PendingFromCurrentChip);
+
 
 public sealed record DispatchReportItem(
     string? Phone,

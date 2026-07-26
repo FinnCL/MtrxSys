@@ -2,6 +2,17 @@ using MtrxSys.Core.Domain.Common;
 
 namespace MtrxSys.Core.Domain.Campaigns;
 
+/// <summary>Motivos de pulo que outro código precisa RECONHECER depois, e não só exibir.</summary>
+public static class DispatchSkipReasons
+{
+    /// <summary>Pulo pelo gate anti-463 (contato de outro chip). É o único reversível: quando o contato
+    /// é migrado para o chip conectado, o motivo deixa de existir e o job volta pra fila.
+    /// <para>⚠️ O texto é comparado no banco para achar esses jobs. Mudá-lo faz os já gravados pararem
+    /// de casar — se um dia precisar mudar, migre as linhas antigas junto.</para></summary>
+    public const string OtherChip =
+        "contato não é do chip conectado (só envia p/ importados por ele) — evita 463";
+}
+
 public sealed class DispatchJob : Entity<Guid>
 {
     public Guid ContactId { get; private set; }
@@ -63,6 +74,7 @@ public sealed class DispatchJob : Entity<Guid>
         Status = DispatchStatus.Skipped;
         ErrorReason = reason;
     }
+
 
     // Adia o disparo pra frente (nextAt futuro) SEM consumir tentativa de envio e SEM marcar terminal.
     // Diferente de ScheduleRetry (que incrementa AttemptCount) e de MarkSkipped (terminal). Uso: a

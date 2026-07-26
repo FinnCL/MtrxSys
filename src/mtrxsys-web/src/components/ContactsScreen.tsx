@@ -28,6 +28,10 @@ export function ContactsScreen() {
   // "Importar de grupos" aqui na aba Contatos (mesmo painel da aba Grupos): re-importar retag os
   // contatos pro chip conectado AGORA (habilita o disparo por ele). Colapsado por default.
   const [showGroupImport, setShowGroupImport] = useState(false);
+  // "Migrar contatos para este chip": ação destrutiva do ponto de vista anti-ban (afirma um vínculo que
+  // pode não existir), por isso passa por confirmação com o risco explicado.
+  const [confirmReassign, setConfirmReassign] = useState(false);
+  const [reassigning, setReassigning] = useState(false);
   // "Validar lista" (pré-voo anti-463): progresso da checagem de existência dos Leads no WhatsApp.
   const [validation, setValidation] = useState<ValidationStatus | null>(null);
 
@@ -39,6 +43,36 @@ export function ContactsScreen() {
       if (!r.started) setActionMsg("Validação já está em andamento.");
     } catch (ex) {
       setError(ex instanceof Error ? ex.message : String(ex));
+    }
+  };
+
+  // Regrava o dono dos contatos para o chip conectado. Recarrega as listas no fim: quem estava cinza
+  // ("outro chip") passa a aparecer habilitado, e ver isso acontecer é a confirmação de que funcionou.
+  const reassignToCurrentChip = async () => {
+    setConfirmReassign(false);
+    setReassigning(true);
+    setActionMsg(null);
+    try {
+      const r = await api.contactsReassignToCurrentChip();
+      // Os dois números são INDEPENDENTES: numa segunda execução `moved` pode ser 0 (contatos já
+      // migrados) e ainda assim haver envios pulados voltando. Aninhar o aviso dentro do `moved > 0`
+      // escondia justamente esse caso — o usuário leria "nada mudou" enquanto a fila se enchia.
+      const parteContatos = r.moved === 0
+        ? `Nenhum contato precisou mudar: os ${r.total} já pertencem ao chip ${r.chip}.`
+        : `${r.moved} de ${r.total} contatos passaram para o chip ${r.chip}.`;
+      const parteFila = r.requeued > 0
+        ? ` ${r.requeued} ${r.requeued === 1 ? "envio pulado voltou" : "envios pulados voltaram"} para a fila.`
+        : "";
+      setActionMsg(parteContatos + parteFila);
+      setGroups(await api.listContactGroupTags());
+      // Descarta o cache das listas já abertas: elas guardam o `fromCurrentChip` ANTIGO e continuariam
+      // mostrando "outro chip" em cinza mesmo depois da migração ter dado certo.
+      setContactsByGroup({});
+      setExpanded(null);
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setReassigning(false);
     }
   };
 
@@ -229,18 +263,41 @@ export function ContactsScreen() {
               Os dois já se chamavam "grupo" e a confusão era garantida. O nome interno (groupTag)
               fica como está: renomeá-lo em API/banco é risco sem ganho pra quem usa. */}
           <h2>Contatos por lista</h2>
-          <button type="button" onClick={() => setShowAdd(true)}>
+          <button
+            type="button"
+            onClick={() => setShowAdd(true)}
+            title="Cole ou digite números para virarem contatos, sem precisar de grupo. Você escolhe em qual lista salvar."
+          >
             Adicionar números
           </button>
           {/* Validar lista (pré-voo anti-463): confirma quais têm WhatsApp e descarta os inexistentes
               ANTES do disparo. Paced (8-20s/número) — some do grupo raspado o que não tem conta. */}
-          <button type="button" onClick={() => void startValidation()} disabled={validation?.running}>
+          <button
+            type="button"
+            onClick={() => void startValidation()}
+            disabled={validation?.running}
+            title="Confere um a um quem tem conta no WhatsApp e descarta os que não têm. Disparar para número inexistente é o que queima o chip. Leva alguns minutos."
+          >
             {validation?.running ? "Validando…" : "Validar números"}
           </button>
           {/* Importar de grupos aqui mesmo (mesmo painel da aba Grupos). Re-importar depois de trocar o
               chip "move" os contatos pro chip novo (ImportedByPhone) e habilita o disparo por ele. */}
-          <button type="button" onClick={() => setShowGroupImport((v) => !v)}>
+          <button
+            type="button"
+            onClick={() => setShowGroupImport((v) => !v)}
+            title="Traz os participantes de um grupo do WhatsApp como contatos. Depois de trocar o chip, importar de novo passa os contatos para o chip atual."
+          >
             {showGroupImport ? "Fechar importar" : "Importar de grupos"}
+          </button>
+          {/* Migrar contatos: resolve o caso que a re-importação NÃO resolve (contato manual nunca veio
+              de grupo). Afrouxa a trava anti-463, por isso passa por confirmação com o risco escrito. */}
+          <button
+            type="button"
+            onClick={() => setConfirmReassign(true)}
+            disabled={reassigning}
+            title="Passa os contatos de outro chip para o chip conectado agora, liberando o disparo por eles. Use quando não der para re-importar o grupo."
+          >
+            {reassigning ? "Migrando…" : "Migrar contatos para este chip"}
           </button>
         </div>
         {validation && (
@@ -452,6 +509,31 @@ export function ContactsScreen() {
           danger
           onConfirm={() => void reactivate(confirmTarget.id, confirmTarget.tag)}
           onCancel={() => setConfirmTarget(null)}
+        />
+      )}
+
+      {confirmReassign && (
+        <ConfirmDialog
+          title="Migrar os contatos para este chip?"
+          message={
+            <>
+              Todos os contatos passam a pertencer ao <strong>chip conectado agora</strong> e o disparo
+              volta a enviar para eles.
+              <br /><br />
+              <strong>Isto afrouxa uma proteção.</strong> O sistema só envia para contatos que vieram de
+              um grupo do próprio chip, porque enviar para quem não tem relação com ele dá erro 463, que
+              é gatilho de banimento. Re-importar o grupo prova esse vínculo; migrar na mão apenas o
+              afirma.
+              <br /><br />
+              Use quando <strong>não houver como re-importar</strong> (contatos adicionados à mão, por
+              exemplo) e você souber que este chip tem relação com essas pessoas.
+            </>
+          }
+          confirmLabel="Sim, migrar"
+          cancelLabel="Cancelar"
+          danger
+          onConfirm={() => void reassignToCurrentChip()}
+          onCancel={() => setConfirmReassign(false)}
         />
       )}
 

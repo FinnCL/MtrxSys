@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.Contacts;
 using MtrxSys.Core.Domain.Conversations;
 using MtrxSys.Core.Domain.SystemState;
@@ -277,7 +278,9 @@ public sealed class DispatchEngine(
                 && connectedPhone is not null
                 && !string.Equals(contact.ImportedByPhone, connectedPhone, StringComparison.Ordinal))
             {
-                job.MarkSkipped("contato não é do chip conectado (só envia p/ importados por ele) — evita 463");
+                // Constante, não literal: a migração de contatos procura EXATAMENTE por este motivo pra
+                // devolver o job à fila. Texto duplicado aqui e lá divergiria no primeiro ajuste.
+                job.MarkSkipped(DispatchSkipReasons.OtherChip);
                 await uow.SaveChangesAsync(ct);
                 skipped++;
                 continue;

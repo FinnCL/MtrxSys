@@ -324,6 +324,49 @@ public static class ContactsEndpoints
             return Results.Created($"/api/contacts/{id}/notes/{note.Id}", ToDto(note));
         });
 
+        // "Migrar contatos para este chip": regrava o ImportedByPhone dos contatos que estão marcados com
+        // OUTRO chip (ou sem marca), liberando o disparo por eles.
+        //
+        // ⚠️ ISTO AFROUXA UMA TRAVA ANTI-BAN, DE PROPÓSITO E SOB DECISÃO DO OPERADOR. O ImportedByPhone
+        // existe porque disparar de um chip pra contato que veio de grupo de OUTRO chip dá 463, que é
+        // gatilho de ban. Re-importar o grupo é o caminho honesto: ele PROVA que o chip novo está no
+        // grupo. Migrar na mão AFIRMA um vínculo que pode não existir — por isso a tela avisa e exige
+        // confirmação, e por isso esta rota não é chamada por nada automático.
+        //
+        // Existe caso legítimo que a re-importação NUNCA resolve: contato adicionado à mão nunca veio de
+        // grupo nenhum, então fica preso ao chip antigo pra sempre. Sem esta ação, a única saída seria
+        // recriar os contatos.
+        // Sem IUnitOfWork: o ExecuteUpdate grava direto no banco, não passa pelo change tracker. Manter o
+        // parâmetro sugeriria um SaveChanges que nunca acontece.
+        group.MapPost("/reassign-to-current-chip", async (
+            IContactRepository contacts,
+            IDispatchJobRepository jobs,
+            ISystemStateRepository state,
+            CancellationToken ct) =>
+        {
+            var currentChip = (await state.GetAsync(ct)).WarmupPhone;
+            if (string.IsNullOrWhiteSpace(currentChip))
+            {
+                // Sem saber qual é o chip conectado, regravar marcaria os contatos com nada — que o motor
+                // lê como "legado, de chip desconhecido" e PULA. Ficaria pior do que estava, em silêncio.
+                return Results.Problem(
+                    "Não deu pra ler o número do chip conectado agora, então nada foi alterado. "
+                    + "Confira se o chip está registrado no emulador e tente de novo.",
+                    statusCode: 409);
+            }
+
+            // Uma instrução SQL, sem materializar a base. Inclui quem está em opt-out de propósito: essa
+            // é uma trava INDEPENDENTE e continua valendo; deixá-los de fora criaria contatos
+            // meio-migrados que voltariam a travar se o opt-out fosse revertido.
+            var moved = await contacts.ReassignToChipAsync(currentChip, ct);
+            // Migrar o contato não basta: quem JÁ tinha sido pulado pelo gate ficou em "Pulado", que é
+            // estado final. Sem devolver esses jobs à fila, o operador migraria, veria a fila igual e
+            // concluiria que a migração não funcionou.
+            var requeued = await jobs.RequeueSkippedByChipGateAsync(currentChip, ct);
+            var total = await contacts.CountByFilterAsync(new ContactFilter(ExcludeOptedOut: false), ct);
+            return Results.Ok(new { moved, total, requeued, chip = currentChip });
+        });
+
         return app;
     }
 

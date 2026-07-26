@@ -26,6 +26,12 @@ public interface IContactRepository
     /// lista": quem só tinha recebido volta a "Novo", consistente com voltar a ser re-disparável.</summary>
     Task<int> ClearLastSentAsync(CancellationToken ct);
 
+    /// <summary>Passa o "dono" (ImportedByPhone) de TODOS os contatos vivos para o chip informado, numa
+    /// única instrução. Retorna quantos mudaram de fato.
+    /// <para>⚠️ Afrouxa a trava anti-463 por decisão explícita do operador — ver o endpoint
+    /// <c>/api/contacts/reassign-to-current-chip</c>. Não chamar de nada automático.</para></summary>
+    Task<int> ReassignToChipAsync(string chipPhoneE164, CancellationToken ct);
+
     /// <summary>Zera o LastSentAt só de quem ENGAJOU (respondeu/avançou — Stage != Novo/Descartado), pra
     /// re-disparar pros MESMOS no dia seguinte durante o aquecimento. NÃO toca em quem saiu (opt-out),
     /// descartados, nem nos "Novo" (frios). Retorna quantos foram liberados.</summary>

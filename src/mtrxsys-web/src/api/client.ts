@@ -496,6 +496,15 @@ export const api = {
   contactsValidateStart: () =>
     request<{ started: boolean; status: ValidationStatus }>("/api/contacts/validate/start", { method: "POST" }),
   contactsValidateStatus: () => request<ValidationStatus>("/api/contacts/validate/status"),
+  // Regrava o "dono" (ImportedByPhone) dos contatos para o chip conectado agora, liberando o disparo por
+  // eles. ⚠️ Afrouxa a trava anti-463 de propósito: só use quando o chip atual de fato tem relação com
+  // esses contatos. O caminho honesto é re-importar o grupo (que PROVA o vínculo); isto existe pro caso
+  // que a re-importação nunca resolve — contato adicionado à mão, que nunca veio de grupo.
+  // `requeued`: jobs que o gate já tinha PULADO e voltaram pra fila. "Pulado" é estado final, então sem
+  // isso migrar não recuperaria quem já tinha sido barrado — e a fila continuaria vazia sem explicação.
+  contactsReassignToCurrentChip: () =>
+    request<{ moved: number; total: number; requeued: number; chip: string }>(
+      "/api/contacts/reassign-to-current-chip", { method: "POST" }),
   stopWarmupEngine: () => request<{ running: boolean }>("/api/warmup/stop", { method: "POST" }),
 
   // FASE HUMANA (dias 1-3 do chip novo): o disparo fica travado enquanto o operador conversa à mão
