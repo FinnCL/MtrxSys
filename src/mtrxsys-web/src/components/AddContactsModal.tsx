@@ -159,11 +159,11 @@ export function AddContactsModal({ onClose, onSaved }: Props) {
           </div>
           <p className="muted tiny">
             Só um rótulo pra organizar e poder segmentar o disparo. Não cria grupo no WhatsApp e não
-            avisa ninguém — pra isso é a aba Grupos.
+            avisa ninguém. Para isso existe a aba Grupos.
           </p>
 
           <p className="muted small">
-            Cole ou digite os números — um por linha (ou separados por vírgula). O DDD é obrigatório;
+            Cole ou digite os números, um por linha (ou separados por vírgula). O DDD é obrigatório;
             o 55 é adicionado automaticamente e o 9º dígito é inserido quando faltar.
           </p>
           <textarea

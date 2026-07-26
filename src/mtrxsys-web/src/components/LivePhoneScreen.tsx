@@ -188,9 +188,8 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
     try {
       await api.phoneWhatsAppReset();
       setResetMsg(
-        "WhatsApp zerado. 1) Registre o novo número (só com o Proxy do emulador: OK). " +
-          "2) RE-IMPORTE os grupos com o chip novo: sem isso o disparo PULA todos os contatos " +
-          "do chip antigo (gate anti-463) e sai 0 envio.",
+        "WhatsApp zerado. 1) Registre o número novo (só com o Proxy do emulador: OK). " +
+          "2) RE-IMPORTE os grupos, senão o disparo pula todos os contatos e sai 0 envio.",
       );
       setFrameKey((k) => k + 1); // recarrega a tela pra já mostrar as boas-vindas
     } catch {

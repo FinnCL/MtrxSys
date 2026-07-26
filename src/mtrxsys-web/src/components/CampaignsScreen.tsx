@@ -325,6 +325,10 @@ export function CampaignsScreen() {
   // (stats.pendingFromCurrentChip) — confiável, sem o cap (1000) nem o filtro (status/aquecimento) do
   // relatório paginado, que davam falso-positivo/bypass se usados pra esta decisão.
   const onlyOtherChipQueued = pendingCount > 0 && !!stats && stats.pendingFromCurrentChip === 0;
+  // O que o disparo REALMENTE enviaria, e o que ficaria de fora. A tabela de resultados esconde os de
+  // outro chip, então os textos precisam falar nos mesmos números que a lista mostra.
+  const sendableCount = stats?.pendingFromCurrentChip ?? pendingCount;
+  const othersQueued = Math.max(0, pendingCount - sendableCount);
 
   // Tabela de resultados: busca por telefone/nome e paginação, tudo sobre o que já foi carregado.
   const REPORT_PAGE_SIZE = 25;
@@ -340,7 +344,12 @@ export function CampaignsScreen() {
   // a ordem real de envio (scheduledAt = a intercalação seed/frio que o motor vai executar); nos dias
   // 1-3 (responder-only) mantém "Respondeu" primeiro. Sort estável preserva o resto.
   const dayFourPlus = warmup ? !warmup.responderOnlyPhase : false;
-  const filteredReport = [...searchedReport].sort((a, b) => {
+  // Contato de OUTRO chip não é listado: o disparo não envia pra ele (gate anti-463), então mostrá-lo
+  // aqui é ruído — uma tabela cheia de linhas que nunca vão sair, cada uma pedindo explicação. Quando
+  // TODOS são de outro chip, o banner acima já diz o que fazer (re-importar), que é a única ação útil.
+  // Filtra ANTES de paginar: filtrar depois deixaria páginas com tamanhos irregulares.
+  const ownChipReport = searchedReport.filter((r) => r.fromCurrentChip);
+  const filteredReport = [...ownChipReport].sort((a, b) => {
     const byRank = reportStatusRank(a) - reportStatusRank(b);
     if (byRank !== 0) return byRank;
     if (reportStatusRank(a) === 1) {
@@ -348,7 +357,9 @@ export function CampaignsScreen() {
       const byEngaged = (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0);
       return byEngaged !== 0 ? byEngaged : +new Date(a.scheduledAt) - +new Date(b.scheduledAt);
     }
-    return (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0) || Number(b.fromCurrentChip) - Number(a.fromCurrentChip);
+    // Sem desempate por `fromCurrentChip`: a lista já só tem contatos do chip conectado, então esse
+    // critério seria sempre zero.
+    return (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0);
   });
   const reportTotalPages = Math.max(1, Math.ceil(filteredReport.length / REPORT_PAGE_SIZE));
   // Clamp na leitura (sem setState): se o poll de 5s muda o total, a página nunca "estoura".
@@ -767,13 +778,17 @@ export function CampaignsScreen() {
             <p className={`prepared-banner${onlyOtherChipQueued ? " zero" : ""}`}>
               {onlyOtherChipQueued ? (
                 <>
-                  Todos os {pendingCount} na fila são de <strong>outro chip</strong> — o disparo os
-                  pularia (anti-463). Importe os grupos com o chip conectado agora (aba <strong>Contatos</strong>
-                  {" "}→ "Importar de grupos", ou a aba <strong>Grupos</strong>) pra habilitar o envio.
+                  Os {pendingCount} da fila são de <strong>outro chip</strong> e não seriam enviados.
+                  Importe os grupos com o chip atual em <strong>Contatos</strong> ou <strong>Grupos</strong>.
                 </>
               ) : (
                 <>
-                  {pendingCount} {pendingCount === 1 ? "contato" : "contatos"} na fila. Revise em "Resultado dos envios" e inicie quando quiser.
+                  {/* Conta o que SERÁ ENVIADO, não o total da fila. A tabela abaixo esconde contatos de
+                      outro chip, então anunciar o total faria o banner dizer 116 e a lista mostrar 20 —
+                      número que não bate com nada visível é pior que número nenhum. */}
+                  {sendableCount} {sendableCount === 1 ? "contato" : "contatos"} na fila.
+                  {othersQueued > 0 && ` Outros ${othersQueued} são de outro chip e não serão enviados.`}
+                  {" "}Revise em "Resultado dos envios" e inicie quando quiser.
                 </>
               )}
             </p>
@@ -783,7 +798,7 @@ export function CampaignsScreen() {
                 className="dispatch-btn"
                 onClick={() => setConfirmStart(true)}
                 disabled={onlyOtherChipQueued}
-                title={onlyOtherChipQueued ? "A fila só tem contatos de outro chip — re-importe com o chip conectado pra habilitar." : undefined}
+                title={onlyOtherChipQueued ? "A fila só tem contatos de outro chip. Re-importe com o chip conectado pra habilitar." : undefined}
               >
                 Iniciar envios
               </button>
@@ -872,10 +887,15 @@ export function CampaignsScreen() {
             ))}
           </div>
         )}
+        {/* Os chips acima contam a fila INTEIRA (é o que a api devolve por status), mas a lista abaixo
+            só mostra os contatos do chip conectado. Sem avisar aqui, um chip dizendo 116 sobre uma lista
+            de 20 pareceria bug. Alinhar os números de verdade exigiria contagem por status E por chip na
+            api — trabalho maior que o problema, já que os de outro chip nem podem ser enviados. */}
         <p className="muted small">
           {reportStatus
             ? "Mostrando só os contatos desse status. Clique no chip de novo pra ver todos."
             : "Mostrando todos os envios. Clique num chip de status acima pra filtrar."}
+          {othersQueued > 0 && ` A lista não inclui ${othersQueued} da fila que são de outro chip.`}
         </p>
         {report.length > 0 && (
           <input
@@ -892,6 +912,16 @@ export function CampaignsScreen() {
         <div className="report-results">
         {report.length === 0 ? (
           <p className="muted">Nenhum envio ainda.</p>
+        ) : reportPageRows.length === 0 && searchedReport.length > 0 ? (
+          // A tabela esconde contatos de outro chip. Sem esta ramificação, a tela cairia no texto de
+          // "nada encontrado na busca" e culparia a BUSCA por um filtro que o usuário não aplicou —
+          // pior ainda com a busca vazia, virando uma frase sem sentido.
+          <p className="muted">
+            {searchedReport.length === 1
+              ? "O único contato da fila é de outro chip"
+              : `Os ${searchedReport.length} contatos da fila são de outro chip`}{" "}
+            e não seriam enviados, então não aparecem aqui. Importe os grupos com o chip atual.
+          </p>
         ) : reportPageRows.length === 0 ? (
           <p className="muted">Nenhum contato encontrado para "{reportSearch.trim()}".</p>
         ) : (
@@ -906,16 +936,10 @@ export function CampaignsScreen() {
               </tr>
             </thead>
             <tbody>
+              {/* Sem tratamento de "outro chip": essas linhas não chegam aqui (filtradas em
+                  ownChipReport). Só aparece o que o disparo de fato pode enviar. */}
               {reportPageRows.map((i, idx) => (
-                <tr
-                  key={(reportCurrentPage - 1) * REPORT_PAGE_SIZE + idx}
-                  className={i.fromCurrentChip ? undefined : "other-chip"}
-                  title={
-                    i.fromCurrentChip
-                      ? undefined
-                      : "Contato de OUTRO chip — o chip conectado agora não está no grupo dele, então o disparo NÃO envia (evita 463). Re-importe o grupo com este chip para habilitar."
-                  }
-                >
+                <tr key={(reportCurrentPage - 1) * REPORT_PAGE_SIZE + idx}>
                   <td className="mono">{i.phone || <span className="muted">-</span>}</td>
                   <td>{i.name || <span className="muted">-</span>}</td>
                   <td>
@@ -927,7 +951,6 @@ export function CampaignsScreen() {
                         Respondeu
                       </span>
                     )}
-                    {!i.fromCurrentChip && <span className="other-chip-badge">outro chip</span>}
                     {(i.status === "Retrying" || i.status === "Failed") && i.attemptCount > 0 && (
                       <span className="muted small"> · {i.attemptCount + 1}ª tentativa</span>
                     )}

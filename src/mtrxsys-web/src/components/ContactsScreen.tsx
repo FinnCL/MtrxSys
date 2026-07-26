@@ -28,9 +28,6 @@ export function ContactsScreen() {
   // "Importar de grupos" aqui na aba Contatos (mesmo painel da aba Grupos): re-importar retag os
   // contatos pro chip conectado AGORA (habilita o disparo por ele). Colapsado por default.
   const [showGroupImport, setShowGroupImport] = useState(false);
-  // Círculo de Aquecimento: telefone (E.164) -> id do membro. Marca quais contatos SEUS re-enviam na
-  // fase híbrida (dia 4+). Persistente — carregado uma vez e alterado pelos checkboxes.
-  const [circle, setCircle] = useState<Map<string, string>>(new Map());
   // "Validar lista" (pré-voo anti-463): progresso da checagem de existência dos Leads no WhatsApp.
   const [validation, setValidation] = useState<ValidationStatus | null>(null);
 
@@ -68,7 +65,6 @@ export function ContactsScreen() {
       setLoading(true);
       try {
         setGroups(await api.listContactGroupTags());
-        setCircle(new Map((await api.listWarmupCircle()).map((m) => [m.phone, m.id])));
         setError(null);
       } catch (ex) {
         setError(ex instanceof Error ? ex.message : String(ex));
@@ -78,26 +74,6 @@ export function ContactsScreen() {
     })();
   }, []);
 
-  // Liga/desliga o contato no Círculo de Aquecimento (pool re-enviável da fase híbrida). Persistente:
-  // marca uma vez e fica. Chaveado pelo E.164 do contato (bate com o telefone normalizado do membro).
-  async function toggleCircle(c: Contact) {
-    const existingId = circle.get(c.phoneE164);
-    try {
-      if (existingId) {
-        await api.removeFromWarmupCircle(existingId);
-        setCircle((prev) => {
-          const m = new Map(prev);
-          m.delete(c.phoneE164);
-          return m;
-        });
-      } else {
-        const member = await api.addToWarmupCircle({ phone: c.phoneE164, name: c.name });
-        setCircle((prev) => new Map(prev).set(c.phoneE164, member.id));
-      }
-    } catch (ex) {
-      setError(ex instanceof Error ? ex.message : String(ex));
-    }
-  }
 
   // Rebusca os contatos de um grupo e atualiza o cache local (após uma ação que muda um contato).
   async function refreshGroupContacts(tag: string) {
@@ -279,19 +255,13 @@ export function ContactsScreen() {
           Clique numa lista para abrir os contatos salvos dela. Lista é só uma etiqueta pra organizar
           seus contatos aqui, não é o grupo do WhatsApp.
         </p>
-        <p className="muted small">
-          <strong>Aquecer:</strong> na fase híbrida (dia 4+), quem <strong>respondeu</strong> vai pra
-          frente da fila e é <strong>renovado</strong> (re-disparado). A marca é automática ao responder.
-          Contato frio nunca renova (envia 1× só). Desmarque para parar de renovar.
-        </p>
       </header>
 
       {showGroupImport && (
         <section className="contacts-group-import">
           <p className="muted small">
-            Importe os participantes de um grupo como contatos. <strong>Re-importar</strong> depois de
-            trocar o chip "move" os contatos pro chip conectado agora — sem isso o disparo os pula (são
-            de "outro chip", anti-463).
+            Importe os participantes de um grupo como contatos. Depois de trocar o chip,
+            <strong> re-importar</strong> move os contatos pro chip atual. Sem isso o disparo os pula.
           </p>
           <GroupImportPanel
             onImported={() => {
@@ -340,7 +310,6 @@ export function ContactsScreen() {
                             <th>Nome</th>
                             <th>Telefone</th>
                             <th>Status</th>
-                            <th title="Quem respondeu vai pra frente da fila e é renovado (re-disparado) na fase híbrida (dia 4+). Auto-marcado ao responder; frio não pode ser marcado (1× só).">Aquecer</th>
                             <th>Ações</th>
                           </tr>
                         </thead>
@@ -366,19 +335,6 @@ export function ContactsScreen() {
                               <td>
                                 <StatusBadge contact={c} />
                                 {!c.fromCurrentChip && <span className="other-chip-badge">outro chip</span>}
-                              </td>
-                              <td>
-                                <input
-                                  type="checkbox"
-                                  checked={circle.has(c.phoneE164)}
-                                  onChange={() => void toggleCircle(c)}
-                                  disabled={!!c.optOutAt || c.stage === "Lead" || c.stage === "Lost"}
-                                  title={
-                                    c.stage === "Lead" || c.stage === "Lost"
-                                      ? "Só quem já respondeu pode ser aquecido (o Aquecer renova o disparo; frio não renova)."
-                                      : "Aquecer: prioriza e renova este contato na fase híbrida (dia 4+). Auto-marcado quando responde; desmarque pra parar de renovar."
-                                  }
-                                />
                               </td>
                               <td>
                                 <div className="contact-actions">
