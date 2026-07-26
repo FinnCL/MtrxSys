@@ -3,7 +3,6 @@ import { api, type ValidationStatus } from "../api/client";
 import { type Contact, type ContactGroupTag } from "../api/types";
 import { AddContactsModal } from "./AddContactsModal";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { GroupImportPanel } from "./GroupImportPanel";
 import { StatusBadge } from "./StatusBadge";
 
 export function ContactsScreen() {
@@ -25,9 +24,6 @@ export function ContactsScreen() {
   const [busy, setBusy] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
-  // "Importar de grupos" aqui na aba Contatos (mesmo painel da aba Grupos): re-importar retag os
-  // contatos pro chip conectado AGORA (habilita o disparo por ele). Colapsado por default.
-  const [showGroupImport, setShowGroupImport] = useState(false);
   // "Migrar contatos para este chip": ação destrutiva do ponto de vista anti-ban (afirma um vínculo que
   // pode não existir), por isso passa por confirmação com o risco explicado.
   const [confirmReassign, setConfirmReassign] = useState(false);
@@ -104,6 +100,24 @@ export function ContactsScreen() {
         setError(ex instanceof Error ? ex.message : String(ex));
       } finally {
         setLoading(false);
+      }
+      // Adota o progresso de uma validação JÁ EM ANDAMENTO. O estado vive no servidor (singleton em
+      // memória), mas quem sabia dele era só a aba que clicou: recarregar a página durante uma varredura
+      // de horas apagava a barra de progresso, e clicar de novo só respondia "já está em andamento" —
+      // sem número nenhum. O status é leitura em memória, sem banco, então custa nada no mount.
+      //
+      // SÓ quando `running`. Um resultado JÁ TERMINADO adotado no mount reapareceria como
+      // "127/127 · concluído" em toda carga da página, sem data, por todo o tempo de vida da api — e a
+      // pessoa leria "minha lista está conferida" mesmo tendo importado 300 contatos novos depois. O
+      // status não carrega quando aconteceu, então mostrá-lo fora do "em andamento" afirma mais do que
+      // se sabe. Em andamento não tem essa ambiguidade: está acontecendo agora.
+      try {
+        const s = await api.contactsValidateStatus();
+        if (s.running) {
+          setValidation(s); // religa o poll do efeito acima
+        }
+      } catch {
+        /* progresso é acessório: a tela funciona sem ele */
       }
     })();
   }, []);
@@ -254,86 +268,129 @@ export function ContactsScreen() {
     }
   }
 
+  // A validação já rodou nesta api? `total`/`done` zerados são iguais em "nunca rodou" e em "rodou e não
+  // achou ninguém"; `message` é o que separa os dois (o estado inicial do runner vem com ele nulo).
+  // `!= null` cobre null E undefined DE PROPÓSITO: hoje a api serializa o nulo explicitamente, mas se
+  // algum dia ligarem `DefaultIgnoreCondition.WhenWritingNull` o campo passa a vir AUSENTE — e um
+  // `!== null` inverteria este teste em silêncio, fazendo a tela gritar "nada foi validado" a cada carga.
+  const validationRan = !!validation && (validation.running || validation.message != null);
+  // NÃO TERMINOU o que prometeu: parou com gente ainda por checar. O runner ABORTA a varredura quando as
+  // primeiras checagens vêm todas indeterminadas (sessão WhatsApp fora) e devolve running=false com
+  // done < total — e a UI antiga escrevia "· concluído" em cima disso. "Concluído" é lido como licença pra
+  // disparar, então o operador dispararia pra uma lista NÃO conferida: o pré-voo anti-463 falhando em
+  // silêncio, com cara de sucesso.
+  //
+  // `done < total` E SÓ ISSO. `total === 0` também parece suspeito, mas é o caso LEGÍTIMO de não haver
+  // ninguém pendente pra validar — alarme vermelho ali seria grito de lobo, e aviso anti-ban que aparece
+  // quando nada está errado é aviso que o operador aprende a ignorar (foi exatamente o vício do "marco
+  // órfão"). Se `total` é 0 por erro de verdade, o desfecho do runner ("erro") já aparece na linha de
+  // status — quieto, mas sem nunca fingir sucesso.
+  const validationIncomplete =
+    !!validation && !validation.running && validation.total > 0 && validation.done < validation.total;
+
   return (
     <main className="contacts-screen">
       <header className="contacts-header">
-        <div className="contacts-header-top">
-          {/* "Lista", e não "grupo": isto é etiqueta do CRM (groupTag) pra organizar contatos —
-              não tem nada a ver com o grupo do WhatsApp da aba Grupos, que tem conversa e membros.
-              Os dois já se chamavam "grupo" e a confusão era garantida. O nome interno (groupTag)
-              fica como está: renomeá-lo em API/banco é risco sem ganho pra quem usa. */}
-          <h2>Contatos por lista</h2>
-          <button
-            type="button"
-            onClick={() => setShowAdd(true)}
-            title="Cole ou digite números para virarem contatos, sem precisar de grupo. Você escolhe em qual lista salvar."
-          >
-            Adicionar números
-          </button>
-          {/* Validar lista (pré-voo anti-463): confirma quais têm WhatsApp e descarta os inexistentes
-              ANTES do disparo. Paced (8-20s/número) — some do grupo raspado o que não tem conta. */}
-          <button
-            type="button"
-            onClick={() => void startValidation()}
-            disabled={validation?.running}
-            title="Confere um a um quem tem conta no WhatsApp e descarta os que não têm. Disparar para número inexistente é o que queima o chip. Leva alguns minutos."
-          >
-            {validation?.running ? "Validando…" : "Validar números"}
-          </button>
-          {/* Importar de grupos aqui mesmo (mesmo painel da aba Grupos). Re-importar depois de trocar o
-              chip "move" os contatos pro chip novo (ImportedByPhone) e habilita o disparo por ele. */}
-          <button
-            type="button"
-            onClick={() => setShowGroupImport((v) => !v)}
-            title="Traz os participantes de um grupo do WhatsApp como contatos. Depois de trocar o chip, importar de novo passa os contatos para o chip atual."
-          >
-            {showGroupImport ? "Fechar importar" : "Importar de grupos"}
-          </button>
-          {/* Migrar contatos: resolve o caso que a re-importação NÃO resolve (contato manual nunca veio
-              de grupo). Afrouxa a trava anti-463, por isso passa por confirmação com o risco escrito. */}
-          <button
-            type="button"
-            onClick={() => setConfirmReassign(true)}
-            disabled={reassigning}
-            title="Passa os contatos de outro chip para o chip conectado agora, liberando o disparo por eles. Use quando não der para re-importar o grupo."
-          >
-            {reassigning ? "Migrando…" : "Migrar contatos para este chip"}
-          </button>
-        </div>
-        {validation && (
-          <p className="muted small">
-            Validação: {validation.done}/{validation.total} · <strong>{validation.valid}</strong> com
-            WhatsApp · <strong>{validation.invalid}</strong> descartados (sem conta)
-            {validation.uncertain > 0 ? ` · ${validation.uncertain} indeterminados` : ""}
-            {validation.running ? " · em andamento…" : " · concluído"}
-          </p>
-        )}
+        {/* "Lista", e não "grupo": isto é etiqueta do CRM (groupTag) pra organizar contatos —
+            não tem nada a ver com o grupo do WhatsApp da aba Grupos, que tem conversa e membros.
+            Os dois já se chamavam "grupo" e a confusão era garantida. O nome interno (groupTag)
+            fica como está: renomeá-lo em API/banco é risco sem ganho pra quem usa. */}
+        <h2>Contatos por lista</h2>
         <p className="muted">
           Clique numa lista para abrir os contatos salvos dela. Lista é só uma etiqueta pra organizar
           seus contatos aqui, não é o grupo do WhatsApp.
         </p>
-      </header>
 
-      {showGroupImport && (
-        <section className="contacts-group-import">
-          <p className="muted small">
-            Importe os participantes de um grupo como contatos. Depois de trocar o chip,
-            <strong> re-importar</strong> move os contatos pro chip atual. Sem isso o disparo os pula.
-          </p>
-          <GroupImportPanel
-            onImported={() => {
-              // Recarrega as listas: a lista do grupo importado passa a aparecer aqui.
-              void (async () => {
-                try {
-                  setGroups(await api.listContactGroupTags());
-                } catch {
-                  /* recarga é um extra; o import em si já foi */
-                }
-              })();
-            }}
-          />
-        </section>
-      )}
+        {/* PASSO A PASSO em vez de uma fileira de botões. A fileira tratava como iguais coisas de
+            peso muito diferente — "Validar números" é PRÉ-REQUISITO do disparo (disparar pra número
+            inexistente é o que queima o chip) e ficava indistinguível de uma ação corretiva rara.
+            A ordem numerada carrega essa informação sem exigir que o operador já a saiba. */}
+        <ol className="contacts-steps">
+          <li className="contacts-step">
+            {/* aria-hidden: o número já é anunciado pelo <ol>. Sem isto o leitor de tela diz "1, 1". */}
+            <span className="contacts-step-num" aria-hidden="true">1</span>
+            <div className="contacts-step-body">
+              <h3>Trazer os contatos</h3>
+              {/* Sem `title` nos botões destes passos: o texto do passo JÁ diz o que o tooltip dizia, e
+                  manter as duas cópias só garante que uma delas fique desatualizada. */}
+              <p className="contacts-step-sub">
+                Cole ou digite números aqui, escolhendo em qual lista salvar. Para trazer os participantes
+                de um grupo do WhatsApp, use a aba <strong>Grupos</strong>.
+              </p>
+              <button type="button" onClick={() => setShowAdd(true)}>
+                Adicionar números
+              </button>
+            </div>
+          </li>
+
+          {/* Validar lista (pré-voo anti-463): confirma quais têm WhatsApp e descarta os inexistentes
+              ANTES do disparo. Paced (8-20s/número) — some do grupo raspado o que não tem conta.
+              É o passo DESTACADO: sem ele o disparo trabalha contra o próprio chip. */}
+          <li className="contacts-step contacts-step-key">
+            <span className="contacts-step-num" aria-hidden="true">2</span>
+            <div className="contacts-step-body">
+              <h3>
+                Validar os números <span className="contacts-step-flag">essencial</span>
+              </h3>
+              <p className="contacts-step-sub">
+                Confere um a um quem tem conta no WhatsApp e descarta os que não têm.{" "}
+                <strong>Disparar para número inexistente é o que queima o chip.</strong> Leva alguns
+                minutos.
+              </p>
+              <button
+                type="button"
+                className="contacts-step-cta"
+                onClick={() => void startValidation()}
+                disabled={validation?.running}
+              >
+                {validation?.running ? "Validando…" : "Validar números"}
+              </button>
+              {validation && validationRan && (
+                <div className="contacts-step-progress">
+                  <p className="muted small contacts-step-status">
+                    Validação: {validation.done}/{validation.total} · <strong>{validation.valid}</strong>{" "}
+                    com WhatsApp · <strong>{validation.invalid}</strong> descartados (sem conta)
+                    {validation.uncertain > 0 ? ` · ${validation.uncertain} indeterminados` : ""}
+                    {/* O desfecho vem do RUNNER (`message`), não de um rótulo fixo daqui: é ele que sabe
+                        se concluiu, abortou por sessão fora, deu erro ou foi interrompido no shutdown. */}
+                    {validation.running ? " · em andamento…" : ` · ${validation.message ?? "concluído"}`}
+                  </p>
+                  {validationIncomplete && (
+                    <p className="contacts-step-warn">
+                      <strong>Parou antes do fim.</strong> Faltaram{" "}
+                      {validation.total - validation.done} número(s) e a lista{" "}
+                      <strong>não está conferida</strong> — resolva o motivo acima e rode de novo antes de
+                      disparar.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </li>
+
+          {/* Migrar contatos: resolve o caso que a re-importação NÃO resolve (contato manual nunca veio
+              de grupo). Afrouxa a trava anti-463, por isso passa por confirmação com o risco escrito.
+              Numerado como os outros, mas rotulado "só se precisar": um passo 3 sem essa marca convida
+              a fazer sempre, e "sempre" aqui significa desligar a proteção por hábito. */}
+          <li className="contacts-step contacts-step-optional">
+            <span className="contacts-step-num" aria-hidden="true">3</span>
+            <div className="contacts-step-body">
+              <h3>
+                Migrar para este chip{" "}
+                <span className="contacts-step-flag is-muted">só se precisar</span>
+              </h3>
+              <p className="contacts-step-sub">
+                Contatos marcados <strong>“outro chip”</strong> não recebem. O caminho normal é
+                re-importar o grupo na aba <strong>Grupos</strong>; use isto quando não houver como
+                (contatos adicionados à mão, por exemplo).
+              </p>
+              <button type="button" onClick={() => setConfirmReassign(true)} disabled={reassigning}>
+                {reassigning ? "Migrando…" : "Migrar contatos para este chip"}
+              </button>
+            </div>
+          </li>
+        </ol>
+      </header>
 
       {error && <p className="error">{error}</p>}
       {actionMsg && <p className="muted small">{actionMsg}</p>}

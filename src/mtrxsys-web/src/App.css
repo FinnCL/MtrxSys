@@ -340,9 +340,6 @@ input[type="checkbox"], input[type="radio"] {
 .import-btn:hover:not(:disabled) { background: var(--accent); }
 /* Ações por grupo (importar + sair) lado a lado, sem quebrar o space-between da linha. */
 .group-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
-/* Import de grupos embutido na aba Contatos: painel destacado (o mesmo GroupImportPanel dos Grupos). */
-.contacts-group-import { margin: 4px 0 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); }
-.contacts-group-import .groups-header-row { justify-content: flex-start; margin-bottom: 8px; }
 .leave-btn { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 6px 14px; font-size: 13px; flex-shrink: 0; }
 .leave-btn:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
 /* Excluir contatos do grupo: link discreto, só dentro do grupo aberto (evita miss-click). */
@@ -950,13 +947,64 @@ tr.other-chip td:not(:last-child) { opacity: 0.45; }
   .login-card, .onboarding-card { padding: 22px; }
 }
 
-/* Cadastro manual de contatos */
-.contacts-header-top {
+/* Passo a passo da aba Contatos. Mesmo idioma visual dos passos do guia do Google (.gsg-step):
+   cartão + número em quadradinho. Classes próprias em vez de reusar as `gsg-`, que pertencem
+   àquela tela e mudam junto com ela. */
+.contacts-steps { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.contacts-step {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 11px 13px;
 }
+.contacts-step-num {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center;
+  background: var(--bg-3); color: var(--muted); font-weight: 700; font-size: 13px;
+}
+.contacts-step-body { min-width: 0; }
+.contacts-step-body h3 {
+  margin: 0; font-size: 14.5px; line-height: 1.25; color: var(--fg);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.contacts-step-sub { margin: 3px 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.contacts-step-progress { margin: 8px 0 0; }
+/* Classe própria em vez de `.contacts-step-progress > p`: o aviso abaixo TAMBÉM é um `p` filho, e o
+   descendente (0,1,1) venceria o `.contacts-step-warn` (0,1,0) — zerando justo a margem dele. */
+.contacts-step-status { margin: 0; }
+
+/* O passo ESSENCIAL: borda e número em verde de ação, botão maior. O destaque é do passo inteiro,
+   não só do botão — quem varre a tela lê o cartão antes de ler o rótulo. */
+.contacts-step-key { border-color: var(--accent-strong); background: rgba(0, 168, 132, 0.06); }
+.contacts-step-key .contacts-step-num { background: var(--accent-strong); color: #fff; }
+.contacts-step-cta { padding: 8px 18px; font-weight: 600; }
+.contacts-step-flag {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 999px; background: var(--accent-strong); color: #fff;
+}
+/* "só se precisar" é informação, não chamado: mesma pílula em cinza pra não competir com o passo 2.
+   Modificador ANINHADO (`.contacts-step-flag.is-muted`), não uma classe solta tipo `.muted-flag`: solta
+   ela entra no espaço global de nomes prometendo mais do que faz — só significa algo sobre esta pílula. */
+.contacts-step-flag.is-muted { background: var(--bg-3); color: var(--muted); }
+.contacts-step-optional { opacity: 0.92; }
+
+/* Validação que não terminou. Vermelho porque a leitura errada aqui ("está validado") é o que leva a
+   disparar pra lista não conferida — o dano é do tamanho de um ban, não de um aviso. */
+.contacts-step-warn {
+  margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--fg);
+  padding: 7px 9px; border-radius: 6px;
+  border: 1px solid rgba(241, 92, 109, 0.45); background: rgba(241, 92, 109, 0.1);
+}
+.contacts-step-warn strong { color: var(--danger); }
+
+@media (max-width: 520px) {
+  .contacts-step { padding: 10px; }
+  .contacts-step-body h3 { font-size: 13.5px; }
+}
+
+/* Cadastro manual de contatos */
 
 .manual-numbers-input {
   width: 100%;
