@@ -56,6 +56,18 @@ public sealed record ContactFilter(
     bool ExcludeAlreadyDispatched = false,
     // Restringe a UM contato (por Id). Usado pelo enfileiramento por-respondedor (webhook) pra
     // reusar EXATAMENTE o mesmo dedup/segurança do disparo em lote, só que num contato só.
-    Guid? ContactId = null);
+    Guid? ContactId = null,
+    // Só contatos importados por ESTE chip (gate anti-463, o mesmo do DispatchEngine). Sem isto o
+    // público era montado sem saber que o motor ia pular quem é de outro chip: em 2026-07-26 a fila
+    // nasceu com 173 pendentes dos quais só 119 podiam sair, e os outros 54 iam ser processados um a
+    // um só pra virar "pulado". O gate protegia (nada errado saía), mas o desperdício era real e o
+    // relatório enchia de linhas que nunca sairiam — a tela chegava a ESCONDÊ-LAS e a explicar num
+    // banner, que é remendo na saída pra um problema que estava na entrada.
+    //
+    // ⚠️ NULL = NÃO FILTRA, e isso é proposital. Se o número do chip não puder ser lido, o público
+    // tem que degradar pro comportamento antigo (enfileira todos, o motor decide), NUNCA pra "público
+    // vazio". É a mesma doutrina do motor (`connectedPhone null → não bloqueia`): leitura indisponível
+    // é desconhecido, não ausência, e um blip de infra não pode zerar o disparo em silêncio.
+    string? ImportedByPhone = null);
 
 public sealed record ContactGroupTag(string GroupTag, int Count);

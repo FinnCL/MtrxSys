@@ -121,6 +121,14 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
         {
             q = q.Where(c => c.Id == onlyContactId);
         }
+        // Gate por chip na ORIGEM: o mesmo critério que o DispatchEngine aplica no envio
+        // (`contact.ImportedByPhone == connectedPhone`, com Ordinal). Aqui ele evita ENFILEIRAR quem o
+        // motor pularia depois. `IsNullOrEmpty` e não `is { }`: string vazia vinda de config/env não
+        // pode virar um filtro que casa com ninguém — nesse caso vale a mesma regra do null (não filtra).
+        if (!string.IsNullOrEmpty(filter.ImportedByPhone))
+        {
+            q = q.Where(c => c.ImportedByPhone == filter.ImportedByPhone);
+        }
         // "Engajados" = qualquer um que respondeu/avançou: tudo menos "Novo" (Lead) e "Descartado" (Lost).
         if (filter.EngagedOnly)
         {

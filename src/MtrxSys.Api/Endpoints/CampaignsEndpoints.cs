@@ -197,7 +197,11 @@ public static class CampaignsEndpoints
                 ExcludeOptedOut: true,
                 EngagedOnly: req.Filter?.EngagedOnly ?? false,
                 ExcludePhoneE164: ownPhone,
-                ExcludeAlreadyDispatched: true); // não re-enfileira quem já recebeu/está na fila
+                ExcludeAlreadyDispatched: true, // não re-enfileira quem já recebeu/está na fila
+                // MESMO critério do gate do motor, aplicado na ORIGEM: contato de outro chip não entra
+                // na fila em vez de entrar e ser pulado um a um depois. `ownPhone` nulo (não deu pra ler
+                // o chip) mantém o comportamento antigo de propósito; ver a nota em ContactFilter.
+                ImportedByPhone: AudienceChipFilter(dispatchOpts.Value, ownPhone));
             // Dedup entre ambientes (Enforce): tira do público quem já consta no registro compartilhado
             // (já enviado/opt-out em OUTRO chip) — evita enfileirar jobs que o motor pularia e mantém a
             // contagem coerente. Fonte única (FilterOutSuppressedAsync); no-op em Observe/Off.
@@ -480,6 +484,7 @@ public static class CampaignsEndpoints
             IContactRepository contacts,
             ISystemStateRepository state,
             ISharedPhoneLedger ledger,
+            IOptions<DispatchOptions> dispatchOpts,
             CancellationToken ct) =>
         {
             // Mesma exclusão do disparo real (próprio número + já enviados), pra a prévia bater com a
@@ -492,7 +497,10 @@ public static class CampaignsEndpoints
                 ExcludeOptedOut: true,
                 EngagedOnly: engagedOnly ?? false,
                 ExcludePhoneE164: ownPhone,
-                ExcludeAlreadyDispatched: true);
+                ExcludeAlreadyDispatched: true,
+                // Mesma fonte do POST acima (ver AudienceChipFilter): prévia e fila obrigadas a
+                // concordar pelo código, não por comentário.
+                ImportedByPhone: AudienceChipFilter(dispatchOpts.Value, ownPhone));
             // Em Enforce, a prévia também desconta quem o registro compartilhado vai suprimir —
             // assim a contagem bate com o que o disparo realmente enfileira (mesma lógica do POST).
             if (ledger.IsEnforcing)
@@ -580,6 +588,31 @@ public static class CampaignsEndpoints
     // Reconcilia o aquecimento com o número conectado e persiste. Retorna se detectou troca
     // de chip (e reiniciou). Usado na conexão (frontend) e como backstop antes de disparar —
     // garante que o aquecimento bate com o chip atual mesmo se a 1ª leitura do "me" falhou.
+    /// <summary>Chip que o público deve exigir, ou null para não filtrar por chip.</summary>
+    /// <remarks>
+    /// Existe pra o PREPARO e o CONTADOR DE PÚBLICO usarem a MESMA regra. Eles nasceram com a expressão
+    /// duplicada e um comentário mandando "espelhar" — comentário obrigando o que o código pode garantir
+    /// sozinho é convite pra divergirem no primeiro ajuste. Se divergissem, o número na tela nunca
+    /// bateria com a fila, e isso se lê como bug do preparo, não como duas regras diferentes.
+    /// <para>Devolver null quando <c>OnlyCurrentChipContacts</c> está desligado mantém as duas pontas
+    /// concordando com o motor: desligou o gate lá, o público para de filtrar aqui.</para>
+    ///
+    /// <para>⚠️ ASSIMETRIA CONHECIDA, e é deliberada. O POST de disparo RECONCILIA o chip antes de ler
+    /// (`ReconcileWarmupPhoneAsync`), o GET de contagem não. Na janela entre trocar de chip e o primeiro
+    /// reconcile, a prévia filtra pelo chip ANTIGO e o preparo pelo NOVO, então os números divergem por
+    /// alguns instantes.</para>
+    ///
+    /// <para>Não se conserta fazendo o GET reconciliar: o reconcile faz I/O no aparelho (adb) e ESCREVE
+    /// estado, e este endpoint é consultado a cada digitação/poll da tela de Disparo — viraria dezenas
+    /// de leituras do emulador por minuto pra atualizar um número. O caro é a cura, não a doença.
+    /// A divergência se resolve sozinha no primeiro preparo ou ciclo do motor, e o lado AUTORITATIVO
+    /// (o que monta a fila) é sempre o que reconcilia. A prévia é prévia.
+    /// NB: o `ExcludePhoneE164` já dependia dessa mesma leitura antes deste filtro existir — a janela
+    /// não nasceu aqui, só passou a afetar mais um campo.</para>
+    /// </remarks>
+    private static string? AudienceChipFilter(DispatchOptions opts, string? connectedPhone) =>
+        opts.OnlyCurrentChipContacts ? connectedPhone : null;
+
     private static async Task<(bool Changed, string? Phone)> ReconcileWarmupPhoneAsync(
         IWahaClient waha, string sessionId, ISystemStateRepository state,
         IClock clock, IUnitOfWork uow, CancellationToken ct)
