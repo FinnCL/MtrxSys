@@ -14,7 +14,7 @@ internal sealed class DispatchJobRepository(MtrxDbContext db) : IDispatchJobRepo
             // no modo emulador o job é adiado depois de salvar o contato na agenda, esperando o
             // WhatsApp reconhecê-lo. Ordenando só por ScheduledAt, esse job caía atrás de TODA a fila
             // Pending (que costuma estar agendada no passado, no instante em que foi criada): com 125
-            // contatos a 90-240s cada, o primeiro envio só aconteceria de 3 a 8 HORAS depois — o
+            // contatos a 150-360s cada, o primeiro envio só aconteceria de 5 a 12 HORAS depois — o
             // preparo nunca se pagava e o operador via horas de "adiado" sem uma única mensagem.
             // Não starva a fila: o Retrying volta a vencer só depois da janela dele, e nesse intervalo
             // os Pending seguem sendo processados normalmente.

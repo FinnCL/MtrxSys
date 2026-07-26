@@ -5,11 +5,19 @@ public sealed class DispatchOptions
     public const string SectionName = "Dispatch";
 
     public string SessionId { get; set; } = "default";
-    // Espaçamento entre envios (sorteado no intervalo). 90-240s é o default conservador anti-ban:
-    // ritmo humano, longe do padrão-de-bot que dispara o anti-abuso do WhatsApp em conta nova.
-    // Vale nos 10 stacks. Pode ser sobrescrito por stack via Dispatch__DelayMin/MaxSeconds no .env.
-    public int DelayMinSeconds { get; set; } = 90;
-    public int DelayMaxSeconds { get; set; } = 240;
+    // Espaçamento entre envios (sorteado no intervalo). Ritmo humano, longe do padrão-de-bot que dispara
+    // o anti-abuso do WhatsApp em conta nova. Sobrescrevível por stack via Dispatch__DelayMin/MaxSeconds.
+    //
+    // ⚠️ 150-360s É O VALOR ENDURECIDO (18133e5, junto com a rampa 400→200), e o default TEM que ser ele.
+    // Até 2026-07-26 o default aqui era 90-240 enquanto o appsettings do Dispatcher mandava 150-360 — a
+    // config vencia, então a produção rodava certo, mas a divergência era um alçapão: sumindo a seção
+    // `Dispatch` do appsettings, o intervalo caía 40% NUM PARÂMETRO ANTI-BAN, em silêncio e sem erro.
+    // Default tem que falhar pro lado SEGURO (mais lento), nunca pro rápido.
+    //
+    // Medido em 59 envios reais: até 23/07 aparecem delays de 93, 102, 103, 121s (config antiga);
+    // de 24/07 em diante, 169s e 221s — dentro da faixa nova. Confirma que a config está valendo.
+    public int DelayMinSeconds { get; set; } = 150;
+    public int DelayMaxSeconds { get; set; } = 360;
     public int TypingMinSeconds { get; set; } = 2;
     public int TypingMaxSeconds { get; set; } = 5;
     public double TypingJitter { get; set; } = 0.15;

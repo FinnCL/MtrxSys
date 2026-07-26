@@ -401,7 +401,7 @@ public sealed class DispatchEngine(
                         log.LogInformation(
                             "Emulador: {Phone} ainda não reconhecido pelo WhatsApp; adiado {Sec}s (sem WAHA pra checar).",
                             contact.Phone.E164, EmulatorSyncGraceSeconds);
-                        // Espaça como um ENVIO (90-240s), não como um check-exists (8-21s). Salvar um
+                        // Espaça como um ENVIO (150-360s), não como um check-exists (8-21s). Salvar um
                         // contato aqui não é uma consulta: é uma ESCRITA que sobe pro Google e faz o
                         // WhatsApp reconhecer um número novo. No ritmo de checagem, a fila encheria a
                         // agenda com 125 contatos em ~29 min pra enviar os ~12 do teto diário — rajada
