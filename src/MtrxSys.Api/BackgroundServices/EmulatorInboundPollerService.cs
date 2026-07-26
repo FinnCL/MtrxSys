@@ -21,6 +21,7 @@ namespace MtrxSys.Api.BackgroundServices;
 public sealed class EmulatorInboundPollerService(
     IServiceScopeFactory scopes,
     IOptions<DispatchOptions> dispatchOpts,
+    IClock clock,
     ILogger<EmulatorInboundPollerService> log) : BackgroundService
 {
     // 20s: o "ouvir" não é tempo real (opt-out e respostas toleram bem esse atraso) e cada ciclo custa
@@ -82,6 +83,10 @@ public sealed class EmulatorInboundPollerService(
 
         var phone = sp.GetRequiredService<IPhoneOrchestrator>();
 
+        // Marcado no PRIMEIRO ciclo em modo Emulador, não no construtor: em WahaOnly o serviço nem chega
+        // aqui, e um piso cravado no boot ficaria velho até alguém trocar o modo em runtime.
+        _watchSince ??= clock.UtcNow - WatchSinceSkewGrace;
+
         // PRIMEIRA VEZ: posiciona o marco no fim, sem ingerir. Começar do zero num aparelho COM histórico
         // (imagem-ouro feita de um device já usado, chip reaproveitado) trataria conversas antigas como
         // recém-chegadas: chats velhos no Chat e — o que de fato machuca — gente marcada como "respondeu"
@@ -118,15 +123,74 @@ public sealed class EmulatorInboundPollerService(
         var ingestion = sp.GetRequiredService<IWebhookIngestionService>();
         var session = dispatchOpts.Value.SessionId;
 
-        // AVANÇA SÓ ATÉ O ÚLTIMO QUE DEU CERTO. Se a ingestão estourar no meio do lote, o marco fica no
-        // anterior e o restante volta no próximo ciclo — reprocessar é seguro (a ingestão deduplica por
-        // id de mensagem), PULAR não seria: uma resposta perdida é um opt-out ignorado, e disparar pra
-        // quem pediu pra sair é justamente o que queima chip.
+        // Piso de tempo que vale SÓ com marco 0 — a única situação em que lemos "desde o começo".
+        // Ver o campo `_watchSince`: sem ele, um histórico que APAREÇA depois de termos visto a caixa
+        // vazia entraria inteiro como recente.
+        //
+        // Comparação em MILISSEGUNDOS CRUS, sem construir DateTimeOffset por mensagem, por dois motivos
+        // que não são de estilo:
+        // 1. `FromUnixTimeMilliseconds` LANÇA fora da faixa (~±253402300799999). Um timestamp corrompido
+        //    no banco do aparelho estouraria dentro do laço, o catch de fora pegaria, e o MESMO lote
+        //    voltaria a cada 20s — poller travado pra sempre, sem nunca alcançar as mensagens novas.
+        // 2. Evita alocação por item num laço que roda a cada 20s.
+        var floorMs = state.InboundLastRowId == 0 ? _watchSince?.ToUnixTimeMilliseconds() : null;
+
+        // AVANÇA SÓ ATÉ O ÚLTIMO QUE DEU CERTO. Se a ingestão falhar no meio do lote, o marco para no
+        // anterior e o restante volta no próximo ciclo — PULAR não seria seguro: uma resposta perdida é um
+        // opt-out ignorado, e disparar pra quem pediu pra sair é justamente o que queima chip.
+        //
+        // Reprocessar é barato e correto porque a ingestão deduplica ANTES de escrever: ela busca o
+        // `waMessageId` (aqui, o `emu:{rowId}` estável) e retorna em silêncio se já existe. Verificado —
+        // não é dedupe por exceção de constraint, que faria o "tentar de novo" virar erro em cascata.
         var lastOk = state.InboundLastRowId;
+        var skippedAsHistory = 0;
+        var poisoned = 0;
+        var ingested = 0;
         foreach (var m in messages)
         {
             ct.ThrowIfCancellationRequested();
-            await ingestion.IngestAsync(ToWebhookEvent(m, session), ct);
+            // `m.Timestamp > 0` É A PARTE QUE IMPORTA: a consulta faz `coalesce(m.timestamp, 0)`, então
+            // hora AUSENTE chega como 0 — e 0 lido como data é 1970, ou seja, "histórico" por acidente.
+            // Mensagem sem hora conhecida é INGERIDA: tempo desconhecido não é tempo antigo, e o custo de
+            // errar pra cada lado é assimétrico (ingerir a mais mostra um chat velho; ingerir a menos
+            // engole um "SAIR" e a pessoa segue recebendo). Mesma doutrina do resto do arquivo.
+            if (floorMs is { } since && m.Timestamp > 0 && m.Timestamp < since)
+            {
+                // Histórico: NÃO ingere, mas AVANÇA o marco por cima. Deixar o marco parado faria o
+                // mesmo lote voltar pra sempre, e o poller nunca chegaria às mensagens novas.
+                skippedAsHistory++;
+                lastOk = m.RowId;
+                continue;
+            }
+
+            try
+            {
+                await ingestion.IngestAsync(ToWebhookEvent(m, session), ct);
+                ingested++;
+                _poisonRowId = 0;
+                _poisonAttempts = 0;
+            }
+            catch (OperationCanceledException)
+            {
+                // Shutdown: sai SEM salvar o marco (o `SaveChanges` do fim não roda). O que já foi
+                // ingerido está commitado — cada mensagem grava por si dentro do IngestAsync — então o
+                // próximo start relê estas linhas e a dedupe as descarta em silêncio. Perde-se um
+                // punhado de leituras repetidas, não informação.
+                throw;
+            }
+#pragma warning disable CA1031 // decidir entre transitório e permanente exige pegar tudo
+            catch (Exception ex)
+            {
+                if (!GiveUpOnPoisonMessage(m.RowId, ex))
+                {
+                    // TRANSITÓRIO: para o lote aqui. O marco fica no último que deu certo e esta volta
+                    // no próximo ciclo — a política de "não pular" continua valendo pra falha passageira.
+                    break;
+                }
+                poisoned++;
+            }
+#pragma warning restore CA1031
+
             lastOk = m.RowId;
         }
 
@@ -137,8 +201,24 @@ public sealed class EmulatorInboundPollerService(
         await stateRepo.UpdateAsync(state, ct);
         await sp.GetRequiredService<IUnitOfWork>().SaveChangesAsync(ct);
 
-        log.LogInformation("Poller: {Count} mensagem(ns) do emulador ingerida(s); marco em {RowId}.",
-            messages.Count, lastOk);
+        if (skippedAsHistory > 0)
+        {
+            log.LogWarning(
+                "Poller: {Skipped} mensagem(ns) anteriores ao início da escuta foram PULADAS (histórico do "
+                + "aparelho, não conversa nova); marco em {RowId}.", skippedAsHistory, lastOk);
+        }
+        if (ingested > 0)
+        {
+            // Contador PRÓPRIO, não `messages.Count`: o lote pode ter parado no meio (falha transitória)
+            // ou pulado linhas, e reportar o tamanho do lote como "ingeridas" inflaria o número justo no
+            // log que alguém vai usar pra conferir se uma resposta entrou.
+            log.LogInformation("Poller: {Count} mensagem(ns) do emulador ingerida(s); marco em {RowId}.",
+                ingested, lastOk);
+        }
+        if (poisoned > 0)
+        {
+            log.LogError("Poller: {Poisoned} mensagem(ns) PULADAS por falha persistente neste ciclo.", poisoned);
+        }
     }
 
     // Ciclos seguidos sem nada. Serve pra decidir QUANDO vale gastar uma consulta extra investigando se
@@ -149,6 +229,68 @@ public sealed class EmulatorInboundPollerService(
     // aparelho é recriado, o marco volta a 0 e a escuta precisa se reposicionar no fim do banco NOVO —
     // senão o histórico que veio com o aparelho recriado seria ingerido como se fosse recente.
     private bool _seekedToEnd;
+
+    /// <summary>Momento em que esta instância começou a escutar; piso de tempo para o caso de marco 0.</summary>
+    /// <remarks>
+    /// Fecha o furo que o "posicionar no fim" NÃO cobre: se na primeira olhada a caixa estava VAZIA, não
+    /// há id pra marcar, o marco fica legitimamente em 0 e a leitura passa a ser "desde o começo". Se
+    /// depois disso um HISTÓRICO aparecer — aparelho limpo e re-pareado com restauração de backup, ou
+    /// imagem-ouro trocada — ele entra INTEIRO como se fosse recente, marcando gente como "respondeu"
+    /// por mensagem de meses atrás e jogando essa gente na fila quente. É exatamente o dano que o
+    /// posicionamento no fim existe pra evitar, chegando pelo caminho de trás.
+    /// <para>Com marco 0, então, só ingere o que é mais NOVO que este piso; o resto é pulado (com o marco
+    /// avançando por cima). A tolerância de <see cref="WatchSinceSkewGrace"/> existe porque o timestamp é
+    /// do APARELHO e o piso é do servidor: sem folga, um relógio adiantado no guest descartaria mensagem
+    /// legítima. Vazar até 5 min de histórico é incomparavelmente mais barato que vazar a caixa inteira.</para>
+    /// </remarks>
+    private DateTimeOffset? _watchSince;
+
+    private static readonly TimeSpan WatchSinceSkewGrace = TimeSpan.FromMinutes(5);
+
+    // Mensagem-VENENO: a mesma linha derrubando o ciclo repetidamente.
+    private long _poisonRowId;
+    private int _poisonAttempts;
+
+    // 3 tentativas ≈ 1 min de insistência. Suficiente pra um blip (WAHA reiniciando, banco ocupado)
+    // passar; curto o bastante pra não deixar a escuta parada muito tempo se a falha for permanente.
+    private const int MaxIngestAttempts = 3;
+
+    /// <summary>Decide se DESISTE desta mensagem (true) ou se para o lote pra tentar de novo (false).</summary>
+    /// <remarks>
+    /// A política deste arquivo é "nunca pular" — reprocessar é seguro, pular é que perde opt-out. Só que
+    /// aplicada sem limite ela cria um modo de falha PIOR que o que evita: uma única mensagem que falha
+    /// SEMPRE prende o marco, o mesmo lote volta a cada 20s e **nenhuma mensagem posterior é ingerida**.
+    /// Uma resposta perdida vira TODAS as respostas perdidas, indefinidamente e em silêncio.
+    /// <para>O caminho real que produz isso hoje: `@lid` que o `jid_map` do aparelho NÃO resolve (medido —
+    /// 1 de 3 participantes) chega à ingestão como <c>…@lid</c>, que tenta resolver o lid pelo <b>WAHA</b>
+    /// — e no modo Emulador o WAHA é justamente o que não está lá. Inalcançável, o HttpClient (Polly,
+    /// breaker) LANÇA em vez de devolver null, e a exceção sobe pelo <c>IngestAsync</c>.</para>
+    /// Então: insiste <see cref="MaxIngestAttempts"/> vezes (cobre o transitório) e, persistindo, desiste
+    /// DESTA e segue — em LogError, porque desistir de uma mensagem recebida é perda real de informação e
+    /// não pode passar como rotina.
+    /// </remarks>
+    private bool GiveUpOnPoisonMessage(long rowId, Exception ex)
+    {
+        if (rowId != _poisonRowId)
+        {
+            _poisonRowId = rowId;
+            _poisonAttempts = 0;
+        }
+        if (++_poisonAttempts < MaxIngestAttempts)
+        {
+            log.LogWarning(ex,
+                "Poller: falha ao ingerir a mensagem {RowId} (tentativa {Attempt}/{Max}); o lote para aqui "
+                + "e ela volta no próximo ciclo.", rowId, _poisonAttempts, MaxIngestAttempts);
+            return false;
+        }
+        log.LogError(ex,
+            "Poller: DESISTINDO da mensagem {RowId} após {Max} tentativas — ela será PULADA pra não travar "
+            + "a escuta. Se era um opt-out, ele NÃO foi aplicado; confira esta conversa à mão.",
+            rowId, MaxIngestAttempts);
+        _poisonRowId = 0;
+        _poisonAttempts = 0;
+        return true;
+    }
 
     // 15 ciclos ≈ 5 min de silêncio. Curto o bastante pra recuperar rápido, longo o bastante pra não
     // sondar a cada 20s numa conta que simplesmente não recebe mensagem.
@@ -176,11 +318,19 @@ public sealed class EmulatorInboundPollerService(
         }
         _emptyCycles = 0;
 
-        // Lê do começo: se a mensagem mais antiga do aparelho tem id MENOR que o marco, o banco foi
-        // recriado sob os nossos pés. Se não vier nada, o banco está vazio — e um marco alto sobre um
-        // banco vazio também é órfão.
-        var oldest = await phone.ReadInboundMessagesAsync(0, 1, ct);
-        if (oldest.Count > 0 && oldest[0].RowId >= state.InboundLastRowId)
+        // Compara o marco com o ÚLTIMO id do aparelho: só um marco ACIMA do topo do banco é órfão.
+        // Se o topo alcança o marco, o silêncio é legítimo; se o banco está vazio (0), o marco alto é
+        // órfão — que é o caso que esta sonda existe pra resolver.
+        //
+        // ⚠️ NÃO comparar com a mensagem mais ANTIGA (o que esta sonda fazia até 2026-07-26): num
+        // aparelho saudável a mais antiga está SEMPRE abaixo do marco, porque o marco vive no fim do
+        // banco. O teste dava "órfão" em toda conta com histórico, a cada ~5 min de silêncio, pra
+        // sempre — visto na prod do stack A: 8 avisos de órfão em 40 min, marco zerado e reposicionado
+        // no fim em cada um. O efeito não era só log: entre o reset e o reposicionamento há um ciclo, e
+        // mensagem que chegasse nessa janela era pulada em silêncio (opt-out perdido). Além disso o
+        // aviso gritava lobo a cada 5 min e teria escondido um órfão de verdade.
+        var newest = await phone.GetLastInboundRowIdAsync(ct);
+        if (newest >= state.InboundLastRowId)
         {
             return; // silêncio legítimo
         }
