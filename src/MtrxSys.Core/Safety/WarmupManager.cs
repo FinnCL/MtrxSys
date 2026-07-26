@@ -43,17 +43,29 @@ public sealed class WarmupManager(
     // causa for essa (e a evidência aponta pra lá), nenhuma curva salva: o que salva é ter conversa
     // com RESPOSTA antes de automatizar, que é o que o HumanPhaseGate faz e estava desligado.
     //
-    // O DOBRO 12 (índices 2 e 3) é DE PROPÓSITO: os 3 primeiros dias ativos são a fase "só respondeu"
-    // (quente, ver DispatchOptions.WarmingResponderOnlyDays), e o índice 3 é o PRIMEIRO dia que abre pro
-    // FRIO. Segurar 12 (em vez de saltar pro 15 — justo o número que restringiu o chip em 15/07) faz o
-    // primeiro tiro frio herdar o mesmo volume do dia anterior: transição PLANA, sem degrau, que é o
-    // padrão mais consistente (o WhatsApp lê volume errático como sinal). A partir do índice 4 retoma
-    // o ramp. Esta curva DEVE ser idêntica à dos appsettings (Api + Dispatcher) — ver nota acima.
-    // Curva 2026-07-23: platô 400/dia (2x o antigo 200), início ~60% maior, crescimento LISO ~1,23x/dia.
-    // A constância (nenhum degrau > ~1,3x) é a defesa anti-ban — volume errático sinaliza robô mais que
-    // volume alto (o antigo 15-como-SALTO restringiu um chip). 400 é o teto ALCANÇÁVEL: com o delay de
-    // 90-240s, o máximo físico é ~480/dia, então acima disso o cap seria decorativo. DEVE ser idêntica
-    // à dos appsettings (Api + Dispatcher) — os três são a MESMA curva, a UI mostra e o motor aplica.
+    // CURVA ATUAL (desde 18133e5, o endurecimento anti-463): abre em 3, 19 degraus, PLATÔ 200/dia.
+    // Abrir em 3 vem de 3f431da — a produção restringiu um chip na 4ª mensagem, então o dia 0 tem que
+    // ficar abaixo disso. Os 3 primeiros degraus são os mais íngremes em PROPORÇÃO (1,67x / 1,6x / 1,5x)
+    // e isso é aceito de propósito: em VALOR ABSOLUTO são 2, 3 e 4 mensagens: proporção sobre volume
+    // minúsculo não é o sinal que o WhatsApp lê. Do índice 3 em diante nenhum degrau passa de ~1,33x.
+    //
+    // ⚠️ DEVE ser idêntica à dos appsettings (Api + Dispatcher) — são TRÊS cópias da mesma curva, e a
+    // divergência é silenciosa e assimétrica: o Dispatcher APLICA o teto, a Api é quem a UI mostra. Se
+    // divergirem, o operador lê um limite e o motor obedece outro. Conferir as três ao mexer.
+    //
+    // 🔴 HISTÓRICO QUE NÃO PODE SER "CORRIGIDO" DE VOLTA. Até 2026-07-26 este bloco descrevia duas
+    // curvas que NÃO estavam mais aqui, e quem fosse conferir a paridade das 3 cópias leria platô 400,
+    // veria 200 e "consertaria a divergência" — reintroduzindo o que ajudou a restringir o chip:
+    //  - `d47d02e` subiu pra [8, 11, …, 400, 400] (platô 400, "crescimento liso ~1,23x"). Essa rampa
+    //    entrou no combo que RESTRINGIU o chip A em 24/07 (junto com números inexistentes e Google sync
+    //    desligado) e foi REVERTIDA no 18133e5. 400 não é meta pendente: é caminho já tentado e caro.
+    //  - `3a51caa` tinha o índice 3 REPETINDO o 12 (…8, 12, 12, 15…) pra deixar plana a entrada no frio,
+    //    quando a fase "só respondeu" durava 3 dias. Hoje `WarmingResponderOnlyDays` é 0 por default (a
+    //    fase está DESLIGADA), então não existe "primeiro dia frio" pra alisar e o platô duplicado saiu.
+    //    Se a fase for religada num stack, vale reavaliar — mas aí é decisão nova, não restauração.
+    //
+    // A ressalva honesta segue valendo (ver o bloco acima): nenhuma curva salva um padrão de bot. O que
+    // salva é conversa com RESPOSTA antes de automatizar — HumanPhaseGate, hoje também desligado.
     private static readonly int[] DefaultCurve =
         [3, 5, 8, 12, 16, 21, 27, 34, 42, 51, 62, 75, 90, 107, 125, 145, 165, 185, 200];
 
