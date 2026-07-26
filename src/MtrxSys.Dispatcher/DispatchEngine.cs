@@ -175,9 +175,15 @@ public sealed class DispatchEngine(
             // ociosos. Sessão fora? Para; o job fica Pending e é retomado quando a sessão voltar.
             // LISTA-BRANCA: só envia se WORKING (ver abaixo). Erro transitório de LEITURA de status é
             // engolido (assume Working) pra não travar por blip de infra — a falha do envio é o backstop.
+            // Declarado FORA do bloco abaixo porque o estado da sessão decide DUAS coisas em pontos
+            // distintos do ciclo: aqui, se o ciclo continua; e lá embaixo, se vale gastar 10s perguntando
+            // o check-exists a um WAHA que já se sabe fora.
+            // Default WORKING de propósito, e isso preserva o comportamento anterior em dois casos:
+            // com `PauseWhenSessionDown` desligado (nunca lemos o status → não presumimos que caiu) e
+            // quando a leitura falha (o catch abaixo já assumia Working pra não travar por blip).
+            var sessionStatus = WahaSessionStatus.Working;
             if (dispatchOpts.Value.PauseWhenSessionDown)
             {
-                WahaSessionStatus sessionStatus;
                 try
                 {
                     sessionStatus = await waha.GetSessionStatusAsync(sessionId, ct);
@@ -355,7 +361,18 @@ public sealed class DispatchEngine(
                 // conta no teste. Inexistente → pula (não arrisca o chip). Checagem indisponível (null)
                 // → segue (não perde contato por hiccup). O chatId devolvido é o CANÔNICO do WhatsApp
                 // (resolve o 9º dígito BR) — usado no typing E no envio, pra bater no chat certo.
-                var numberCheck = await TryCheckNumberAsync(sessionId, contact, ct);
+                // NÃO pergunta ao WAHA quando ele já se declarou fora. Chegar aqui com a sessão não-WORKING
+                // implica modo emulador (o ramo WahaOnly deu `break` lá em cima), e nesse estado o
+                // check-exists só pode falhar — MEDIDO na prod em 2026-07-26: HTTP 422 após **10s de
+                // timeout, POR CONTATO**, numa fila de 115. São ~19 min de espera pura por passada,
+                // martelando um serviço que o próprio ciclo acabou de logar como Failed.
+                //
+                // O custo ficava invisível porque `TryCheckNumberAsync` é best-effort: engole o erro e
+                // devolve null, que é exatamente o que o fallback abaixo espera. Nada quebrava — só
+                // demorava, e o log de INFO do HTTP era o único vestígio.
+                var numberCheck = sessionStatus is WahaSessionStatus.Working
+                    ? await TryCheckNumberAsync(sessionId, contact, ct)
+                    : null;
                 if (numberCheck is null && emulatorMode)
                 {
                     // WAHA fora do ar NÃO pode parar o disparo no modo emulador: aqui quem envia é o
