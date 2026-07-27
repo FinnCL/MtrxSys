@@ -35,13 +35,24 @@ public sealed class ImportGroupMembersUseCase(
         string? ownNumber;
         if (emulatorMode)
         {
+            // O aparelho devolve DÍGITOS (o `user` do jid), sem "+" — o WAHA devolve COM. As duas fontes
+            // precisam entregar a MESMA forma, porque o "+" sobrevive até o banco: `NormalizeTrusted`
+            // tenta validar e, quando a libphonenumber recusa (celular BR legado sem o 9º dígito, que é
+            // o caso NORMAL aqui), preserva a entrada como veio. Então a origem decide o formato do
+            // `phone_e164` gravado, e a deduplicação compara STRING exata.
+            //
+            // 🔴 MEDIDO na prod em 2026-07-27: o mesmo grupo importado pelo WAHA em 22/07 e pelo
+            // emulador em 26/07 gerou 50 contatos DUPLICADOS ("+5588…" e "5588…" como pessoas
+            // diferentes), com 50 jobs pendentes a mais. Cada um desses é a MESMA pessoa recebendo a
+            // mesma mensagem duas vezes, que é justamente o padrão que faz o destinatário denunciar.
+            //
+            // O "+" já era colado no `own` logo abaixo, pelo mesmo motivo, mas só nele: o filtro do
+            // próprio número foi corrigido e os MEMBROS ficaram para trás.
             members = [.. (await phone.ListGroupParticipantsAsync(groupId, ct))
-                .Select(m => new WahaParticipant($"{m.Phone}@s.whatsapp.net", m.Phone, null, m.IsAdmin))];
-            // O aparelho devolve DÍGITOS (registration_jid), sem "+". A comparação lá embaixo é contra
-            // `PhoneNumber.E164`, que TEM o "+": sem normalizar aqui, o filtro do próprio número nunca
-            // casaria e o chip entraria na lista como destinatário — auto-envio silencioso.
+                .Select(m => new WahaParticipant(
+                    $"{m.Phone}@s.whatsapp.net", ToE164(m.Phone), null, m.IsAdmin))];
             var own = await phone.GetWhatsAppNumberAsync(ct);
-            ownNumber = string.IsNullOrWhiteSpace(own) ? null : $"+{own}";
+            ownNumber = string.IsNullOrWhiteSpace(own) ? null : ToE164(own);
         }
         else
         {
@@ -165,6 +176,11 @@ public sealed class ImportGroupMembersUseCase(
         await uow.SaveChangesAsync(ct);
         return new ImportResult(Total: members.Count, Imported: imported, Duplicated: duplicated, Failures: failures);
     }
+
+    // Forma E164 do que o APARELHO devolve (dígitos crus). Idempotente: número que já vem com "+" passa
+    // intacto, então isto pode ser aplicado sem saber a procedência exata do valor.
+    private static string ToE164(string digits) =>
+        string.IsNullOrWhiteSpace(digits) || digits.StartsWith('+') ? digits : $"+{digits}";
 }
 
 public sealed record ImportFailure(string ParticipantId, string Phone, string Reason);
