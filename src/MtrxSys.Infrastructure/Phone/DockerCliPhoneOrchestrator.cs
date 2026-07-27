@@ -14,19 +14,33 @@ internal sealed class DockerCliPhoneOrchestrator(
     IOptions<PhoneOptions> opts, IHttpClientFactory http, ILogger<DockerCliPhoneOrchestrator> log)
     : IPhoneOrchestrator, IDisposable
 {
-    // Quanto tempo o WhatsApp pode levar pra reconhecer um contato novo da agenda. MEDIDO em produção
-    // (2026-07-23): o Google subiu em ~90s e o espelho `com.whatsapp` apareceu entre ~2,5 e ~7 min.
-    // Só depois desta janela a AUSÊNCIA do espelho vira prova de que o número não tem WhatsApp.
+    // Carência antes de aceitar um "não é usuário" que o WhatsApp JÁ AFIRMOU (linha no wa.db com
+    // is_whatsapp_user=0). Cobre a latência de RESOLUÇÃO: o app cria a linha e pode levar um pouco pra
+    // preencher o veredito. 20 min dá ~2 re-perguntas do motor (DispatchEngine.EmulatorSyncGraceSeconds,
+    // hoje 8 min) antes de qualquer descarte. Se mexer no intervalo do motor, mexa aqui junto.
     //
-    // TEM QUE SER BEM MAIOR que o intervalo com que o motor re-pergunta (DispatchEngine.
-    // EmulatorSyncGraceSeconds, hoje 8 min). Os dois já foram IGUAIS: o job voltava exatamente quando
-    // a janela vencia, então um espelho um pouco mais lento que a média virava veredito "não tem
-    // WhatsApp" — que é TERMINAL (MarkSkipped) — na PRIMEIRA tentativa, sem segunda chance. Com 20
-    // min o contato é re-perguntado ~2 vezes antes de qualquer descarte, e a medição de 7 min ganha
-    // quase 3x de folga. Se mexer no intervalo do motor, mexa aqui junto.
+    // ⚠️ NÃO É MAIS a janela de DESCOBERTA, e essa distinção custou caro. Este valor nasceu de uma
+    // medição de 2026-07-23 (o espelho aparecia em 2,5 a 7 min) e virou o gatilho de descarte por tempo
+    // pra QUALQUER silêncio. Em 2026-07-27 a premissa caiu: MEDIDO ponta a ponta no aparelho de
+    // produção, um contato plantado na agenda às 12:44:43 só foi reconhecido às 13:33:47 — 49 MINUTOS,
+    // porque o sync de contatos do WhatsApp roda DE HORA EM HORA e o contato chegou logo depois do
+    // ciclo das 12:33. Com carência de 20 min, um número novo era julgado antes de o app ter olhado
+    // pra ele uma única vez.
+    //
+    // Por isso "o app nunca ouviu falar deste número" NÃO passa mais por aqui: é `null` (adia), não
+    // descarte. Subir a constante pra 60 ou 90 min seria trocar um número mágico por outro: a cadência
+    // é de outra empresa, não é contratual, e no mesmo dia ela já se comportou de dois jeitos.
     private static readonly TimeSpan MirrorSyncGrace = TimeSpan.FromMinutes(20);
 
     private PhoneOptions Opts => opts.Value;
+
+    // Só os dígitos de um telefone. Estava copiado nos três pontos que falam com o aparelho (checagem de
+    // existência, salvar contato e enviar) — e os três PRECISAM concordar: se um deles normalizasse
+    // diferente, a gente checaria um número, salvaria outro e mandaria pra um terceiro.
+    // Mantém `char.IsDigit` (e não só ASCII) pra não mudar o comportamento de quem já dependia dele;
+    // onde a diferença importa, que é a interpolação em SQL, quem valida é o ReadWaVerdictAsync.
+    private static string DigitsOf(string? phoneE164) =>
+        new([.. (phoneE164 ?? string.Empty).Where(char.IsDigit)]);
     // Serializa as operações de UI (o emulador não roda 2 uiautomator dump ao mesmo tempo, e o dump usa
     // um arquivo fixo). O provider é singleton; garante 1 envio por vez por emulador. Ver SendWhatsApp.
     private readonly SemaphoreSlim _uiLock = new(1, 1);
@@ -35,7 +49,14 @@ internal sealed class DockerCliPhoneOrchestrator(
     // pula TODOS os números ("não tem WhatsApp") → 0 envios (provado 2026-07-24). Concede lazy no 1º save.
     private int _contactsGranted;
 
-    public void Dispose() => _uiLock.Dispose();
+    // Os semáforos dos snapshots iam junto com a instância sem serem liberados (o `_dbGate` original
+    // também não era). É singleton, então nunca vazou de verdade; mesmo assim, quem cria descarta.
+    public void Dispose()
+    {
+        _uiLock.Dispose();
+        _msgstoreSnap.Dispose();
+        _waSnap.Dispose();
+    }
 
     public async Task<PhoneStatus> GetStatusAsync(CancellationToken ct)
     {
@@ -290,21 +311,51 @@ internal sealed class DockerCliPhoneOrchestrator(
 
     public async Task<bool?> IsOnWhatsAppAsync(string phoneE164, CancellationToken ct)
     {
-        var digits = new string((phoneE164 ?? string.Empty).Where(char.IsDigit).ToArray());
+        var digits = DigitsOf(phoneE164);
         if (digits.Length < 8)
         {
             return null;
         }
+        // 0) FONTE PRIMÁRIA: a base do PRÓPRIO WhatsApp (`wa.db`, tabela `wa_contacts`), não o espelho
+        //    que ele publica na agenda do Android.
+        //
+        //    🔴 POR QUE NÃO O ESPELHO, medido em produção em 2026-07-27 (WhatsApp 2.26.26.70): o espelho
+        //    pode ficar VAZIO POR HORAS e voltar sozinho. Às 12h o aparelho tinha 118 contatos na agenda
+        //    e ZERO raw contacts da conta `com.whatsapp` — a tabela `mimetypes` do provider nem tinha o
+        //    `vnd.com.whatsapp.profile` registrado. Às 13:33:47 um único ciclo de sync (0,8s) reconstruiu
+        //    tudo de uma vez: 110 contatos marcados e os mimetypes criados. O buraco durou desde o
+        //    re-registro do chip na véspera, ~19h.
+        //
+        //    Nesse buraco, quem lê SÓ o espelho responde "não tem WhatsApp" para TODO MUNDO, e esse
+        //    veredito é TERMINAL (MarkSkipped). Foi o que aconteceu: 10 contatos bons descartados antes
+        //    de alguém perceber. Durante todo o buraco o wa.db sabia a resposta — afirmava
+        //    `is_whatsapp_user=1` para 110 dos 123 números da fila que o espelho condenaria.
+        //
+        //    Ou seja, o espelho não é errado, é DERIVADO e reconstruído em lote. O wa.db é onde o app
+        //    guarda o que ele mesmo usa, então é o primeiro a saber e o último a esvaziar. Ele também
+        //    cobre quem NUNCA passou pela agenda: participante de grupo ganha linha em `wa_contacts`.
+        //
+        //    Só o SIM curto-circuita aqui. O NÃO segue pro caminho de baixo de propósito: ele precisa
+        //    passar pela carência antes de virar descarte definitivo (ver o passo 3).
+        var waVerdict = await ReadWaVerdictAsync(digits, ct);
+        if (waVerdict is WaVerdict.User)
+        {
+            return true;
+        }
         // 1) Acha o contato AGREGADO. O phone_lookup do `content query` casa STRING, não número: um
         //    contato gravado como "+55…" NÃO é achado por "55…" e vice-versa (medido no aparelho).
         //    Por isso tenta os dois formatos — nós gravamos sem "+", o WhatsApp escreve com.
+        //    Continua valendo mesmo com o espelho morto: é daqui que sai o carimbo de idade do contato,
+        //    que é o que autoriza (ou não) transformar um silêncio em descarte.
         var contactId = await LookupContactIdAsync(digits, ct)
             ?? await LookupContactIdAsync("%2B" + digits, ct);
         if (contactId is null)
         {
             return null; // nem está na agenda: não dá pra afirmar nada (quem chama salva e re-pergunta)
         }
-        // 2) O contato agregado tem a marca que o WhatsApp cria pra quem é usuário? A agregação junta
+        // 2) O contato agregado tem a marca que o WhatsApp cria pra quem é usuário? Vale como confirmação
+        //    quando está lá (verificado depois da reconstrução das 13:33), e vale nada quando não está
+        //    (ver o passo 0) — por isso só o SIM sai daqui. A agregação junta
         //    o nosso raw contact e o do WhatsApp sob o MESMO contact_id, mesmo com o "+" diferente —
         //    então a marca aparece aqui independentemente de qual dos dois o lookup achou.
         //    SEM --projection de propósito: a linha crua traz o mimetype E o carimbo de última
@@ -320,9 +371,29 @@ internal sealed class DockerCliPhoneOrchestrator(
         {
             return true;
         }
-        // Sem a marca: só é "NÃO tem WhatsApp" se o contato já teve TEMPO de sincronizar. Um contato
-        // recém-salvo fica minutos sem espelho — devolver false aqui faria quem chama descartá-lo
-        // como inexistente (o job é marcado terminal), perdendo um contato bom pra sempre.
+        // 3) O DESCARTE EXIGE UMA AFIRMAÇÃO, NÃO UM SILÊNCIO QUE DUROU MUITO.
+        //
+        // Só chega aqui quem não teve SIM de nenhuma das duas fontes. A pergunta que decide é: o
+        // WhatsApp AFIRMOU que este número não é usuário (`NotUser`, ele tem linha no wa.db), ou ele
+        // simplesmente nunca ouviu falar dele (`Unknown`)?
+        //
+        // 🔴 MEDIDO em 2026-07-27: `Unknown` NÃO pode virar descarte por tempo. O sync de contatos do
+        // WhatsApp roda DE HORA EM HORA, e a carência abaixo é de 20 min. Plantei um contato na agenda
+        // do aparelho de produção e 41 min depois o wa.db seguia sem uma única escrita (mtime parado
+        // uma hora e meia antes), com o app em primeiro plano. Ou seja: a janela é MENOR que o ciclo de
+        // quem ela espera, então o contato era julgado antes de o app ter olhado pra ele uma vez.
+        //
+        // Aumentar a constante NÃO resolve, só move o precipício: o intervalo é de outra empresa e pode
+        // mudar de novo amanhã, exatamente como o espelho mudou. Enquanto o app não se pronunciar, a
+        // resposta honesta é "ainda não sei" — o job volta pra fila e pergunta depois.
+        if (waVerdict is not WaVerdict.NotUser)
+        {
+            return null;
+        }
+        // Daqui pra baixo o app JÁ AFIRMOU que não é usuário. A carência ainda vale, mas agora protege
+        // de outra coisa: um `is_whatsapp_user=0` escrito no instante em que o contato entrou na agenda,
+        // antes de o app resolver o número. Como a linha já existe, isto é latência de resolução (curta),
+        // não de descoberta (o ciclo de uma hora) — 20 min é folga de sobra pro que sobrou.
         var stamp = System.Text.RegularExpressions.Regex.Match(data, @"contact_last_updated_timestamp=(\d+)");
         if (!stamp.Success
             || !long.TryParse(stamp.Groups[1].Value, System.Globalization.NumberStyles.Integer,
@@ -340,7 +411,97 @@ internal sealed class DockerCliPhoneOrchestrator(
             return null;
         }
         var updatedAt = DateTimeOffset.FromUnixTimeMilliseconds(ms);
-        return deviceNow.Value - updatedAt > MirrorSyncGrace ? false : null;
+        if (deviceNow.Value - updatedAt <= MirrorSyncGrace)
+        {
+            return null; // dentro da janela: ainda pode aparecer
+        }
+        // Registra a EVIDÊNCIA do descarte, não só o descarte. Foi a falta disto que deixou o espelho
+        // morto derrubar contatos bons por dias: o log dizia "não existe no WhatsApp" sem dizer com base
+        // em quê. Aqui a base é sempre a mesma e é explícita — o app tem registro do número e o marca
+        // como não-usuário.
+        log.LogInformation(
+            "Aparelho: {Phone} descartado como inexistente. O WhatsApp TEM registro deste número e o "
+            + "marca como não-usuário (is_whatsapp_user=0), e a linha já passou da carência de {Grace:g}.",
+            digits, MirrorSyncGrace);
+        return false;
+    }
+
+    private sealed record WaContactRow(bool IsUser);
+
+    /// <summary>Resposta do banco do WhatsApp sobre um número.</summary>
+    private enum WaVerdict
+    {
+        /// <summary>Não deu pra ler o banco. NÃO é informação sobre o número — é pane da fonte.</summary>
+        Unreadable,
+
+        /// <summary>Leu, e o app não tem linha pra este número: ainda não sincronizou.</summary>
+        Unknown,
+
+        /// <summary>O app registrou que este número NÃO é usuário do WhatsApp.</summary>
+        NotUser,
+
+        /// <summary>O app registrou que este número É usuário do WhatsApp.</summary>
+        User,
+    }
+
+    // 0/1 (Interlocked): a fonte primária está ilegível AGORA? Serve só pra logar a virada uma vez em vez
+    // de a cada contato — no ritmo do disparo, um aviso por contato viraria centenas de linhas iguais e
+    // o operador pararia de ler exatamente o aviso que importa.
+    private int _waDbUnreadable;
+
+    /// <summary>O que o próprio WhatsApp registrou sobre um número, lido do `wa.db` dele.</summary>
+    private async Task<WaVerdict> ReadWaVerdictAsync(string digits, CancellationToken ct)
+    {
+        // Cinto e suspensório na ÚNICA interpolação de texto que chega ao SQL por aqui. O chamador já
+        // filtra, mas ele pode mudar: `char.IsDigit` aceita dígito UNICODE (٣, ٤…), que passaria adiante
+        // sem ser um dígito ASCII. Nenhum deles é aspa, então não há injeção nem hoje nem assim — o
+        // guarda existe pra que a segurança desta linha não dependa de ler outro método.
+        if (!digits.All(c => c is >= '0' and <= '9'))
+        {
+            return WaVerdict.Unknown;
+        }
+
+        // Casa pelos DOIS lados porque as colunas guardam formas diferentes do mesmo telefone: `number`
+        // é o que está NA AGENDA (medido no aparelho: 114 gravados com "+" e 4 sem) e `jid` é o canônico
+        // do WhatsApp. Em número BR legado os dois divergem — um tem o 9º dígito e o outro não. Perguntar
+        // por um só erraria exatamente a fatia legada, que é a maioria da base fria.
+        //
+        // `order by is_whatsapp_user desc`: o mesmo telefone pode ter duas linhas (uma do sync da agenda,
+        // outra herdada de um grupo). Se QUALQUER uma diz que é usuário, é usuário: o app não inventa um
+        // sim, mas pode ter uma linha antiga ainda sem resolver.
+        var sql =
+            "select is_whatsapp_user as isUser from wa_contacts "
+            + $"where replace(coalesce(number, ''), '+', '') = '{digits}' "
+            + $"or jid = '{digits}@s.whatsapp.net' "
+            + "order by is_whatsapp_user desc limit 1";
+        var json = await QueryWhatsAppDbAsync(_waSnap, sql, ct);
+        if (json is null)
+        {
+            // 🔴 O MODO DE FALHA QUE ORIGINOU ESTE CÓDIGO, entrando por outra porta. Se o wa.db ficar
+            // ilegível (emulador sem root, container fora, app sem banco), devolver "não sei sobre este
+            // número" faria a checagem cair na carência e, 20 min depois, declarar NÃO TEM WHATSAPP —
+            // para a fila inteira, em silêncio, exatamente como o espelho morto fez. Uma pane da fonte
+            // precisa parecer uma pane, não um veredito.
+            if (Interlocked.Exchange(ref _waDbUnreadable, 1) == 0)
+            {
+                log.LogWarning(
+                    "Banco de contatos do aparelho ({Db}) ILEGÍVEL. Enquanto durar, nenhum número será "
+                    + "descartado como inexistente: os envios ficam adiados em vez de sumirem. "
+                    + "Verificar root do emulador (`su 0`), container {Container} e o app {Package}.",
+                    _waSnap.FileName, Opts.ContainerName, Opts.WhatsAppPackage);
+            }
+            return WaVerdict.Unreadable;
+        }
+        if (Interlocked.Exchange(ref _waDbUnreadable, 0) == 1)
+        {
+            log.LogInformation("Banco de contatos do aparelho ({Db}) voltou a responder.", _waSnap.FileName);
+        }
+
+        // is_whatsapp_user é INTEGER 0/1 no SQLite, não booleano — quem salva disso é o SqliteBoolConverter.
+        var rows = ParseRows<WaContactRow>(json);
+        return rows.Count == 0
+            ? WaVerdict.Unknown
+            : rows[0].IsUser ? WaVerdict.User : WaVerdict.NotUser;
     }
 
     // "Agora" segundo o próprio Android (epoch em segundos). null se não der pra ler.
@@ -399,7 +560,7 @@ internal sealed class DockerCliPhoneOrchestrator(
         // Objetivo: o disparo sai pra um "contato salvo" (perfil menos-robô, ajuda anti-ban). Chamado
         // pelo DispatchEngine ANTES de cada envio, então é IDEMPOTENTE (não duplica) e best-effort
         // (uma falha aqui nunca pode derrubar o envio — o disparo é o que importa).
-        var digits = new string((phoneE164 ?? string.Empty).Where(char.IsDigit).ToArray());
+        var digits = DigitsOf(phoneE164);
         if (digits.Length < 8)
         {
             return "phone inválido";
@@ -483,7 +644,7 @@ internal sealed class DockerCliPhoneOrchestrator(
     public async Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct)
     {
         // Caminho A anti-463: envia pela UI do WhatsApp DO EMULADOR (o primário), não pelo WAHA.
-        var digits = new string((phoneE164 ?? string.Empty).Where(char.IsDigit).ToArray());
+        var digits = DigitsOf(phoneE164);
         if (digits.Length < 8)
         {
             return WhatsAppSendResult.Fail("phone inválido");
@@ -749,9 +910,39 @@ internal sealed class DockerCliPhoneOrchestrator(
     //    parsing por delimitador quebraria no primeiro contato com uma mensagem real.
     //  • `message._id` como marco incremental: é crescente e estável. `timestamp` empata entre mensagens
     //    do mesmo segundo e `key_id` é opaco — nenhum dos dois serve pra "me dá o que veio depois".
-    private const string DbSnapshotDir = "/data/local/tmp/mtrx-wadb";
-    private readonly SemaphoreSlim _dbGate = new(1, 1);
-    private string _dbFingerprint = "";
+    // Um snapshot POR BANCO, cada um com carimbo e trava próprios. São dois arquivos com ritmos muito
+    // diferentes: o `msgstore` muda quando chega mensagem, o `wa.db` muda a cada contato salvo — e o
+    // disparo salva um contato ANTES DE CADA ENVIO. Pendurados no mesmo carimbo, todo save invalidaria
+    // também a cópia do msgstore e recopiaria centenas de MB dentro do Android emulado por mensagem
+    // enviada, que é exatamente o custo que o carimbo existe pra evitar.
+    private sealed class DbSnapshot(string fileName, string dir, string? legacyDir = null) : IDisposable
+    {
+        // volatile: a invalidação em QueryWhatsAppDbAsync escreve isto FORA da trava, de propósito —
+        // ela só precisa forçar a próxima cópia, e pegar a trava ali serializaria leituras que hoje
+        // correm em paralelo. Escrita de referência é atômica, então o pior caso é uma cópia a mais.
+        private volatile string _fingerprint = "";
+
+        public string FileName { get; } = fileName;
+        public string Dir { get; } = dir;
+
+        /// <summary>Snapshot de uma versão anterior deste código, removido junto com a cópia.</summary>
+        /// <remarks>
+        /// Sem isto, renomear o diretório abandonaria a cópia antiga no aparelho PARA SEMPRE (o
+        /// `rm -rf` só alcança o caminho atual). São megabytes parados em /data/local/tmp de um disco
+        /// que já é apertado, e ninguém voltaria pra limpar.
+        /// </remarks>
+        public string? LegacyDir { get; } = legacyDir;
+
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+
+        public string Fingerprint { get => _fingerprint; set => _fingerprint = value; }
+
+        public void Dispose() => Gate.Dispose();
+    }
+
+    private readonly DbSnapshot _msgstoreSnap =
+        new("msgstore.db", "/data/local/tmp/mtrx-db/msgstore", legacyDir: "/data/local/tmp/mtrx-wadb");
+    private readonly DbSnapshot _waSnap = new("wa.db", "/data/local/tmp/mtrx-db/wa");
 
     /// <summary>Garante um snapshot ATUAL, copiando só quando o banco de fato mudou.</summary>
     /// <remarks>
@@ -762,57 +953,69 @@ internal sealed class DockerCliPhoneOrchestrator(
     /// mensagem nova, então ele é o sinal sensível.
     /// Single-flight: leituras simultâneas compartilham uma cópia em vez de disputarem o mesmo destino.
     /// </remarks>
-    private async Task<bool> EnsureDbSnapshotAsync(CancellationToken ct)
+    private async Task<bool> EnsureDbSnapshotAsync(DbSnapshot snap, CancellationToken ct)
     {
         var dbDir = $"/data/data/{Opts.WhatsAppPackage}/databases";
-        var (statRc, statOut, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
-            $"su 0 stat -c %Y:%s {dbDir}/msgstore.db {dbDir}/msgstore.db-wal");
-        var fingerprint = statRc == 0 ? (statOut ?? "").Replace("\r", "").Replace("\n", " ").Trim() : "";
+        // `; true` força rc 0: sem o `-wal` (banco recém-criado, logo depois de um pm clear) o stat
+        // falharia no segundo arquivo e o carimbo viria vazio, desligando a leitura INTEIRA em silêncio
+        // até alguém escrever no banco. Com a tolerância, o carimbo é só a linha do .db e a leitura segue.
+        var (_, statOut, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            $"su 0 sh -c 'stat -c %Y:%s {dbDir}/{snap.FileName} {dbDir}/{snap.FileName}-wal 2>/dev/null; true'");
+        var fingerprint = (statOut ?? "").Replace("\r", "").Replace("\n", " ").Trim();
         if (fingerprint.Length == 0)
         {
             return false; // adb mudo / sem root / app sem banco — o chamador devolve vazio
         }
 
-        await _dbGate.WaitAsync(ct);
+        await snap.Gate.WaitAsync(ct);
         try
         {
-            if (fingerprint == _dbFingerprint)
+            if (fingerprint == snap.Fingerprint)
             {
                 return true; // nada mudou desde a última cópia
             }
+            var stale = snap.LegacyDir is null ? snap.Dir : $"{snap.Dir} {snap.LegacyDir}";
             var (rc, _, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
-                $"su 0 sh -c 'rm -rf {DbSnapshotDir}; mkdir -p {DbSnapshotDir}; cp {dbDir}/msgstore.db* {DbSnapshotDir}/'");
+                $"su 0 sh -c 'rm -rf {stale}; mkdir -p {snap.Dir}; cp {dbDir}/{snap.FileName}* {snap.Dir}/'");
             if (rc != 0)
             {
-                _dbFingerprint = ""; // não marque como válido o que não foi copiado
+                snap.Fingerprint = ""; // não marque como válido o que não foi copiado
                 return false;
             }
-            _dbFingerprint = fingerprint;
+            snap.Fingerprint = fingerprint;
             return true;
         }
         finally
         {
-            _dbGate.Release();
+            snap.Gate.Release();
         }
     }
 
-    private async Task<string> QueryWhatsAppDbAsync(string sql, CancellationToken ct)
+    /// <summary>Roda o SQL no snapshot. <c>null</c> = NÃO deu pra ler; <c>""</c> = leu, zero linhas.</summary>
+    /// <remarks>
+    /// A distinção existe porque as duas coisas são operacionalmente opostas e vinham colapsadas numa
+    /// string vazia. "Zero linhas" é um fato sobre o dado; "não deu pra ler" é o aparelho fora do ar,
+    /// sem root, ou o app sem banco — e tratar o segundo como o primeiro é como esta camada produz
+    /// falso negativo silencioso. Quem responde pergunta de sim/não precisa saber a diferença pra não
+    /// transformar uma pane de leitura em veredito definitivo sobre um contato.
+    /// </remarks>
+    private async Task<string?> QueryWhatsAppDbAsync(DbSnapshot snap, string sql, CancellationToken ct)
     {
-        if (!await EnsureDbSnapshotAsync(ct))
+        if (!await EnsureDbSnapshotAsync(snap, ct))
         {
-            return "";
+            return null;
         }
 
         var (rc, outp, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
-            $"su 0 sqlite3 -json {DbSnapshotDir}/msgstore.db \"{sql}\"");
+            $"su 0 sqlite3 -json {snap.Dir}/{snap.FileName} \"{sql}\"");
         if (rc != 0)
         {
             // ESTADO PRESO evitado: o fingerprint diz "a cópia anterior serve", mas se ela sumiu (limpeza
             // de /data/local/tmp, recreate do container, disco cheio) a consulta falharia a cada chamada
             // até o banco mudar sozinho — o que num aparelho parado pode levar horas. Invalidar aqui faz
             // a próxima chamada recopiar.
-            _dbFingerprint = "";
-            return "";
+            snap.Fingerprint = "";
+            return null;
         }
         // O `adb shell` traduz LF em CRLF na saída. Aqui os \r só caem ENTRE os elementos do JSON (texto
         // com quebra de linha vem escapado pelo sqlite como \\n), então são espaço em branco inofensivo —
@@ -864,9 +1067,11 @@ internal sealed class DockerCliPhoneOrchestrator(
     private static readonly System.Text.Json.JsonSerializerOptions DbJson =
         new() { PropertyNameCaseInsensitive = true, Converters = { new SqliteBoolConverter() } };
 
-    private List<T> ParseRows<T>(string json)
+    // Aceita o null de QueryWhatsAppDbAsync ("não deu pra ler") tratando-o como vazio: para quem só quer
+    // uma LISTA, as duas situações levam ao mesmo lugar. Quem precisa distinguir olha o null antes.
+    private List<T> ParseRows<T>(string? json)
     {
-        if (json.Length == 0 || json[0] != '[')
+        if (json is null || json.Length == 0 || json[0] != '[')
         {
             return [];
         }
@@ -900,7 +1105,7 @@ internal sealed class DockerCliPhoneOrchestrator(
             + "as participantsCount "
             + "from chat c join jid j on j._id = c.jid_row_id "
             + "where j.server = 'g.us' order by c.sort_timestamp desc";
-        return ParseRows<PhoneGroup>(await QueryWhatsAppDbAsync(Sql, ct));
+        return ParseRows<PhoneGroup>(await QueryWhatsAppDbAsync(_msgstoreSnap, Sql, ct));
     }
 
     // ÚNICO ponto onde entrada do usuário chega ao SQL: o `groupJid` vem da rota `/api/groups/{groupId}`.
@@ -943,7 +1148,7 @@ internal sealed class DockerCliPhoneOrchestrator(
             + "left join jid pj on pj._id = m.jid_row_id "
             + $"where gj.user || '@' || gj.server = '{groupJid}' and coalesce(gp.pending, 0) = 0 "
             + "and (pj.user is not null or uj.server = 's.whatsapp.net')";
-        return ParseRows<PhoneGroupMember>(await QueryWhatsAppDbAsync(sql, ct));
+        return ParseRows<PhoneGroupMember>(await QueryWhatsAppDbAsync(_msgstoreSnap, sql, ct));
     }
 
     // Mesmos filtros da leitura incremental (from_me e a sentinela do chat_row_id) — se divergissem, o
@@ -956,7 +1161,7 @@ internal sealed class DockerCliPhoneOrchestrator(
         const string Sql =
             "select coalesce(max(m._id), 0) as maxRowId from message m "
             + "where m.from_me = 0 and m.chat_row_id > 0";
-        var rows = ParseRows<MaxRow>(await QueryWhatsAppDbAsync(Sql, ct));
+        var rows = ParseRows<MaxRow>(await QueryWhatsAppDbAsync(_msgstoreSnap, Sql, ct));
         return rows.Count > 0 ? rows[0].MaxRowId : 0;
     }
 
@@ -999,7 +1204,7 @@ internal sealed class DockerCliPhoneOrchestrator(
             + "left join jid sj on sj._id = m.sender_jid_row_id "
             + "left join jid_map sm on sm.lid_row_id = sj._id left join jid sp on sp._id = sm.jid_row_id "
             + $"where m.from_me = 0 and m.chat_row_id > 0 and m._id > {after} order by m._id limit {take}";
-        return ParseRows<PhoneInboundMessage>(await QueryWhatsAppDbAsync(sql, ct));
+        return ParseRows<PhoneInboundMessage>(await QueryWhatsAppDbAsync(_msgstoreSnap, sql, ct));
     }
 
     // Nome da imagem-ouro. Fixo de propósito: quem constrói (deploy/build-golden-image-a.sh) e quem
