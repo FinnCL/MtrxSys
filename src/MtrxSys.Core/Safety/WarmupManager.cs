@@ -43,11 +43,20 @@ public sealed class WarmupManager(
     // causa for essa (e a evidência aponta pra lá), nenhuma curva salva: o que salva é ter conversa
     // com RESPOSTA antes de automatizar, que é o que o HumanPhaseGate faz e estava desligado.
     //
-    // CURVA ATUAL (desde 18133e5, o endurecimento anti-463): abre em 3, 19 degraus, PLATÔ 200/dia.
-    // Abrir em 3 vem de 3f431da — a produção restringiu um chip na 4ª mensagem, então o dia 0 tem que
-    // ficar abaixo disso. Os 3 primeiros degraus são os mais íngremes em PROPORÇÃO (1,67x / 1,6x / 1,5x)
-    // e isso é aceito de propósito: em VALOR ABSOLUTO são 2, 3 e 4 mensagens: proporção sobre volume
-    // minúsculo não é o sinal que o WhatsApp lê. Do índice 3 em diante nenhum degrau passa de ~1,33x.
+    // CURVA ATUAL (desde 2026-07-27): abre em 1, 21 degraus, PLATÔ 120/dia.
+    // Abrir em 1 é decisão do operador depois de perder QUATRO chips em quatro dias — dois deles com 2
+    // mensagens e um com ZERO. Na faixa de 0 a 3 o volume não discriminou nada (todos restringidos
+    // igual), então abrir em 1 não é uma defesa demonstrada: é o degrau mais barato que existe, custa
+    // ~2 dias no acumulado e não pode piorar.
+    // Os primeiros degraus são os mais íngremes em PROPORÇÃO (2x / 1,5x / 1,33x) e isso é aceito de
+    // propósito: em VALOR ABSOLUTO são 1, 1 e 1 mensagem a mais. Do índice 4 em diante nenhum degrau
+    // passa de ~1,33x, e no fim da curva o crescimento cai pra ~1,13x.
+    //
+    // PLATÔ 120 É DECISÃO DE ORIGINAÇÃO, NÃO DE SEGURANÇA. Sustentar 120/dia exige ~3.600 contatos
+    // novos por mês — cerca de 28 grupos, já que um grupo rendeu 127. Acima do que se consegue
+    // importar, o platô é ficção: o motor fica ocioso esperando gente. Medido em 2026-07-27, a base
+    // tinha 123 contatos nunca contatados, que esta curva esgota no DIA 11. Ou seja: nas primeiras
+    // semanas quem limita é o estoque, não o teto.
     //
     // ⚠️ DEVE ser idêntica à dos appsettings (Api + Dispatcher) — são TRÊS cópias da mesma curva, e a
     // divergência é silenciosa e assimétrica: o Dispatcher APLICA o teto, a Api é quem a UI mostra. Se
@@ -67,7 +76,7 @@ public sealed class WarmupManager(
     // A ressalva honesta segue valendo (ver o bloco acima): nenhuma curva salva um padrão de bot. O que
     // salva é conversa com RESPOSTA antes de automatizar — HumanPhaseGate, hoje também desligado.
     private static readonly int[] DefaultCurve =
-        [3, 5, 8, 12, 16, 21, 27, 34, 42, 51, 62, 75, 90, 107, 125, 145, 165, 185, 200];
+        [1, 2, 3, 4, 6, 8, 10, 13, 16, 20, 25, 30, 36, 43, 51, 60, 70, 81, 93, 106, 120];
 
     // Índice (base-0) do PLATÔ: último degrau da curva (onde estabiliza em 200/dia). É o fim do
     // aquecimento — a fase híbrida vai até aqui. Sem I/O; mesma curva que o snapshot usa (não duplica).

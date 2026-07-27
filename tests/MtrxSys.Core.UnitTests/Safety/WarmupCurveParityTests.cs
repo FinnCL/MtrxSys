@@ -26,7 +26,7 @@ public sealed class WarmupCurveParityTests
     // juntos — um teste que concorda com qualquer valor não testa nada. Mudança legítima da curva atualiza
     // QUATRO lugares e o teste é o lembrete de que os outros três existem.
     private static readonly int[] Expected =
-        [3, 5, 8, 12, 16, 21, 27, 34, 42, 51, 62, 75, 90, 107, 125, 145, 165, 185, 200];
+        [1, 2, 3, 4, 6, 8, 10, 13, 16, 20, 25, 30, 36, 43, 51, 60, 70, 81, 93, 106, 120];
 
     [Theory]
     [InlineData("src/MtrxSys.Api/appsettings.json")]

@@ -160,7 +160,7 @@ public sealed class WarmupManagerTests
     // no meio REDUZIRIA o teto no meio da escalada, sem erro nenhum, e só apareceria como disparo
     // misteriosamente parando mais cedo semanas depois.
     [Fact]
-    public async Task Curva_padrao_so_sobe_comeca_em_3_e_estabiliza_em_200()
+    public async Task Curva_padrao_so_sobe_comeca_em_1_e_estabiliza_em_120()
     {
         // Sem Curve configurada → cai no default do código.
         var svc = Build(new WarmupOptions { StartedOnUtc = new DateOnly(2026, 7, 15) });
@@ -168,14 +168,17 @@ public sealed class WarmupManagerTests
         var curve = (await svc.GetSnapshotAsync(CancellationToken.None)).Curve;
 
         curve.Should().NotBeEmpty("teto ausente anularia o aquecimento inteiro");
-        // ⚠️ INCIDENTE PRESERVADO: com 15 no 1º dia um chip novo foi RESTRINGIDO na 4ª mensagem
-        // (2026-07-15, +557191072835). E em 2026-07-24 OUTRO chip (A) foi restringido rodando a rampa
-        // agressiva (platô 400/dia) + números inexistentes. Por isso o dia 0 desceu pra 3 (bem abaixo do
-        // 15 que custou um chip) e o platô caiu de 400 pra 200. NÃO subir o índice 0 sem prova nova.
-        curve[0].Should().Be(3, "dia 0 modesto: bem abaixo do 15 que restringiu um chip em 2026-07-15");
-        curve[^1].Should().Be(200,
-            "platô 200/dia — reduzido do 400 após a restrição de 2026-07-24; com delay 150-360s o máximo "
-            + "físico é ~340/dia, então 200 é alcançável e ainda deixa margem");
+        // ⚠️ INCIDENTES PRESERVADOS, em ordem: com 15 no 1º dia um chip foi RESTRINGIDO na 4ª mensagem
+        // (2026-07-15). Em 24/07 o chip A caiu com a rampa de platô 400 + números inexistentes. Em 27/07
+        // caíram mais dois: um com DUAS mensagens e outro com ZERO, parado, 6h30 após registrar.
+        //
+        // O dia 0 desceu de 3 pra 1 depois disso — mas registre a honestidade: entre 0 e 3 mensagens o
+        // volume NÃO discriminou nada, os três morreram igual. Abrir em 1 não é defesa demonstrada, é o
+        // degrau mais barato possível (custa ~2 dias no acumulado). NÃO subir o índice 0 sem prova nova.
+        curve[0].Should().Be(1, "dia 0 mínimo: quatro chips perdidos, dois deles com 2 ou menos mensagens");
+        curve[^1].Should().Be(120,
+            "platô 120/dia — dimensionado pela ORIGINAÇÃO, não pela segurança: sustentar 120 exige ~3.600 "
+            + "contatos novos por mês. Acima do que se importa, o teto é ficção e o motor fica ocioso");
         curve.Should().BeInAscendingOrder("uma curva que desce em algum ponto é erro de digitação, não desenho");
         // Nenhum salto brusco: a constância é a defesa anti-ban (volume errático sinaliza robô). Um
         // degrau que mais que dobra seria pico — exatamente o que o aquecimento existe pra evitar.
