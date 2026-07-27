@@ -10,4 +10,13 @@ internal static class WhatsAppUi
     /// Ex.: whatsapp://send?phone=5511999998888&amp;text=Ol%C3%A1%20%F0%9F%91%8B</summary>
     public static string DeepLink(string digits, string text)
         => $"whatsapp://send?phone={digits}&text={Uri.EscapeDataString(text ?? string.Empty)}";
+
+    /// <summary>Abre a conversa com o campo de mensagem VAZIO, pra o texto ser digitado depois.</summary>
+    /// <remarks>
+    /// Sem o `text=`, o campo nasce vazio e cada trecho digitado dispara o TextWatcher do app — que é o
+    /// que aciona o "digitando…" pro destinatário. Com o `text=` preenchido não existe digitação: o
+    /// campo já nasce completo e o único evento é o toque em enviar.
+    /// </remarks>
+    public static string DeepLinkEmpty(string digits)
+        => $"whatsapp://send?phone={digits}";
 }

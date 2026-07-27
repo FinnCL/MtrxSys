@@ -162,6 +162,45 @@ public sealed class PhoneOptions
 
     /// <summary>Timeout TOTAL (s) de um envio pela UI. Cada chamada adb já tem seu teto (60s), mas um
     /// envio faz várias (intent + polls + tap); sem um teto total, um emulador travado seguraria o lock
-    /// de UI por minutos e travaria a fila. Aborta o envio (retorna falha) e libera o lock passado isto.</summary>
+    /// de UI por minutos e travaria a fila. Aborta o envio (retorna falha) e libera o lock passado isto.
+    /// <para>⚠️ Com <see cref="HumanTyping"/> ligado, a DIGITAÇÃO entra dentro deste teto. Uma mensagem
+    /// de 800 caracteres a 260 cpm leva ~3 min, então 90s aborta todo envio no meio. Ver
+    /// <see cref="TypingCharsPerMinute"/>.</para></summary>
     public int WhatsAppSendTimeoutSeconds { get; set; } = 90;
+
+    // ── Digitação humana ─────────────────────────────────────────────────────────────────────────
+    // O deep link click-to-chat entrega a mensagem PRONTA no campo. Isso não deixa rastro de digitação:
+    // zero evento de tecla, zero indicador "digitando…" (que o app dispara a partir do TextWatcher do
+    // campo) e 800 caracteres aparecendo em ~3s. É a diferença mais visível entre este envio e uma
+    // pessoa, e ela não é afetada por nenhum ajuste no intervalo ENTRE mensagens.
+
+    /// <summary>Digitar a mensagem no aparelho em vez de entregá-la pronta pelo deep link.</summary>
+    /// <remarks>
+    /// Quando ligado e não houver como digitar o texto, o envio FALHA em vez de cair no caminho antigo.
+    /// É deliberado: o silêncio de um fallback devolveria justamente o comportamento que se quis remover,
+    /// e ninguém saberia. Falha aparece no log e o job volta pra fila.
+    /// </remarks>
+    public bool HumanTyping { get; set; } = true;
+
+    /// <summary>Pacote do IME que aceita texto Unicode por broadcast (ADB Keyboard).</summary>
+    /// <remarks>
+    /// Necessário porque o `input text` do Android NÃO digita acento nem emoji: devolve
+    /// NullPointerException (medido no aparelho de produção, Android 14). Sem o IME só dá pra digitar
+    /// texto ASCII simples, e um template em português sem acento é mais robótico, não menos.
+    /// </remarks>
+    public string TypingImePackage { get; set; } = "com.android.adbkeyboard";
+
+    /// <summary>Componente do IME (pacote/serviço) usado no `ime enable` / `ime set`.</summary>
+    public string TypingImeComponent { get; set; } = "com.android.adbkeyboard/.AdbIME";
+
+    /// <summary>URL http(s) do APK do teclado. Vazio = não instala (usa o que já estiver no aparelho).</summary>
+    public string TypingImeApkUrl { get; set; } = "";
+
+    /// <summary>Ritmo alvo da digitação em caracteres por minuto (com variação a cada trecho).</summary>
+    /// <remarks>
+    /// 260 cpm fica na faixa alta do que uma pessoa digita no celular, sem virar absurdo. Subir demais
+    /// devolve o problema (texto instantâneo); baixar demais estrangula a vazão: no platô de 200
+    /// mensagens/dia, cada minuto a mais por mensagem custa 3h20 de janela de envio.
+    /// </remarks>
+    public int TypingCharsPerMinute { get; set; } = 260;
 }

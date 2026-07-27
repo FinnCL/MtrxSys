@@ -649,6 +649,10 @@ internal sealed class DockerCliPhoneOrchestrator(
         {
             return WhatsAppSendResult.Fail("phone inválido");
         }
+        if (Opts.HumanTyping)
+        {
+            return await SendByTypingAsync(digits, text ?? string.Empty, ct);
+        }
         var url = WhatsAppUi.DeepLink(digits, text);
         if (url.Contains('\'', System.StringComparison.Ordinal))
         {
@@ -704,6 +708,340 @@ internal sealed class DockerCliPhoneOrchestrator(
         finally
         {
             _uiLock.Release();
+        }
+    }
+
+    // ── Envio DIGITADO ───────────────────────────────────────────────────────────────────────────
+    //
+    // Abre a conversa VAZIA e escreve o texto em trechos, com pausas. Diferenças observáveis pra quem
+    // recebe, comparado ao deep link com texto pronto:
+    //   • o "digitando…" aparece e some várias vezes (é disparado pelo TextWatcher do campo);
+    //   • o tempo entre abrir a conversa e enviar é proporcional ao tamanho da mensagem;
+    //   • existem eventos de entrada, em vez de um campo que nasce completo.
+    //
+    // NÃO é disfarce perfeito e não deve ser vendido como tal: continua sendo automação, o toque vem de
+    // `input tap` e a origem é um emulador. O que isto remove é o sinal mais grosseiro — 800 caracteres
+    // materializados em 3 segundos, sem nenhum evento de digitação.
+    private async Task<WhatsAppSendResult> SendByTypingAsync(string digits, string text, CancellationToken ct)
+    {
+        if (text.Length == 0)
+        {
+            return WhatsAppSendResult.Fail("texto vazio");
+        }
+        if (await ResolveTypingChannelAsync(text, ct) is not { } typing)
+        {
+            // FALHA em vez de cair no deep link. Voltar pro caminho antigo em silêncio devolveria o
+            // comportamento que se quis remover, e o log diria "enviado" do mesmo jeito.
+            return WhatsAppSendResult.Fail(
+                $"digitação humana exigida mas indisponível: nem o teclado {Opts.TypingImePackage} está "
+                + "instalado/ativo, nem o texto é simples o bastante pro `input text` (acento e emoji "
+                + "quebram). Configure Phone__TypingImeApkUrl ou desligue Phone__HumanTyping.");
+        }
+
+        await _uiLock.WaitAsync(ct);
+        try
+        {
+            // Teto TOTAL calculado, não fixo. Digitar é a única etapa cujo custo depende do TAMANHO da
+            // mensagem: 1000 caracteres a 260 cpm levam ~4 min, e o teto fixo de 90s abortaria TODO envio
+            // longo no meio da digitação — com o agravante de deixar texto parcial no campo. O teto da
+            // config vira o orçamento das etapas de tamanho fixo (abrir, achar campo, tocar, confirmar) e
+            // a digitação ganha o dobro do tempo teórico dela, que cobre a variação e as pausas.
+            var typingBudget = TimeSpan.FromMinutes(2.0 * text.Length / Math.Clamp(Opts.TypingCharsPerMinute, 60, 1200));
+            using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            sendCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(60, Opts.WhatsAppSendTimeoutSeconds)) + typingBudget);
+            var sct = sendCts.Token;
+
+            // 1) Abre a conversa SEM texto.
+            var (rc, outp, err) = await DockerCli.DockerAsync(sct, "exec", Opts.ContainerName,
+                "adb", "shell", $"am start -a android.intent.action.VIEW -d '{WhatsAppUi.DeepLinkEmpty(digits)}'");
+            if (rc != 0)
+            {
+                return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
+            }
+
+            // 2) Espera o campo de mensagem existir e toca nele (foco → teclado ativo → o app passa a
+            //    reportar composição). Sem o toque, o IME não tem alvo e o texto se perde no vazio.
+            var entry = await PollNodeCenterAsync("com.whatsapp:id/entry", Opts.WhatsAppOpenWaitMs, sct);
+            if (entry is null)
+            {
+                return WhatsAppSendResult.Fail("campo de mensagem não apareceu (a conversa não abriu).");
+            }
+            await TapAsync(entry.Value, sct);
+            // Pausa de quem abriu a conversa e vai começar a escrever.
+            await Task.Delay(System.Random.Shared.Next(900, 2600), sct);
+
+            // 3) Digita.
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            if (!await TypeInChunksAsync(typing, text, sct))
+            {
+                // Pode ter entrado texto PARCIAL. Não toca em enviar: metade de uma mensagem é pior que
+                // nenhuma, e o job volta pra fila inteiro.
+                await ClearEntryAsync(sct);
+                return WhatsAppSendResult.Fail("a digitação falhou no meio; campo limpo e envio abortado.");
+            }
+            started.Stop();
+
+            // 4) Confere que o campo tem o tamanho esperado ANTES de enviar. O IME pode engolir trecho
+            //    em silêncio, e aí sairia mensagem truncada — que é pior que não enviar.
+            var typed = await ReadEntryTextAsync(sct);
+            if (typed is null || Math.Abs(typed.Length - text.Length) > Math.Max(4, text.Length / 20))
+            {
+                await ClearEntryAsync(sct);
+                return WhatsAppSendResult.Fail(
+                    $"campo ficou com {typed?.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?"} "
+                    + $"caracteres, esperava ~{text.Length}; envio abortado pra não mandar truncado.");
+            }
+
+            // 5) Relê antes de enviar, como quem confere o que escreveu.
+            await Task.Delay(System.Random.Shared.Next(700, 2200), sct);
+            var send = await PollNodeCenterAsync("com.whatsapp:id/send", Opts.WhatsAppSendWaitMs, sct);
+            if (send is null)
+            {
+                await ClearEntryAsync(sct);
+                return WhatsAppSendResult.Fail("botão enviar não apareceu mesmo com o campo preenchido.");
+            }
+            await TapAsync(send.Value, sct);
+
+            if (!await PollEntryClearedAsync(Opts.WhatsAppSendWaitMs, sct))
+            {
+                return WhatsAppSendResult.Fail("toquei enviar mas o campo não esvaziou — envio não confirmado.");
+            }
+            log.LogInformation(
+                "Emulador: {Chars} caracteres digitados em {Secs:F0}s ({Cpm:F0} cpm) via {Canal}.",
+                text.Length, started.Elapsed.TotalSeconds,
+                text.Length / Math.Max(1, started.Elapsed.TotalMinutes), typing);
+            return WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return WhatsAppSendResult.Fail(
+                $"envio excedeu o teto (base {Opts.WhatsAppSendTimeoutSeconds}s + orçamento de digitação "
+                + $"pra {text.Length} caracteres a {Opts.TypingCharsPerMinute} cpm) — emulador lento/travado?");
+        }
+        finally
+        {
+            _uiLock.Release();
+        }
+    }
+
+    /// <summary>Por onde o texto vai entrar no aparelho. null = não há caminho capaz de digitar ESTE texto.</summary>
+    private enum TypingChannel
+    {
+        /// <summary>IME que aceita Unicode por broadcast (acento e emoji).</summary>
+        Ime,
+
+        /// <summary>`input text` do Android: só ASCII imprimível, e sem aspa simples.</summary>
+        InputText,
+    }
+
+    // `input text` NÃO digita acento nem emoji — devolve NullPointerException (medido no aparelho,
+    // Android 14). Só serve pra texto ASCII imprimível. A aspa simples fica de fora porque o comando
+    // trafega entre aspas simples até o shell do device.
+    private static bool IsTypeableByInputText(string text) =>
+        text.All(c => c is >= ' ' and <= '~' && c != '\'');
+
+    private async Task<TypingChannel?> ResolveTypingChannelAsync(string text, CancellationToken ct)
+    {
+        if (await EnsureTypingImeAsync(ct))
+        {
+            return TypingChannel.Ime;
+        }
+        return IsTypeableByInputText(text) ? TypingChannel.InputText : null;
+    }
+
+    // 0/1: o IME já foi instalado/ativado nesta instância? Instalar e trocar teclado é caro e não muda
+    // entre envios; um pm clear / troca de chip derruba, e aí o próximo envio refaz.
+    private int _typingImeReady;
+
+    private async Task<bool> EnsureTypingImeAsync(CancellationToken ct)
+    {
+        if (Volatile.Read(ref _typingImeReady) == 1)
+        {
+            return true;
+        }
+        if (string.IsNullOrWhiteSpace(Opts.TypingImePackage))
+        {
+            return false;
+        }
+
+        // Já habilitado e selecionado? `ime list -s` lista os ATIVOS.
+        var (lc, list, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell", "ime list -s");
+        var enabled = lc == 0 && (list ?? "").Contains(Opts.TypingImePackage, System.StringComparison.Ordinal);
+
+        if (!enabled)
+        {
+            // Instalado mas desativado, ou nem instalado. Só baixa se houver URL: sem ela, o aparelho
+            // pode ter recebido o APK por fora (docker cp) e o que falta é só habilitar.
+            var (pc, pkgs, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+                "adb", "shell", "pm", "list", "packages", Opts.TypingImePackage);
+            var installed = pc == 0 && (pkgs ?? "").Contains(Opts.TypingImePackage, System.StringComparison.Ordinal);
+            if (!installed && !await InstallTypingImeAsync(ct))
+            {
+                return false;
+            }
+            await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+                "adb", "shell", "ime", "enable", Opts.TypingImeComponent);
+        }
+        var (sc, _, serr) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "ime", "set", Opts.TypingImeComponent);
+        if (sc != 0)
+        {
+            log.LogWarning("Não consegui selecionar o teclado {Ime}: {Erro}", Opts.TypingImeComponent, serr);
+            return false;
+        }
+        Interlocked.Exchange(ref _typingImeReady, 1);
+        log.LogInformation("Teclado de digitação {Ime} ativo no aparelho.", Opts.TypingImeComponent);
+        return true;
+    }
+
+    private async Task<bool> InstallTypingImeAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(Opts.TypingImeApkUrl))
+        {
+            return false;
+        }
+        var (tmp, downloadErr) = await DockerCli.DownloadApkToTempAsync(http, Opts.TypingImeApkUrl, ct);
+        if (downloadErr is not null || tmp is null)
+        {
+            log.LogWarning("Não baixei o APK do teclado: {Erro}", downloadErr);
+            return false;
+        }
+        try
+        {
+            var (cc, _, cerr) = await DockerCli.DockerAsync(ct, "cp", tmp, $"{Opts.ContainerName}:/tmp/adbkb.apk");
+            if (cc != 0)
+            {
+                log.LogWarning("Não copiei o APK do teclado pro container: {Erro}", cerr);
+                return false;
+            }
+            var (ic, iout, ierr) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+                "adb", "install", "-r", "/tmp/adbkb.apk");
+            if (ic != 0)
+            {
+                log.LogWarning("Falha ao instalar o teclado: {Erro}", string.IsNullOrWhiteSpace(ierr) ? iout : ierr);
+                return false;
+            }
+            return true;
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch (IOException) { /* temp: sobra é inofensiva */ }
+        }
+    }
+
+    // Quebra o texto em trechos curtos, em fronteira de palavra, e escreve um por vez com pausa. A
+    // fronteira importa: partir no meio da palavra produz um "digitando…" com cadência estranha e um
+    // campo que, se alguém olhar no meio, tem lixo. Cada trecho é um commit do IME, que é o que gera o
+    // evento de composição.
+    private async Task<bool> TypeInChunksAsync(TypingChannel channel, string text, CancellationToken ct)
+    {
+        var cpm = Math.Clamp(Opts.TypingCharsPerMinute, 60, 1200);
+        foreach (var chunk in SplitForTyping(text))
+        {
+            if (!await SendChunkAsync(channel, chunk, ct))
+            {
+                return false;
+            }
+            // Tempo que ESTE trecho "custaria" a uma pessoa, com variação de 25% pra não sair um metrônomo.
+            var baseMs = chunk.Length * 60_000.0 / cpm;
+            var jitter = baseMs * (System.Random.Shared.NextDouble() * 0.5 - 0.25);
+            var waitMs = (int)Math.Clamp(baseMs + jitter, 120, 8_000);
+            // De vez em quando alguém para pra pensar. Sem isso a cadência é uniforme demais.
+            if (System.Random.Shared.Next(100) < 12)
+            {
+                waitMs += System.Random.Shared.Next(700, 2400);
+            }
+            await Task.Delay(waitMs, ct);
+        }
+        return true;
+    }
+
+    private async Task<bool> SendChunkAsync(TypingChannel channel, string chunk, CancellationToken ct)
+    {
+        if (channel is TypingChannel.Ime)
+        {
+            var (rc, _, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+                $"am broadcast -a ADB_INPUT_TEXT --es msg {ShellQuote(chunk)}");
+            return rc == 0;
+        }
+        // `input text` não recebe espaço: o adb junta os argumentos, então o espaço vira separador.
+        // %s é o marcador que o próprio `input` traduz de volta.
+        var (tc, _, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            $"input text {ShellQuote(chunk.Replace(" ", "%s", StringComparison.Ordinal))}");
+        return tc == 0;
+    }
+
+    /// <summary>Aspas simples pro shell DO APARELHO (o adb junta os argumentos e o shell de lá reinterpreta).</summary>
+    private static string ShellQuote(string s) => "'" + s.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+    // Trechos de 12 a 28 caracteres, cortando no espaço seguinte pra não partir palavra. Quebra de linha
+    // vira fim de trecho: é onde uma pessoa naturalmente pausa.
+    private static IEnumerable<string> SplitForTyping(string text)
+    {
+        var i = 0;
+        while (i < text.Length)
+        {
+            var target = Math.Min(text.Length, i + System.Random.Shared.Next(12, 29));
+            var nl = text.IndexOf('\n', i);
+            if (nl >= 0 && nl < target)
+            {
+                target = nl + 1;
+            }
+            else
+            {
+                while (target < text.Length && text[target] != ' ')
+                {
+                    target++;
+                }
+                if (target < text.Length)
+                {
+                    target++; // leva o espaço junto
+                }
+            }
+            yield return text[i..target];
+            i = target;
+        }
+    }
+
+    private async Task TapAsync((int X, int Y) p, CancellationToken ct)
+    {
+        // Desvio de alguns pixels: toque humano não acerta o centro geométrico duas vezes seguidas.
+        var x = p.X + System.Random.Shared.Next(-6, 7);
+        var y = p.Y + System.Random.Shared.Next(-4, 5);
+        await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell", "input", "tap",
+            x.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            y.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>Texto que está no campo de mensagem agora. null = não deu pra ler.</summary>
+    private async Task<string?> ReadEntryTextAsync(CancellationToken ct)
+    {
+        var xml = await DumpUiAsync(ct);
+        if (xml is null)
+        {
+            return null;
+        }
+        var m = System.Text.RegularExpressions.Regex.Match(
+            xml, "com.whatsapp:id/entry\"[^>]*?text=\"([^\"]*)\"");
+        // O dump escapa XML; pro nosso uso só o COMPRIMENTO importa, e desescapar mudaria a contagem.
+        return m.Success ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value) : null;
+    }
+
+    // Esvazia o campo antes de desistir: texto parcial deixado ali seria enviado no PRÓXIMO envio, que
+    // abre a mesma conversa e digitaria em cima. Uma mensagem duplicada e sem sentido pro destinatário.
+    private async Task ClearEntryAsync(CancellationToken ct)
+    {
+        await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+            "input keyevent --longpress KEYCODE_DEL");
+        for (var i = 0; i < 40; i++)
+        {
+            await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+                "input keyevent KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL "
+                + "KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL");
+            if (await ReadEntryTextAsync(ct) is { Length: 0 } or null)
+            {
+                return;
+            }
         }
     }
 
