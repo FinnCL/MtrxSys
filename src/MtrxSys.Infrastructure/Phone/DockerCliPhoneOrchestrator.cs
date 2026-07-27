@@ -770,14 +770,23 @@ internal sealed class DockerCliPhoneOrchestrator(
             // Pausa de quem abriu a conversa e vai começar a escrever.
             await Task.Delay(System.Random.Shared.Next(900, 2600), sct);
 
-            // 3) Digita.
+            // 3) Digita. O teclado é trocado só aqui e devolvido no finally: fora desta janela o
+            //    aparelho continua com o teclado de tela, pra quem precisar mexer nele à mão.
+            var previousIme = typing is TypingChannel.Ime ? await SelectTypingImeAsync(sct) : null;
             var started = System.Diagnostics.Stopwatch.StartNew();
-            if (!await TypeInChunksAsync(typing, text, sct))
+            try
             {
-                // Pode ter entrado texto PARCIAL. Não toca em enviar: metade de uma mensagem é pior que
-                // nenhuma, e o job volta pra fila inteiro.
-                await ClearEntryAsync(sct);
-                return WhatsAppSendResult.Fail("a digitação falhou no meio; campo limpo e envio abortado.");
+                if (!await TypeInChunksAsync(typing, text, sct))
+                {
+                    // Pode ter entrado texto PARCIAL. Não toca em enviar: metade de uma mensagem é pior
+                    // que nenhuma, e o job volta pra fila inteiro.
+                    await ClearEntryAsync(sct);
+                    return WhatsAppSendResult.Fail("a digitação falhou no meio; campo limpo e envio abortado.");
+                }
+            }
+            finally
+            {
+                await RestoreImeAsync(previousIme, sct);
             }
             started.Stop();
 
@@ -882,16 +891,47 @@ internal sealed class DockerCliPhoneOrchestrator(
             await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
                 "adb", "shell", "ime", "enable", Opts.TypingImeComponent);
         }
+        // NÃO seleciona como padrão aqui. Selecionar é feito só em volta da digitação e desfeito
+        // depois — ver SelectTypingImeAsync. Deixar este IME como teclado padrão do aparelho tira o
+        // teclado DA TELA: ele não desenha teclas, só recebe texto por broadcast. Quem abrir o
+        // emulador pelo noVNC pra registrar um chip ou destravar alguma coisa ficaria sem conseguir
+        // digitar, e o sintoma ("o teclado sumiu") não aponta pra cá.
+        Interlocked.Exchange(ref _typingImeReady, 1);
+        log.LogInformation("Teclado de digitação {Ime} habilitado no aparelho.", Opts.TypingImeComponent);
+        return true;
+    }
+
+    /// <summary>Seleciona o teclado de digitação e devolve o que estava antes, pra ser restaurado.</summary>
+    private async Task<string?> SelectTypingImeAsync(CancellationToken ct)
+    {
+        var (rc, current, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "settings", "get", "secure", "default_input_method");
+        var previous = rc == 0 ? (current ?? "").Replace("\r", "").Replace("\n", "").Trim() : "";
         var (sc, _, serr) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "ime", "set", Opts.TypingImeComponent);
         if (sc != 0)
         {
             log.LogWarning("Não consegui selecionar o teclado {Ime}: {Erro}", Opts.TypingImeComponent, serr);
-            return false;
+            return null;
         }
-        Interlocked.Exchange(ref _typingImeReady, 1);
-        log.LogInformation("Teclado de digitação {Ime} ativo no aparelho.", Opts.TypingImeComponent);
-        return true;
+        return previous.Length > 0 && previous != Opts.TypingImeComponent ? previous : "";
+    }
+
+    // Devolve o teclado que o aparelho tinha. Best-effort de propósito: se falhar, o envio já aconteceu
+    // e não faz sentido reportar erro por causa disso — mas fica registrado, porque o efeito (aparelho
+    // sem teclado na tela) é confuso de diagnosticar depois.
+    private async Task RestoreImeAsync(string? previous, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(previous))
+        {
+            return;
+        }
+        var (rc, _, err) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "ime", "set", previous);
+        if (rc != 0)
+        {
+            log.LogWarning("Não devolvi o teclado {Ime} ao aparelho: {Erro}", previous, err);
+        }
     }
 
     private async Task<bool> InstallTypingImeAsync(CancellationToken ct)
