@@ -767,38 +767,49 @@ internal sealed class DockerCliPhoneOrchestrator(
                 return WhatsAppSendResult.Fail("campo de mensagem não apareceu (a conversa não abriu).");
             }
             await TapAsync(entry.Value, sct);
-            // Pausa de quem abriu a conversa e vai começar a escrever.
-            await Task.Delay(System.Random.Shared.Next(900, 2600), sct);
 
-            // 3) Digita. O teclado é trocado só aqui e devolvido no finally: fora desta janela o
-            //    aparelho continua com o teclado de tela, pra quem precisar mexer nele à mão.
+            // 3) Teclado selecionado ANTES de limpar: quem sabe esvaziar o campo num comando só é ele
+            //    (ADB_CLEAR_TEXT). É devolvido no finally, então fora desta janela o aparelho continua
+            //    com o teclado de tela, pra quem precisar mexer nele à mão.
             var previousIme = typing is TypingChannel.Ime ? await SelectTypingImeAsync(sct) : null;
             var started = System.Diagnostics.Stopwatch.StartNew();
+            string? typed;
             try
             {
+                // Campo LIMPO antes de começar. Uma tentativa anterior pode ter deixado texto aqui e, como
+                // o envio reabre a MESMA conversa, a digitação nova entraria EM CIMA da velha.
+                // 🔴 Medido em 2026-07-27: sem isto o campo terminou com dois recortes do template
+                // embaralhados, e só não virou mensagem porque a conferência de tamanho barrou.
+                if (!await ClearEntryAsync(typing, sct))
+                {
+                    return WhatsAppSendResult.Fail("o campo de mensagem já tinha texto e não consegui limpar.");
+                }
+                await Task.Delay(System.Random.Shared.Next(900, 2600), sct);
+
                 if (!await TypeInChunksAsync(typing, text, sct))
                 {
                     // Pode ter entrado texto PARCIAL. Não toca em enviar: metade de uma mensagem é pior
                     // que nenhuma, e o job volta pra fila inteiro.
-                    await ClearEntryAsync(sct);
+                    await ClearEntryAsync(typing, sct);
                     return WhatsAppSendResult.Fail("a digitação falhou no meio; campo limpo e envio abortado.");
+                }
+                started.Stop();
+
+                // 4) Confere o tamanho ANTES de enviar. O IME pode engolir trecho em silêncio, e aí sairia
+                //    mensagem truncada — pior que não enviar.
+                typed = await ReadEntryTextAsync(sct);
+                if (typed is null || Math.Abs(typed.Length - text.Length) > Math.Max(4, text.Length / 20))
+                {
+                    var achou = typed?.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "nada";
+                    await ClearEntryAsync(typing, sct);
+                    return WhatsAppSendResult.Fail(
+                        $"campo ficou com {achou} caracteres, esperava ~{text.Length}; "
+                        + "envio abortado pra não mandar truncado.");
                 }
             }
             finally
             {
                 await RestoreImeAsync(previousIme, sct);
-            }
-            started.Stop();
-
-            // 4) Confere que o campo tem o tamanho esperado ANTES de enviar. O IME pode engolir trecho
-            //    em silêncio, e aí sairia mensagem truncada — que é pior que não enviar.
-            var typed = await ReadEntryTextAsync(sct);
-            if (typed is null || Math.Abs(typed.Length - text.Length) > Math.Max(4, text.Length / 20))
-            {
-                await ClearEntryAsync(sct);
-                return WhatsAppSendResult.Fail(
-                    $"campo ficou com {typed?.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?"} "
-                    + $"caracteres, esperava ~{text.Length}; envio abortado pra não mandar truncado.");
             }
 
             // 5) Relê antes de enviar, como quem confere o que escreveu.
@@ -806,7 +817,7 @@ internal sealed class DockerCliPhoneOrchestrator(
             var send = await PollNodeCenterAsync("com.whatsapp:id/send", Opts.WhatsAppSendWaitMs, sct);
             if (send is null)
             {
-                await ClearEntryAsync(sct);
+                await ClearEntryAsync(typing, sct);
                 return WhatsAppSendResult.Fail("botão enviar não apareceu mesmo com o campo preenchido.");
             }
             await TapAsync(send.Value, sct);
@@ -1053,36 +1064,75 @@ internal sealed class DockerCliPhoneOrchestrator(
             y.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
-    /// <summary>Texto que está no campo de mensagem agora. null = não deu pra ler.</summary>
-    private async Task<string?> ReadEntryTextAsync(CancellationToken ct)
+    // O `text` do nó vem ANTES do `resource-id` no dump do uiautomator:
+    //   <node index="1" text="…" resource-id="com.whatsapp:id/entry" class="android.widget.EditText" …>
+    //
+    // 🔴 Por isso o padrão antigo ("id/entry\"[^>]*?text=\"…") NUNCA casava: ele procurava o texto DEPOIS
+    // do id, e `[^>]*?` não atravessa o fim do nó. O efeito era invisível porque cada chamador tratava a
+    // ausência de casamento como a resposta boa — "campo vazio", "já limpou", "enviou". Uma confirmação
+    // que sempre confirma não confirma nada. Aqui a busca é pelo NÓ inteiro e o atributo sai de dentro
+    // dele, então a ordem dos atributos deixa de importar.
+    private static readonly System.Text.RegularExpressions.Regex EntryNodeRx =
+        new("<node[^>]*com\\.whatsapp:id/entry[^>]*>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex TextAttrRx =
+        new("text=\"([^\"]*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Texto do campo de mensagem. null = o campo não está na tela (ou não deu pra ler).</summary>
+    private static string? EntryTextFrom(string? xml)
     {
-        var xml = await DumpUiAsync(ct);
-        if (xml is null)
+        var node = xml is null ? null : EntryNodeRx.Match(xml);
+        if (node is not { Success: true })
         {
             return null;
         }
-        var m = System.Text.RegularExpressions.Regex.Match(
-            xml, "com.whatsapp:id/entry\"[^>]*?text=\"([^\"]*)\"");
-        // O dump escapa XML; pro nosso uso só o COMPRIMENTO importa, e desescapar mudaria a contagem.
-        return m.Success ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value) : null;
+        var t = TextAttrRx.Match(node.Value);
+        // O dump escapa XML (&#10; etc). Desescapa pra o COMPRIMENTO bater com o texto original.
+        return t.Success ? System.Net.WebUtility.HtmlDecode(t.Groups[1].Value) : "";
     }
 
-    // Esvazia o campo antes de desistir: texto parcial deixado ali seria enviado no PRÓXIMO envio, que
-    // abre a mesma conversa e digitaria em cima. Uma mensagem duplicada e sem sentido pro destinatário.
-    private async Task ClearEntryAsync(CancellationToken ct)
+    private async Task<string?> ReadEntryTextAsync(CancellationToken ct) =>
+        EntryTextFrom(await DumpUiAsync(ct));
+
+    // ⚠️ CAMPO VAZIO NÃO É text="". O uiautomator devolve a DICA do campo quando não há texto — medido
+    // no aparelho: vazio sai como text="Mensagem". Comparar com string vazia nunca dá verdadeiro, e
+    // quem dependesse disso ("já limpou", "enviou") ficaria preso pra sempre.
+    //
+    // O sinal confiável é o BOTÃO DE ENVIAR: o WhatsApp mostra o microfone quando o campo está vazio e
+    // troca pelo botão de enviar quando tem texto. Não depende de idioma nem do texto da dica.
+    private static bool HasSendButton(string? xml) =>
+        xml is not null && xml.Contains("com.whatsapp:id/send\"", StringComparison.Ordinal);
+
+    /// <summary>Esvazia o campo de mensagem. false = não consegui confirmar que ficou vazio.</summary>
+    /// <remarks>
+    /// Chamado ANTES de digitar e depois de qualquer falha. O "antes" não é redundante: uma tentativa
+    /// anterior pode ter deixado texto no campo, e como o envio reabre A MESMA conversa, a digitação
+    /// nova entraria EM CIMA da velha. Foi exatamente o que aconteceu em 2026-07-27 — o campo terminou
+    /// com dois recortes do template embaralhados.
+    /// </remarks>
+    private async Task<bool> ClearEntryAsync(TypingChannel channel, CancellationToken ct)
     {
-        await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
-            "input keyevent --longpress KEYCODE_DEL");
-        for (var i = 0; i < 40; i++)
+        for (var i = 0; i < 12; i++)
         {
-            await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
-                "input keyevent KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL "
-                + "KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL");
-            if (await ReadEntryTextAsync(ct) is { Length: 0 } or null)
+            if (!HasSendButton(await DumpUiAsync(ct)))
             {
-                return;
+                return true; // sem botão de enviar = campo vazio
             }
+            if (channel is TypingChannel.Ime)
+            {
+                // O teclado tem ação própria de limpar: um comando contra ~900 apagadas uma a uma.
+                await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+                    "am broadcast -a ADB_CLEAR_TEXT");
+            }
+            else
+            {
+                await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName, "adb", "shell",
+                    $"input keyevent KEYCODE_MOVE_END {string.Join(' ', Enumerable.Repeat("KEYCODE_DEL", 60))}");
+            }
+            await Task.Delay(400, ct);
         }
+        log.LogWarning("Não consegui esvaziar o campo de mensagem do WhatsApp.");
+        return false;
     }
 
     // Dump da árvore de UI do WhatsApp (uiautomator) → o XML. null se falhar. Arquivo fixo é seguro:
@@ -1138,15 +1188,15 @@ internal sealed class DockerCliPhoneOrchestrator(
     // O campo de texto (id/entry) esvaziou = a msg saiu. Repete até timeoutMs.
     private async Task<bool> PollEntryClearedAsync(int timeoutMs, CancellationToken ct)
     {
-        var rx = new System.Text.RegularExpressions.Regex("com.whatsapp:id/entry\"[^>]*?text=\"([^\"]*)\"");
         var attempts = Math.Max(1, timeoutMs / 500);
         for (var i = 0; i <= attempts; i++)
         {
             var xml = await DumpUiAsync(ct);
             if (xml is not null)
             {
-                var m = rx.Match(xml);
-                if (!m.Success || string.IsNullOrEmpty(m.Groups[1].Value)) // sem campo (fechou) ou vazio = enviou
+                // O botão de enviar SUMIR é a evidência de que o texto deixou o campo. Comparar o texto
+                // com "" NÃO serve: campo vazio devolve a DICA, não string vazia (ver HasSendButton).
+                if (!HasSendButton(xml))
                 {
                     return true;
                 }
