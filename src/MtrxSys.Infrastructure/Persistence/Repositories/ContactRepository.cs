@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Domain.Campaigns;
 using MtrxSys.Core.Domain.Contacts;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Infrastructure.Persistence.Repositories;
 
@@ -25,6 +26,30 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
             .ToListAsync(ct);
         // E.164 é único (índice único em phone_e164), então não há colisão de chave.
         return found.ToDictionary(c => c.Phone.E164, StringComparer.Ordinal);
+    }
+
+    public async Task<IReadOnlyDictionary<string, Contact>> GetByPhoneDigitsAsync(
+        IReadOnlyCollection<string> phoneDigits, CancellationToken ct)
+    {
+        if (phoneDigits.Count == 0)
+        {
+            return new Dictionary<string, Contact>(StringComparer.Ordinal);
+        }
+        var alvo = phoneDigits.ToHashSet(StringComparer.Ordinal);
+
+        // Consulta direto a coluna GERADA phone_digits (via propriedade-sombra), que é o mesmo valor do
+        // índice único: o Postgres resolve com Index Scan e devolve entidade RASTREADA (o xmin vem
+        // certo, e o import muta esses contatos). Sem varredura, sem SQL cru, sem normalizar em memória.
+        var found = await db.Contacts
+            .Where(c => alvo.Contains(EF.Property<string>(c, "PhoneDigits")))
+            .ToListAsync(ct);
+
+        // Dedup por dígitos: dois formatos do mesmo número colapsam numa chave. Ativo tem prioridade
+        // sobre descartado (é o que o chamador quer reusar), então descartado ordena por último.
+        return found
+            .OrderBy(c => c.DeletedAt != null)
+            .GroupBy(c => PhoneDigits.Of(c.Phone.E164), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
     }
 
     public async Task AddAsync(Contact contact, CancellationToken ct) =>

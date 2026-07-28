@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
 using MtrxSys.Core.Application.UseCases.Contacts;
@@ -97,7 +98,23 @@ public static class GroupsEndpoints
             {
                 return Results.Problem("groupId is required", statusCode: 400);
             }
-            var result = await useCase.ExecuteAsync(groupId, req?.GroupTag, ct);
+            ImportResult result;
+            try
+            {
+                result = await useCase.ExecuteAsync(groupId, req?.GroupTag, ct);
+            }
+            catch (DbUpdateException)
+            {
+                // Colisão no índice único por dígitos apesar do dedup: uma corrida (dois imports ao
+                // mesmo tempo, ou o Google sync inserindo o mesmo número em paralelo) inseriu o contato
+                // entre a leitura do dedup e o SaveChanges. Não é erro do operador nem bug de dado — é
+                // concorrência, e a ação certa é só tentar de novo. 409 em vez de 500 (que vazava stack
+                // trace e assustava). O 500 de 2026-07-28 era outra causa, JÁ corrigida no dedup; este
+                // catch cobre a corrida que o dedup não tem como cobrir sozinho.
+                return Results.Problem(
+                    "A importação esbarrou num contato criado em paralelo. Tente novamente.",
+                    statusCode: 409);
+            }
             return Results.Ok(new
             {
                 total = result.Total,

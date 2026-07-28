@@ -117,18 +117,23 @@ public sealed class ImportGroupMembersUseCase(
 #pragma warning restore CA1031
         }
 
-        // Carrega num único SELECT os contatos já existentes pros telefones desta importação —
-        // antes era uma consulta por participante (N+1), pesado em grupos grandes.
-        var existingByPhone = await contacts.GetByPhonesAsync(
-            pending.Select(x => x.Phone.E164).Distinct().ToList(), ct);
-        var known = new Dictionary<string, Contact>(existingByPhone, StringComparer.Ordinal);
+        // Carrega num único SELECT os contatos já existentes pros telefones desta importação.
+        // 🔴 Por DÍGITOS, não por E164 exato: o índice único do banco compara por dígitos, então um
+        // contato já gravado em OUTRO formato ("5588…" vs "+5588…") tem que ser encontrado AQUI. Casar
+        // por texto deixava passar, o INSERT batia no índice e a importação inteira estourava 500
+        // (medido em produção 2026-07-28). Inclui descartados: são eles que o índice bloqueia, e
+        // reimportar é justamente o gesto que os traz de volta.
+        var known = new Dictionary<string, Contact>(
+            await contacts.GetByPhoneDigitsAsync(
+                pending.Select(x => PhoneDigits.Of(x.Phone.E164)).Distinct().ToList(), ct),
+            StringComparer.Ordinal);
 
         foreach (var (member, phone) in pending)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                if (known.TryGetValue(phone.E164, out var existing))
+                if (known.TryGetValue(PhoneDigits.Of(phone.E164), out var existing))
                 {
                     // Já existe: re-importar = "quero estes contatos". Traz de volta quem foi
                     // descartado e garante o grupo (ex.: contato criado pelo sync sem grupo).
@@ -158,7 +163,7 @@ public sealed class ImportGroupMembersUseCase(
                     importedByPhone: ownNumber);
 
                 await contacts.AddAsync(contact, ct);
-                known[phone.E164] = contact; // telefone repetido no mesmo grupo reaproveita o contato
+                known[PhoneDigits.Of(phone.E164)] = contact; // repetido no mesmo grupo reaproveita o contato
                 imported++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

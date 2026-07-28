@@ -17,6 +17,13 @@ internal sealed class ContactConfiguration : IEntityTypeConfiguration<Contact>
             p.HasIndex(v => v.E164).IsUnique();
         });
         b.Navigation(x => x.Phone).IsRequired();
+
+        // Coluna GERADA pelo banco (regexp_replace de phone_e164). Propriedade-sombra: não existe no
+        // domínio (Contact não a expõe), o C# a consulta por EF.Property. Nunca é escrita — o banco
+        // mantém — daí ValueGeneratedOnAddOrUpdate + a exclusão da migração de INSERT/UPDATE.
+        b.Property<string>("PhoneDigits").HasColumnName("phone_digits").ValueGeneratedOnAddOrUpdate();
+        b.HasIndex("PhoneDigits").IsUnique().HasFilter("deleted_at IS NULL")
+            .HasDatabaseName("IX_contacts_phone_digits");
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(200);
         b.Property(x => x.GroupTag).HasColumnName("group_tag").HasMaxLength(80);
         b.Property(x => x.ImportedByPhone).HasColumnName("imported_by_phone").HasMaxLength(20);

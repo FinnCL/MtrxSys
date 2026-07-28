@@ -9,6 +9,21 @@ public interface IContactRepository
     /// <summary>Carrega num único SELECT os contatos cujos telefones estão na lista, indexados por
     /// E.164. Usado pela importação de grupo pra evitar o N+1 (uma consulta por participante).</summary>
     Task<IReadOnlyDictionary<string, Contact>> GetByPhonesAsync(IReadOnlyCollection<string> e164s, CancellationToken ct);
+
+    /// <summary>Contatos existentes cujos DÍGITOS batem com os pedidos, chaveados pelos dígitos.</summary>
+    /// <remarks>
+    /// <para>🔴 Existe pra o dedup CONCORDAR com o índice único do banco. O <see cref="GetByPhonesAsync"/>
+    /// casa por E164 EXATO, e o índice <c>IX_contacts_phone_digits</c> compara por dígitos. Divergência
+    /// medida em produção 2026-07-28: um contato descartado gravado como "5588…" não era achado pelo
+    /// dedup que procurava "+5588…", a importação tentava inserir, o índice recusava e a rota estourava
+    /// 500. O dedup tem que fazer a MESMA pergunta que o índice.</para>
+    ///
+    /// <para>INCLUI descartados de propósito: são justamente eles que o índice bloqueia (ele filtra
+    /// <c>deleted_at IS NULL</c>, mas re-inserir um número cujo ATIVO existe, ou re-ativar um descartado,
+    /// passa por aqui). Quem chama decide o que fazer — reativar, pular — mas precisa ENXERGAR.</para>
+    /// </remarks>
+    Task<IReadOnlyDictionary<string, Contact>> GetByPhoneDigitsAsync(
+        IReadOnlyCollection<string> phoneDigits, CancellationToken ct);
     Task AddAsync(Contact contact, CancellationToken ct);
     Task UpdateAsync(Contact contact, CancellationToken ct);
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);

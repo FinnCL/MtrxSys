@@ -77,6 +77,31 @@ public sealed class ManualContactsE2ETests : IAsyncLifetime
         phones.Should().BeEquivalentTo(new[] { optedOut.Phone.E164, optedOutDiscarded.Phone.E164 });
     }
 
+    // 🔴 A coluna GERADA phone_digits só se prova contra Postgres real: o EF NÃO pode listá-la no
+    // INSERT (o Postgres recusa GENERATED ALWAYS), e a query de dedup tem que casar por dígitos
+    // ignorando o formato. Se qualquer um dos dois quebrar, é aqui — não num teste em memória.
+    [Fact]
+    public async Task GetByPhoneDigits_casa_formatos_diferentes_e_o_insert_nao_escreve_a_coluna_gerada()
+    {
+        var repo = new ContactRepository(_db);
+        var uow = new UnitOfWork(_db);
+        var now = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        // Número BR legado sem o 9º dígito: a lib normaliza pra "+557184609253". Grava com "+".
+        var comMais = Contact.Create(Guid.NewGuid(), _phones.Validate("7184609253").Value!,
+            name: null, groupTag: "G", theme: null, optInAt: now);
+        await repo.AddAsync(comMais, CancellationToken.None);
+        await uow.SaveChangesAsync(CancellationToken.None); // se o EF escrevesse phone_digits, estouraria
+
+        var digitos = new string([.. comMais.Phone.E164.Where(char.IsDigit)]);
+
+        // Procura só pelos DÍGITOS (sem "+"): tem que achar o mesmo contato pela coluna gerada.
+        var achado = await repo.GetByPhoneDigitsAsync([digitos], CancellationToken.None);
+
+        achado.Should().ContainKey(digitos);
+        achado[digitos].Id.Should().Be(comMais.Id);
+    }
+
     [Fact]
     public async Task Full_flow_persists_dedupes_and_lands_in_dispatch_audience()
     {

@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Domain.Contacts;
@@ -291,8 +292,7 @@ public static class ContactsEndpoints
             {
                 return Results.Problem("Máximo de 2000 números por vez.", statusCode: 400);
             }
-            var result = await useCase.ExecuteAsync(req.Numbers, req.GroupTag, ct);
-            return Results.Ok(ToResponse(result));
+            return await SaveOrConflict(() => useCase.ExecuteAsync(req.Numbers, req.GroupTag, ct));
         });
 
         // ── Importar da agenda Google ────────────────────────────────────────────────────────────
@@ -411,8 +411,9 @@ public static class ContactsEndpoints
                     + "Quem pediu pra sair não volta por importação.",
                     statusCode: 409);
             }
-            var result = await useCase.ExecuteAsync(permitidos, "Google", ct, chip);
-            return Results.Ok(ToResponse(result) with { Barrados = barrados });
+            return await SaveOrConflict(
+                () => useCase.ExecuteAsync(permitidos, "Google", ct, chip),
+                r => r with { Barrados = barrados });
         });
 
         group.MapPost("/{id:guid}/notes", async (
@@ -515,6 +516,26 @@ public static class ContactsEndpoints
 
     // Mapeia o resultado do use case pra resposta da API. Status vira string (ToString) — o projeto
     // não tem conversor global de enum, e o front consome os nomes ("Ok"/"Corrected"/...).
+    // Toda gravação de contato pode esbarrar no índice único por dígitos (IX_contacts_phone_digits)
+    // por uma corrida que o dedup não cobre: dois imports ao mesmo tempo, ou o Google sync inserindo o
+    // mesmo número em paralelo, entre a leitura do dedup e o SaveChanges. Isso é concorrência, não erro
+    // do operador — vira 409 "tente de novo", nunca um 500 com stack trace vazando. Centralizado pra os
+    // três caminhos de escrita (manual, import Google, e o de grupo tem o seu) responderem igual.
+    private static async Task<IResult> SaveOrConflict(
+        Func<Task<ManualImportResult>> save, Func<ManualImportResponse, ManualImportResponse>? adjust = null)
+    {
+        try
+        {
+            var resp = ToResponse(await save());
+            return Results.Ok(adjust is null ? resp : adjust(resp));
+        }
+        catch (DbUpdateException)
+        {
+            return Results.Problem(
+                "A gravação esbarrou num contato criado em paralelo. Tente novamente.", statusCode: 409);
+        }
+    }
+
     private static ManualImportResponse ToResponse(ManualImportResult r) => new(
         r.Total, r.Added, r.Duplicated, r.Corrected, r.Invalid,
         r.Lines.Select(l => new ManualLineResponse(

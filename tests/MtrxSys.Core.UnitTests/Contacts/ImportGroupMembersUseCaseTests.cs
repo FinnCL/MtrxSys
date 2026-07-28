@@ -32,11 +32,24 @@ public sealed class ImportGroupMembersUseCaseTests
     private readonly IWahaClient _waha = Substitute.For<IWahaClient>();
     private readonly IContactRepository _contacts = Substitute.For<IContactRepository>();
     private readonly List<Contact> _added = [];
+    // Contatos "já no banco" que o dedup por dígitos deve enxergar.
+    private readonly List<Contact> _existing = [];
 
     private ImportGroupMembersUseCase Build()
     {
         _contacts.GetByPhonesAsync(Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
             .Returns(new Dictionary<string, Contact>(StringComparer.Ordinal));
+        // A importação deduplica por DÍGITOS (concordando com o índice único do banco). Sem este stub
+        // o mock devolveria null e todo import "veria" a base vazia.
+        _contacts.GetByPhoneDigitsAsync(Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var pedidos = ((IReadOnlyCollection<string>)ci[0]).ToHashSet(StringComparer.Ordinal);
+                return (IReadOnlyDictionary<string, Contact>)_existing
+                    .Where(c => pedidos.Contains(PhoneDigits.Of(c.Phone.E164)))
+                    .GroupBy(c => PhoneDigits.Of(c.Phone.E164), StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+            });
         _contacts.AddAsync(Arg.Do<Contact>(_added.Add), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
         // Modo WahaOnly explícito: estes testes cobrem a fonte WAHA. O caminho do emulador (aparelho
@@ -125,6 +138,26 @@ public sealed class ImportGroupMembersUseCaseTests
         result.Imported.Should().Be(1);
         result.Failed.Should().Be(1);
         _added.Select(c => c.Phone.E164).Should().NotContain("+13475551234");
+    }
+
+    // 🔴 REGRESSÃO 2026-07-28: o dedup casava por E164 exato, mas o índice único do banco compara por
+    // DÍGITOS. Um contato já gravado SEM "+" não era encontrado, o INSERT batia no índice e a
+    // importação inteira estourava 500. Aqui o mesmo número já existe como "557182368724" (sem "+") e
+    // chega do grupo como "+557182368724" — tem que ser reconhecido como O MESMO, sem criar duplicata.
+    [Fact]
+    public async Task Numero_ja_existente_em_outro_formato_nao_vira_duplicata()
+    {
+        _existing.Add(Contact.Create(
+            Guid.NewGuid(), PhoneNumber.FromValidatedE164("557182368724"),
+            name: null, groupTag: "Antigo", theme: null, optInAt: default, importedByPhone: OwnPhone));
+        SetMembers("+557182368724");
+        SetOwnPhone(OwnPhone);
+
+        var result = await Build().ExecuteAsync(GroupId, "Amigos", CancellationToken.None);
+
+        _added.Should().BeEmpty("o número já existe — reusa, não cria outro");
+        result.Imported.Should().Be(0);
+        result.Duplicated.Should().Be(1);
     }
 }
 
