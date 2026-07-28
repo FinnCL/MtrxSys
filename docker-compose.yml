@@ -127,6 +127,16 @@ services:
       # re-pareados depois) entram na fase. Chip que ja roda nunca para. Mesma data nos 10 stacks.
       HumanPhase__EffectiveFrom: ${HUMAN_PHASE_FROM:-}
       Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-in-production-32-chars-min}
+      # AGENDA GOOGLE — as MESMAS vars do dispatcher. Antes só o dispatcher lia isto (ele salva o
+      # contato frio antes de disparar). Agora a API TAMBÉM precisa: a aba Contatos tem "Importar da
+      # agenda Google", cujo /google/preview roda AQUI. Sem estas envs, IsEnabled era false na API e o
+      # painel mostrava "Sincronização desligada" mesmo com o dispatcher usando o Google normalmente.
+      AddressBookSync__Enabled: ${ADDRBOOK_ENABLED:-false}
+      AddressBookSync__Provider: ${ADDRBOOK_PROVIDER:-None}
+      AddressBookSync__GraceSeconds: ${ADDRBOOK_GRACE:-180}
+      AddressBookSync__Google__ClientId: ${ADDRBOOK_GOOGLE_CLIENT_ID:-}
+      AddressBookSync__Google__ClientSecret: ${ADDRBOOK_GOOGLE_CLIENT_SECRET:-}
+      AddressBookSync__Google__RefreshToken: ${ADDRBOOK_GOOGLE_REFRESH_TOKEN:-}
       # Busca de grupos por nicho (Coletor) via SearXNG (container abaixo). Vazio = usa Telegram.
       Collector__SearxngBaseUrl: ${COLLECTOR_SEARXNG_URL:-http://searxng:8080}
       # Serper (índice do Google, faixa grátis ~2.500 buscas). Preenchido = usa Serper no lugar do

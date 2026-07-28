@@ -15,6 +15,15 @@ services:
       # Igual ao A. Serper segue como fonte opcional adicional (se a chave estiver setada).
       Collector__SearxngBaseUrl: ${COLLECTOR_SEARXNG_URL:-http://searxng:8080}
       Collector__SerperApiKey: ${SERPER_API_KEY:-}
+      # AGENDA GOOGLE na API — as MESMAS vars do dispatcher. A aba Contatos tem "Importar da agenda
+      # Google" e o /google/preview roda na API; sem isto o painel diria "desligado" mesmo com o
+      # dispatcher usando o Google. Espelha o que foi corrigido no A (docker-compose.yml).
+      AddressBookSync__Enabled: ${ADDRBOOK_ENABLED:-false}
+      AddressBookSync__Provider: ${ADDRBOOK_PROVIDER:-None}
+      AddressBookSync__GraceSeconds: ${ADDRBOOK_GRACE:-180}
+      AddressBookSync__Google__ClientId: ${ADDRBOOK_GOOGLE_CLIENT_ID:-}
+      AddressBookSync__Google__ClientSecret: ${ADDRBOOK_GOOGLE_CLIENT_SECRET:-}
+      AddressBookSync__Google__RefreshToken: ${ADDRBOOK_GOOGLE_REFRESH_TOKEN:-}
   dispatcher:
     environment:
       # Google Contacts sync (anti-463): salva o contato frio na agenda Google do chip antes de disparar.
