@@ -44,14 +44,23 @@ cp "$TEMPLATE_SRC" "$UNIT_DST"
 systemctl daemon-reload
 
 echo "== ligando os watchdogs de emulador (ociosos até você provisionar o emulador de cada stack) =="
-# Ambiente A: se o serviço LEGADO já roda (servidor ATUAL), NÃO mexe — fica intocado. Senão (servidor
-# NOVO), liga o @1 (mesmo script, N=1 → mtrx-dandroid / WAHA_PROXY_1) pra o A também ter watchdog no deploy.
+# Ambiente A: MIGRAR do serviço legado (unit sem @, script CONGELADO em /home/ubuntu/) pro @1
+# (script do repo, que o deploy atualiza).
+#
+# 🔴 POR QUE ISTO MUDOU (2026-07-28). A versão anterior fazia "se o legado já roda, não mexe —
+# intocado". A intenção era não derrubar o servidor atual no meio da migração. O efeito foi o oposto:
+# o legado NUNCA saía, então o A rodou por semanas uma cópia de 25/jul, SEM ensure_wa_permissions —
+# e todo chip novo travava na tela de backup do Google Drive (falta GET_ACCOUNTS). "Não mexer" virou
+# "congelar pra sempre". Preservar só faz sentido enquanto o legado está ATUALIZADO; desatualizado,
+# preservar é o bug.
 if systemctl is-active --quiet mtrx-emulator-watchdog.service 2>/dev/null; then
-  echo "   ambiente A: serviço legado ativo — mantido intocado."
-else
-  systemctl enable --now mtrx-emulator-watchdog@1 >/dev/null 2>&1 || true
-  echo "   mtrx-emulator-watchdog@1  (ambiente A) -> $(systemctl is-active mtrx-emulator-watchdog@1 2>/dev/null || echo '?')"
+  echo "   ambiente A: serviço legado ativo — migrando pro @1 (script do repo)…"
+  # Desliga o legado ANTES de subir o @1: os dois mexem no MESMO container (mtrx-dandroid), e dois
+  # watchdogs disputando o aparelho é pior que um. Ordem importa.
+  systemctl disable --now mtrx-emulator-watchdog.service >/dev/null 2>&1 || true
 fi
+systemctl enable --now mtrx-emulator-watchdog@1 >/dev/null 2>&1 || true
+echo "   mtrx-emulator-watchdog@1  (ambiente A) -> $(systemctl is-active mtrx-emulator-watchdog@1 2>/dev/null || echo '?')"
 for n in 2 3 4 5 6 7 8 9 10; do
   systemctl enable --now "mtrx-emulator-watchdog@${n}" >/dev/null 2>&1 || true
   printf "   mtrx-emulator-watchdog@%-2s -> %s\n" "$n" "$(systemctl is-active "mtrx-emulator-watchdog@${n}" 2>/dev/null || echo '?')"

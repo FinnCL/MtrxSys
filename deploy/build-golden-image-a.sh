@@ -156,9 +156,16 @@ docker exec "$TMP" adb shell "pm list packages | grep -q com.whatsapp" 2>/dev/nu
   || die "WhatsApp não aparece instalado após o install."
 
 # Pré-concede as permissões que o fluxo de chip novo precisa. Registrar RESETA isso (por isso o
-# passo também está no checklist pós-registro), mas já deixar no molde evita esquecer no caso comum.
-say "    pré-concedendo câmera/contatos..."
-for perm in CAMERA READ_CONTACTS WRITE_CONTACTS; do
+# passo também está no checklist pós-registro e no ensure_wa_permissions do watchdog), mas já deixar
+# no molde evita esquecer no caso comum.
+#
+# 🔴 GET_ACCOUNTS É OBRIGATÓRIA e faltava aqui — custou a tela de loading infinita a cada chip novo:
+# com uma conta Google logada no aparelho e SEM esta permissão, o WhatsApp fica procurando backup no
+# Google Drive PARA SEMPRE (RestoreFromBackupActivity), sem erro, sem botão de pular. Só se manifesta
+# quando EXISTE conta Google — que é justamente o setup recomendado. Medido em 2026-07-26 e de novo
+# em 28/07 num aparelho recém-limpo.
+say "    pré-concedendo câmera/contatos/GET_ACCOUNTS..."
+for perm in CAMERA READ_CONTACTS WRITE_CONTACTS GET_ACCOUNTS; do
   docker exec "$TMP" adb shell "pm grant com.whatsapp android.permission.$perm" >/dev/null 2>&1
 done
 
