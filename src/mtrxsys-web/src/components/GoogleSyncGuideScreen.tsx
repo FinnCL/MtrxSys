@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 
 // Aba "Guia Google": passo a passo pra configurar o sync de contatos (anti-463), do Console ao
@@ -23,68 +23,77 @@ interface GuideStep {
 // Os ids são chave do localStorage: não renomeie (zera o progresso de quem já preencheu).
 const STEPS: GuideStep[] = [
   {
-    title: "No Console: registrar o app (uma vez, vale pros 10)",
-    sub: "console.cloud.google.com · use a conta que já estiver logada",
+    title: "1 · Registrar o app no Google",
+    sub: "uma vez só · vale pros 10 stacks · console.cloud.google.com",
     items: [
-      { id: "a1", node: <>Menu <code>APIs e serviços → Biblioteca</code>, buscar <b>People API</b> → <b>Ativar</b>.</> },
-      { id: "a2", node: <><code>APIs e serviços → Tela de permissão OAuth</code> → <b>Começar</b> → User type <b>Externo</b>.</> },
-      { id: "a3", node: <>Preencher nome do app + e-mail de suporte + e-mail do dev → <b>Criar</b>.</> },
-      { id: "a4", node: <>Em <b>Acesso a dados</b> → Adicionar escopos → colar <code>.../auth/contacts</code> (o de escrita, sem <code>.readonly</code>) → <b>Salvar</b>.</> },
-      { id: "a5", node: <>Em <b>Público-alvo</b> → Usuários de teste → <b>Add users</b> → digitar os <b>e-mails dos chips</b> (só digitar, sem login) → Salvar.</> },
-      { id: "a6", node: <>Em <b>Clientes</b> → <b>+ Criar cliente</b> → tipo <b>Aplicativo da Web</b>.</> },
-      { id: "a7", node: <>Em <b>URIs de redirecionamento autorizados</b>, adicionar <code>https://developers.google.com/oauthplayground</code> → Criar.</> },
-      { id: "a8", node: <><b>Copiar e guardar</b> o <b>Client ID</b> e o <b>Client secret</b> (valem pros 10 stacks).</> },
-    ],
-    note: {
-      kind: "info",
-      node: <>A <b>People API é gratuita</b>. Ignore o banner dos US$ 300, não precisa cartão. E use o cliente <b>"Aplicativo da Web"</b> (não "App para computador"): o Playground só funciona com a URL de redirecionamento acima.</>,
-    },
-  },
-  {
-    title: "Refresh token do chip (OAuth Playground)",
-    sub: "uma vez por chip · é aqui (e só aqui) que a conta do chip entra",
-    items: [
-      { id: "b1", node: <>Abrir uma <b>janela anônima</b> (Ctrl+Shift+N) → <code>developers.google.com/oauthplayground</code>.</> },
-      { id: "b2", node: <><b>Engrenagem</b> (canto sup. direito) → marcar <b>"Use your own OAuth credentials"</b> → colar o <b>Client ID + Secret do cliente Web</b>.</> },
-      { id: "b3", node: <>No campo <b>"Input your own scopes"</b>, colar <code>https://www.googleapis.com/auth/contacts</code> → <b>Authorize APIs</b>.</> },
-      { id: "b4", node: <>Login <b>com a conta Google do chip</b> (a anônima não tem sua conta do Chrome). Senha + 2FA no celular se pedir.</> },
-      { id: "b5", node: <>Tela "app não verificado"/consentimento → <b>Continue</b> → <b>Allow</b> (é normal, você é o dev + a conta é usuária de teste).</> },
-      { id: "b6", node: <>Step 2 → <b>Exchange authorization code for tokens</b> → copiar o <b>Refresh token</b> (começa com <code>1//…</code>).</> },
+      { id: "a1", node: <>Ativar a <b>People API</b> em <code>APIs e serviços → Biblioteca</code>.</> },
+      { id: "a2", node: <>Criar a tela de permissão OAuth com User type <b>Externo</b>.</> },
+      { id: "a3", node: <>Preencher nome do app, e-mail de suporte e e-mail do dev.</> },
+      { id: "a4", node: <>Adicionar o escopo <code>.../auth/contacts</code> — o de escrita, <b>sem</b> <code>.readonly</code>.</> },
+      { id: "a9", node: <>Em <b>Público</b>, clicar em <b>Publicar aplicativo</b>.</> },
+      { id: "a6", node: <>Criar um cliente do tipo <b>Aplicativo da Web</b>.</> },
+      { id: "a7", node: <>Nos redirecionamentos, adicionar <code>https://developers.google.com/oauthplayground</code>.</> },
+      { id: "a8", node: <>Guardar o <b>Client ID</b> e o <b>Client secret</b>.</> },
     ],
     note: {
       kind: "warn",
-      node: <><b>Não pule a engrenagem (b2).</b> Se autorizar sem colar SUAS credenciais, o refresh token nasce amarrado ao cliente do Google e <b>não funciona</b> na config. O <code>client_id</code> na aba "Request/Response" tem que ser o SEU.</>,
+      node: <>Publicar (a9) é o que evita o token morrer a cada 7 dias. É grátis e <b>não</b> exige mandar o app pra verificação.</>,
     },
   },
   {
-    title: "Colar na config do stack",
-    sub: "Client ID/Secret iguais pros 10 · o RefreshToken muda por stack",
-    code: `# variáveis de ambiente do stack (cada stack usa o token do SEU chip)
-AddressBookSync__Provider=Google
+    title: "2 · Gerar o refresh token do chip",
+    sub: "uma vez por chip · developers.google.com/oauthplayground",
+    items: [
+      { id: "b1", node: <>Abrir o Playground numa <b>janela anônima</b>.</> },
+      { id: "b2", node: <>Engrenagem → marcar <b>Use your own OAuth credentials</b> → colar Client ID e Secret.</> },
+      { id: "b7", node: <>Ainda na engrenagem: <b>Access type = Offline</b> e <b>Force prompt = Consent screen</b>.</> },
+      { id: "b3", node: <>Em <b>Input your own scopes</b>, colar <code>https://www.googleapis.com/auth/contacts</code> → <b>Authorize APIs</b>.</> },
+      { id: "b4", node: <>Entrar com a <b>conta Google do chip</b>.</> },
+      { id: "b5", node: <>Tela "app não verificado" → <b>Avançado</b> → acessar mesmo assim.</> },
+      { id: "b6", node: <>Step 2 → <b>Exchange authorization code for tokens</b> → copiar o token que começa com <code>1//</code>.</> },
+    ],
+    note: {
+      kind: "warn",
+      node: <>Os dois passos que mais causam retrabalho: sem <b>b2</b> o token nasce amarrado ao cliente do Google e não funciona; sem <b>b7</b> o Google devolve a autorização <b>sem</b> refresh token.</>,
+    },
+  },
+  {
+    title: "3 · Colar na config do stack",
+    sub: "Client ID e Secret iguais pros 10 · o token muda por chip",
+    code: `AddressBookSync__Provider=Google
 AddressBookSync__GraceSeconds=180
 AddressBookSync__Google__ClientId=<compartilhado>
 AddressBookSync__Google__ClientSecret=<compartilhado>
 AddressBookSync__Google__RefreshToken=<token DESTE chip>`,
     items: [
-      { id: "c1", node: <>Colar as variáveis no ambiente do stack (com o RefreshToken do chip dele) → reiniciar o <b>dispatcher</b> do stack.</> },
+      { id: "c1", node: <>Colar as variáveis e <b>reiniciar o dispatcher</b> — o token é lido só na inicialização.</> },
     ],
     note: {
       kind: "info",
-      node: <>Não precisa de <code>Enabled</code>: assim que houver <code>Provider=Google</code> + o RefreshToken, a defesa <b>liga sozinha</b>. Desligar de propósito = <code>Provider=None</code> ou remover o token — nunca mais fica apagada por esquecimento.</>,
+      node: <>Não existe <code>Enabled</code>. Com <code>Provider=Google</code> e um token, a defesa liga sozinha. Pra desligar: <code>Provider=None</code>.</>,
     },
   },
   {
-    title: "Validar no stack A antes de escalar",
-    sub: "provar que mata o 463 com 1 chip antes de fazer os 10",
+    title: "4 · Validar antes de escalar",
+    sub: "provar com 1 chip antes de repetir nos 10",
     items: [
-      { id: "d1", node: <>Ligar a config só no <b>A</b> com o token do chip do A.</> },
-      { id: "d2", node: <>Disparar pra <b>1 contato frio</b> (não-respondedor) e aguardar o grace + envio.</> },
-      { id: "d3", node: <>Conferir: a mensagem <b>entregou (ack ≥ 2)</b> e a sessão <b>NÃO caiu</b> (sem 463 no log do WAHA)?</> },
-      { id: "d4", node: <>Deu certo → repetir a Parte 2 pros outros 9 chips. Não deu → o caminho é emulador-primary ou sair do grátis.</> },
+      { id: "d1", node: <>Ligar só no stack A, com o token do chip dele.</> },
+      { id: "d2", node: <>Disparar pra <b>1 contato frio</b> e aguardar o grace e o envio.</> },
+      { id: "d3", node: <>Conferir se entregou e se a sessão não caiu.</> },
+      { id: "d4", node: <>Deu certo → repetir a parte 2 nos outros chips.</> },
+    ],
+  },
+  {
+    title: "5 · Dia a dia: adicionar contatos",
+    sub: "o vínculo é com a CONTA GOOGLE, não com o aparelho",
+    items: [
+      { id: "e1", node: <><b>Em volume:</b> aba <b>Grupos → importar membros</b>. O disparo salva cada um na conta Google sozinho.</> },
+      { id: "e2", node: <><b>Avulsos:</b> <code>contacts.google.com</code>, logado na conta do chip. Não precisa abrir o emulador.</> },
+      { id: "e3", node: <>O Android baixa em <b>minutos</b>. O WhatsApp só reconhece no ciclo dele, <b>de hora em hora</b>.</> },
     ],
     note: {
-      kind: "warn",
-      node: <>Token em modo <b>"Testing" expira em 7 dias</b>, ótimo pra validar. Pra produção contínua, publicar o consent em "In production" (escopo sensível em Gmail pessoal pode exigir verificação do Google).</>,
+      kind: "info",
+      node: <>A cadeia é <code>conta Google → agenda do Android → WhatsApp</code>. O WhatsApp não tem lista própria, e o e-mail cadastrado dentro dele é só recuperação de conta. Por isso limpar o emulador não apaga contato: relogar a conta traz tudo de volta.</>,
     },
   },
 ];
