@@ -81,9 +81,34 @@ public sealed partial class BrazilPhoneValidator
             return false;
         }
         var cleaned = CleanupRegex().Replace(raw, string.Empty);
+
+        // 🔴 SEM "+", NÃO DÁ PRA PERGUNTAR À LIBPHONENUMBER. Ela parseia com a região padrão (BR), então
+        // um número sem código de país volta com CountryCode 55 POR CONSTRUÇÃO, nunca por evidência —
+        // e o IsPossibleNumber só olha comprimento, que 11 dígitos satisfaz.
+        //
+        // MEDIDO em produção 2026-07-27: `37368544314` (Moldávia, prefixo 373) passou nos dois checks,
+        // virou contato ativo, ganhou entrada na agenda Google e foi enfileirado. Só não recebeu porque
+        // alguém olhou a lista à mão. O MESMO número com "+" era corretamente recusado.
+        //
+        // O emulador entrega os participantes de grupo SEM "+" (é o `user` do jid), então este é o
+        // caminho de entrada real, não um caso de laboratório.
+        //
+        // Por isso a forma nacional é conferida por REGRA EXPLÍCITA do plano de numeração brasileiro,
+        // em vez de delegada. Não dá pra usar IsValidNumber no lugar: ela recusa o celular BR legado
+        // (8 dígitos após o DDD), que aqui é o caso NORMAL e cuja rejeição já custou um grupo inteiro
+        // importando zero contatos.
+        var digits = new string([.. cleaned.Where(char.IsDigit)]);
+        var national = cleaned.StartsWith('+') || digits.Length is 12 or 13
+            ? (digits.StartsWith("55", StringComparison.Ordinal) ? digits[2..] : null)
+            : digits;
+        if (national is null || !IsBrazilianNationalNumber(national))
+        {
+            return false;
+        }
+
         try
         {
-            var parsed = Util.Parse(cleaned, DefaultRegion);
+            var parsed = Util.Parse("+55" + national, DefaultRegion);
             return parsed.CountryCode == BrazilCountryCode && Util.IsPossibleNumber(parsed);
         }
         catch (LibParseException)
@@ -92,6 +117,34 @@ public sealed partial class BrazilPhoneValidator
             return false;
         }
     }
+
+    /// <summary>Forma NACIONAL brasileira: DDD real + assinante com o comprimento certo.</summary>
+    /// <remarks>
+    /// Dez dígitos = legado (DDD + 8), que é o caso comum na base fria e que a validação estrita
+    /// rejeitaria. Onze = moderno (DDD + 9), e aí o assinante PRECISA começar com 9: é o que separa um
+    /// celular BR de um número estrangeiro que só por acaso tem onze dígitos.
+    /// </remarks>
+    private static bool IsBrazilianNationalNumber(string national) =>
+        national.Length is 10 or 11
+        && national.All(char.IsAsciiDigit)
+        && ValidAreaCodes.Contains(national[..2])
+        && (national.Length == 10 || national[2] == '9');
+
+    // DDDs que existem no Brasil. Lista fechada de propósito: "dois dígitos quaisquer" aceitaria 37 pra
+    // um número moldavo (foi o caso real) e qualquer outro par que a numeração não usa.
+    private static readonly System.Collections.Frozen.FrozenSet<string> ValidAreaCodes =
+        System.Collections.Frozen.FrozenSet.ToFrozenSet(
+        [
+            "11", "12", "13", "14", "15", "16", "17", "18", "19",
+            "21", "22", "24", "27", "28",
+            "31", "32", "33", "34", "35", "37", "38",
+            "41", "42", "43", "44", "45", "46", "47", "48", "49",
+            "51", "53", "54", "55",
+            "61", "62", "63", "64", "65", "66", "67", "68", "69",
+            "71", "73", "74", "75", "77", "79",
+            "81", "82", "83", "84", "85", "86", "87", "88", "89",
+            "91", "92", "93", "94", "95", "96", "97", "98", "99",
+        ], StringComparer.Ordinal);
 
     private const int BrazilCountryCode = 55;
 

@@ -9,6 +9,7 @@ using MtrxSys.Core.Domain.Conversations;
 using MtrxSys.Core.Domain.SystemState;
 using MtrxSys.Core.Messaging;
 using MtrxSys.Core.Safety;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Dispatcher;
 
@@ -37,6 +38,7 @@ public sealed class DispatchEngine(
     DispatchSettleTracker settle,
     IContactAddressBookSync addressBook,
     IEmulatorEgressHealthCheck egressHealth,
+    BrazilPhoneValidator phones,
     IOptions<DispatchOptions> dispatchOpts,
     ILogger<DispatchEngine> log)
 {
@@ -289,6 +291,29 @@ public sealed class DispatchEngine(
                 job.MarkSkipped(DispatchSkipReasons.OtherChip);
                 await uow.SaveChangesAsync(ct);
                 skipped++;
+                continue;
+            }
+            // FORA DO PADRÃO BR: não sai. Disparar pra número que não existe é o vetor do 463, e pra
+            // número de outro país é envio inútil pra quem nunca foi público desta operação.
+            //
+            // 🔴 MEDIDO em 2026-07-27: `37368544314` (Moldávia) foi importado de um grupo, virou contato
+            // ativo, ganhou entrada na agenda Google e chegou a ser ENFILEIRADO. Só não recebeu porque
+            // alguém olhou a lista à mão. Entrou porque a validação da IMPORTAÇÃO tinha um furo com
+            // número sem "+" (ver BrazilPhoneValidator.IsPlausibleBrazilian), já corrigido.
+            //
+            // Esta checagem existe mesmo com a origem consertada, pelo mesmo motivo do gate por chip
+            // logo acima: contato entra por vários caminhos (importação antiga, adição manual, base
+            // herdada), e o motor é o último ponto antes da mensagem sair. Origem impede o problema;
+            // aqui é a rede que pega o que já está dentro.
+            if (!phones.IsPlausibleBrazilian(contact.Phone.E164))
+            {
+                job.MarkSkipped("número fora do padrão brasileiro");
+                await uow.SaveChangesAsync(ct);
+                skipped++;
+                log.LogWarning(
+                    "Job {JobId} pulado: {Phone} não é um número brasileiro plausível (DDD, comprimento "
+                    + "ou 9º dígito). Contato veio de importação anterior à correção do validador?",
+                    job.Id, contact.Phone.E164);
                 continue;
             }
             // FASE DE AQUECIMENTO (só responderam): não-engajado NÃO sai — mesmo já estando na fila
