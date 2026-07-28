@@ -7,6 +7,7 @@ using Google.Apis.Services;
 using Microsoft.Extensions.Logging;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Infrastructure.AddressBook;
 
@@ -193,8 +194,76 @@ public sealed class GooglePeopleAddressBookSync : IContactAddressBookSync, IDisp
     // Últimos N dígitos do número (ignora DDI/formatação). "" se tiver menos que N dígitos.
     private static string Suffix(string raw)
     {
-        var digits = new string([.. raw.Where(char.IsDigit)]);
+        var digits = PhoneDigits.Of(raw);
         return digits.Length >= MatchNationalDigits ? digits[^MatchNationalDigits..] : string.Empty;
+    }
+
+    /// <summary>Varre a agenda da conta e devolve os contatos com o número INTEIRO.</summary>
+    /// <remarks>
+    /// Percorre o mesmo `connections.list` do carregamento do cache, mas guardando o número completo em
+    /// vez do sufixo: o cache existe pra responder "já está lá?" (sufixo basta), aqui é pra MOSTRAR e
+    /// eventualmente IMPORTAR, e aí o número inteiro é o dado.
+    ///
+    /// Não alimenta o `_known` de propósito. Aquele cache é do caminho de envio, com invariantes
+    /// próprias (carrega uma vez, é atualizado a cada Create); misturar uma varredura sob demanda nele
+    /// acoplaria duas coisas que só por acaso leem a mesma API.
+    ///
+    /// `CanonicalForm` primeiro porque o Google entrega o E164 já normalizado quando consegue; o `Value`
+    /// é o texto como o usuário digitou e pode vir com parênteses, traço ou sem país.
+    /// </remarks>
+    public async Task<IReadOnlyList<AddressBookEntry>?> ListAsync(CancellationToken ct)
+    {
+        if (_authDead)
+        {
+            // null, não vazio: token morto é pane da fonte, não "a conta não tem contatos".
+            return null;
+        }
+        var found = new List<AddressBookEntry>();
+        var vistos = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            string? pageToken = null;
+            do
+            {
+                var req = _service.People.Connections.List("people/me");
+                req.PersonFields = "phoneNumbers,names";
+                req.PageSize = 1000;
+                req.PageToken = pageToken;
+                var resp = await req.ExecuteAsync(ct);
+                foreach (var p in resp.Connections ?? [])
+                {
+                    var nome = p.Names?.FirstOrDefault()?.DisplayName;
+                    foreach (var ph in p.PhoneNumbers ?? [])
+                    {
+                        var numero = ph.CanonicalForm ?? ph.Value;
+                        // Deduplica pelos DÍGITOS: a mesma pessoa pode ter o número repetido em campos
+                        // diferentes, e um "novo" fantasma na tela custaria a confiança na lista inteira.
+                        var chave = PhoneDigits.Of(numero);
+                        if (chave.Length > 0 && vistos.Add(chave))
+                        {
+                            found.Add(new AddressBookEntry(numero!, nome));
+                        }
+                    }
+                }
+                pageToken = resp.NextPageToken;
+            }
+            while (!string.IsNullOrEmpty(pageToken) && !ct.IsCancellationRequested);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031
+        catch (Exception ex)
+        {
+            // null, nunca parcial e nunca vazio. Parcial viraria "esses são os contatos da conta" e o
+            // operador concluiria que os que faltam não existem lá; vazio viraria "está tudo igual",
+            // que é a mesma frase do caso bem-sucedido.
+            _log.LogWarning(ex, "Google People: não consegui listar a agenda da conta.");
+            return null;
+        }
+#pragma warning restore CA1031
+        return found;
     }
 
     public void Dispose()

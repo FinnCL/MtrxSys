@@ -227,6 +227,33 @@ export interface ManualImportResult {
   lines: ManualLineResult[];
 }
 
+export interface GoogleContact {
+  phone: string;
+  name: string | null;
+}
+
+export interface GoogleInvalid {
+  phone: string;
+  motivo: string;
+}
+
+// Diferença entre a agenda Google do chip e o banco.
+//
+// TRÊS estados, não um booleano: "não consegui ler a conta" e "não há nada novo" produziriam telas
+// idênticas se fossem o mesmo valor, e a primeira é uma pane que o operador precisa ver.
+//   ok        · leitura feita, os números abaixo valem
+//   desligado · não há provider Google configurado neste stack
+//   ilegivel  · a conta não respondeu (token morto, rede, cota)
+export interface GooglePreview {
+  estado: "ok" | "desligado" | "ilegivel";
+  naConta: number;
+  jaNoSistema: number;
+  // Conhecidos mas descartados ou com opt-out. Contados pra a soma fechar, NUNCA oferecidos.
+  bloqueados: number;
+  novos: GoogleContact[];
+  invalidos: GoogleInvalid[];
+}
+
 export type MessageSlot = "Greeting" | "Intro" | "Hook" | "OptOut";
 
 export interface MessageTemplate {

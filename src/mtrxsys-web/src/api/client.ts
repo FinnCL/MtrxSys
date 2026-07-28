@@ -12,6 +12,7 @@ import type {
   DispatchFilter,
   DispatchReportItem,
   DispatchStats,
+  GooglePreview,
   Group,
   GroupLinkPage,
   GroupLinkStatus,
@@ -384,6 +385,13 @@ export const api = {
     request<ManualImportResult>("/api/contacts/manual", {
       method: "POST",
       body: JSON.stringify({ numbers, groupTag: groupTag ?? null }),
+    }),
+  // Diferença entre a agenda Google do chip e o banco. Só leitura — não grava nada.
+  googlePreview: () => request<GooglePreview>("/api/contacts/google/preview"),
+  googleImport: (phones: string[]) =>
+    request<ManualImportResult>("/api/contacts/google/import", {
+      method: "POST",
+      body: JSON.stringify({ phones }),
     }),
   listTemplates: () => request<MessageTemplate[]>("/api/templates"),
   createTemplate: (

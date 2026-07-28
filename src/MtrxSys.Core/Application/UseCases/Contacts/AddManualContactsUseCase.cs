@@ -20,8 +20,16 @@ public sealed class AddManualContactsUseCase(
     /// <summary>Grupo virtual onde caem os números avulsos (sem grupo do WhatsApp).</summary>
     public const string DefaultGroupTag = "Avulsos";
 
+    /// <param name="importedByPhone">
+    /// Chip dono dos contatos criados. NULL mantém o comportamento histórico do cadastro manual.
+    /// <para>⚠️ Contato com dono NULO é PULADO pelo motor: o gate anti-463 (OnlyCurrentChipContacts)
+    /// trata "sem dono" como legado de chip desconhecido. Quem passa null aqui está criando contato
+    /// que NÃO recebe mensagem — às vezes é o desejado (cadastrar sem disparar), mas nunca por
+    /// acidente. Ver DispatchEngine, gate por chip.</para>
+    /// </param>
     public async Task<ManualImportResult> ExecuteAsync(
-        IReadOnlyList<string> rawNumbers, string? groupTag, CancellationToken ct)
+        IReadOnlyList<string> rawNumbers, string? groupTag, CancellationToken ct,
+        string? importedByPhone = null)
     {
         var tag = string.IsNullOrWhiteSpace(groupTag) ? DefaultGroupTag : groupTag.Trim();
 
@@ -94,7 +102,8 @@ public sealed class AddManualContactsUseCase(
                 name: null,
                 groupTag: tag,
                 theme: null,
-                optInAt: clock.UtcNow);
+                optInAt: clock.UtcNow,
+                importedByPhone: importedByPhone);
             await contacts.AddAsync(contact, ct);
             known[phone.E164] = contact; // número repetido no mesmo lote reaproveita o contato
             added++;

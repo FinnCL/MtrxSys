@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { type Contact, type ContactGroupTag } from "../api/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { GoogleImportPanel } from "./GoogleImportPanel";
 import { StatusBadge } from "./StatusBadge";
 
 export function ContactsScreen() {
@@ -24,18 +25,23 @@ export function ContactsScreen() {
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
 
+  // Extraída do useEffect pra poder ser rechamada: depois de importar da agenda Google, a lista de
+  // listas muda (nasce/cresce a "Google") e a tela precisa refletir sem o operador dar F5.
+  async function loadGroups() {
+    setLoading(true);
+    try {
+      setGroups(await api.listContactGroupTags());
+      setError(null);
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    void (async () => {
-      setLoading(true);
-      try {
-        setGroups(await api.listContactGroupTags());
-        setError(null);
-      } catch (ex) {
-        setError(ex instanceof Error ? ex.message : String(ex));
-      } finally {
-        setLoading(false);
-      }
-    })();
+    void loadGroups();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -199,6 +205,11 @@ export function ContactsScreen() {
         </p>
 
       </header>
+
+      {/* Cadastrar fica na aba Contatos, não no Disparo: a tela de disparo já é a mais perigosa do
+          sistema, e um botão que GRAVA contato ali convidaria a trazer gente nova segundos antes de
+          mandar mensagem, sem tempo de revisar. */}
+      <GoogleImportPanel onImported={() => void loadGroups()} />
 
       {error && <p className="error">{error}</p>}
       {actionMsg && <p className="muted small">{actionMsg}</p>}

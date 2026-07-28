@@ -12,6 +12,20 @@ public interface IContactRepository
     Task AddAsync(Contact contact, CancellationToken ct);
     Task UpdateAsync(Contact contact, CancellationToken ct);
     Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct);
+
+    /// <summary>Telefone e situação de TODOS os contatos — INCLUSIVE descartados e opt-out.</summary>
+    /// <remarks>
+    /// Existe porque <see cref="ListByFilterAsync"/> esconde os dois: o ApplyFilter começa com
+    /// <c>DeletedAt == null</c> e o <c>ExcludeOptedOut</c> é true por padrão. Isso é o certo pra montar
+    /// fila de disparo, e é EXATAMENTE o errado pra responder "esse número já é conhecido?".
+    ///
+    /// <para>🔴 Quem usar o filtro pra essa pergunta oferece de volta quem pediu pra SAIR, porque um
+    /// opt-out simplesmente não aparece na resposta. Nesta base, em 2026-07-28, isso valeria pra 335
+    /// contatos descartados além dos opt-out.</para>
+    ///
+    /// Projeção, não entidade: é leitura pura pra comparação, não passa pelo change tracker.
+    /// </remarks>
+    Task<IReadOnlyList<ContactPhoneStatus>> ListAllPhoneStatusAsync(CancellationToken ct);
     Task<int> CountByFilterAsync(ContactFilter filter, CancellationToken ct);
     /// <summary>Telefones (E.164) de TODOS os contatos em opt-out (incluindo descartados — opt-out
     /// continua valendo). Projeção leve para o backfill periódico do registro compartilhado, sem
@@ -42,6 +56,10 @@ public interface IContactRepository
     /// (esses ficam com LastSentAt e o dedup os mantém fora). Retorna quantos foram liberados.</summary>
     Task<int> ClearLastSentForPhonesAsync(IReadOnlyCollection<string> phonesE164, CancellationToken ct);
 }
+
+/// <summary>Situação de um telefone no sistema. <paramref name="Ativo"/> false = descartado ou opt-out:
+/// o número É conhecido, mas não pode ser reoferecido pra importação.</summary>
+public sealed record ContactPhoneStatus(string PhoneE164, bool Ativo);
 
 public sealed record ContactFilter(
     ContactStage? Stage = null,

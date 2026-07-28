@@ -1,6 +1,7 @@
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.UseCases.Contacts;
 using MtrxSys.Core.Domain.Contacts;
+using MtrxSys.Core.Validation;
 
 namespace MtrxSys.Api.Endpoints;
 
@@ -294,6 +295,126 @@ public static class ContactsEndpoints
             return Results.Ok(ToResponse(result));
         });
 
+        // ── Importar da agenda Google ────────────────────────────────────────────────────────────
+        // Compara a conta Google com o banco e mostra a diferença. NÃO grava, e NÃO é automático: o
+        // disparo escreve nessa agenda antes de cada envio frio, então uma varredura periódica traria
+        // gente pra dentro sem ninguém decidir — e o sistema estaria lendo o próprio rastro.
+        //
+        // O laço não acontece por dois motivos independentes: a prévia ignora quem já está no banco
+        // (e tudo que o disparo criou está lá), e o índice único por DÍGITOS recusa duplicata mesmo
+        // se a comparação de formato falhar — que foi exatamente o erro que gerou 50 contatos
+        // repetidos em 2026-07-27.
+        group.MapGet("/google/preview", async (
+            IContactAddressBookSync addressBook,
+            IContactRepository contacts,
+            BrazilPhoneValidator phones,
+            CancellationToken ct) =>
+        {
+            if (!addressBook.IsEnabled)
+            {
+                return Results.Ok(GooglePreviewResponse.Desligado());
+            }
+            var naConta = await addressBook.ListAsync(ct);
+            if (naConta is null)
+            {
+                // Falha de leitura NUNCA vira "está tudo igual". Sem isto, um token morto produziria a
+                // mesma tela de quando a conta está de fato sincronizada.
+                return Results.Ok(GooglePreviewResponse.Ilegivel());
+            }
+
+            // Compara contra TODOS os contatos, inclusive descartados e opt-out. Usar o filtro padrão
+            // aqui ofereceria de volta quem pediu pra SAIR, porque opt-out não aparece na resposta dele.
+            // Dedup pelos DÍGITOS, não pelo texto: "+5588…" e "5588…" são a mesma pessoa.
+            var noBanco = await contacts.ListAllPhoneStatusAsync(ct);
+            var ativos = noBanco.Where(c => c.Ativo).Select(c => Digits(c.PhoneE164))
+                .ToHashSet(StringComparer.Ordinal);
+            var suprimidos = noBanco.Where(c => !c.Ativo).Select(c => Digits(c.PhoneE164))
+                .ToHashSet(StringComparer.Ordinal);
+
+            var novos = new List<GoogleContactDto>();
+            var invalidos = new List<GoogleInvalidDto>();
+            var jaTem = 0;
+            var bloqueados = 0;
+            foreach (var e in naConta)
+            {
+                var d = Digits(e.PhoneE164);
+                if (ativos.Contains(d))
+                {
+                    jaTem++;
+                }
+                else if (suprimidos.Contains(d))
+                {
+                    // Conhecido, mas descartado ou com opt-out. Contado à parte pra a soma fechar
+                    // contra o total da conta — e NUNCA oferecido: reimportar quem pediu pra sair é o
+                    // erro que não tem desfazer.
+                    bloqueados++;
+                }
+                else if (!phones.IsPlausibleBrazilian(e.PhoneE164))
+                {
+                    // Mostrado, não escondido: sumir com o número faria a soma não fechar e o operador
+                    // ficaria procurando o que faltou.
+                    invalidos.Add(new GoogleInvalidDto(e.PhoneE164, "fora do padrão brasileiro"));
+                }
+                else
+                {
+                    novos.Add(new GoogleContactDto(e.PhoneE164, e.Name));
+                }
+            }
+            return Results.Ok(new GooglePreviewResponse(
+                "ok", naConta.Count, jaTem, bloqueados, novos, invalidos));
+        });
+
+        // Grava SÓ o que o operador marcou. Reusa o cadastro manual (normalização, dedup e relatório
+        // por linha já resolvidos ali) em vez de duplicar essa lógica.
+        group.MapPost("/google/import", async (
+            GoogleImportRequest req,
+            AddManualContactsUseCase useCase,
+            IContactRepository contacts,
+            ISystemStateRepository stateRepo,
+            CancellationToken ct) =>
+        {
+            if (req.Phones is null || req.Phones.Count == 0)
+            {
+                return Results.Problem("Selecione ao menos um contato.", statusCode: 400);
+            }
+            if (req.Phones.Count > 2000)
+            {
+                return Results.Problem("Máximo de 2000 por vez.", statusCode: 400);
+            }
+            // Dono = chip conectado. Sem isto o contato nasce e NUNCA recebe: o gate anti-463 pula quem
+            // não tem dono. RECUSA quando não há chip, em vez de importar mudo: o operador clicaria,
+            // veria "10 importados" e descobriria semanas depois que nenhum saiu.
+            var chip = (await stateRepo.GetAsync(ct)).WarmupPhone;
+            if (string.IsNullOrWhiteSpace(chip))
+            {
+                return Results.Problem(
+                    "Nenhum chip conectado. Os contatos nasceriam sem dono e o disparo os pularia em "
+                    + "silêncio. Registre o chip antes de importar.",
+                    statusCode: 409);
+            }
+            // RECONFERE os suprimidos AQUI, não só na prévia. Entre abrir a prévia e clicar em
+            // importar, alguém pode ter descartado um contato em outra aba — e aí a lista da tela está
+            // velha. Sem esta checagem, o clique ressuscita quem acabou de ser descartado.
+            //
+            // O banco não protege sozinho: o índice único cobre só linhas ATIVAS, e o dedup do use case
+            // casa por TEXTO exato, então um descartado gravado em outro formato não é encontrado.
+            var suprimidos = (await contacts.ListAllPhoneStatusAsync(ct))
+                .Where(c => !c.Ativo)
+                .Select(c => PhoneDigits.Of(c.PhoneE164))
+                .ToHashSet(StringComparer.Ordinal);
+            var permitidos = req.Phones.Where(p => !suprimidos.Contains(PhoneDigits.Of(p))).ToList();
+            var barrados = req.Phones.Count - permitidos.Count;
+            if (permitidos.Count == 0)
+            {
+                return Results.Problem(
+                    $"Os {barrados} contato(s) selecionados estão descartados ou com opt-out no sistema. "
+                    + "Quem pediu pra sair não volta por importação.",
+                    statusCode: 409);
+            }
+            var result = await useCase.ExecuteAsync(permitidos, "Google", ct, chip);
+            return Results.Ok(ToResponse(result) with { Barrados = barrados });
+        });
+
         group.MapPost("/{id:guid}/notes", async (
             Guid id,
             CreateNoteRequest req,
@@ -414,8 +535,43 @@ public static class ContactsEndpoints
 
     public sealed record AddManualContactsRequest(IReadOnlyList<string> Numbers, string? GroupTag);
 
+    public sealed record GoogleContactDto(string Phone, string? Name);
+
+    public sealed record GoogleInvalidDto(string Phone, string Motivo);
+
+    /// <param name="Estado">
+    /// "ok", "desligado" (sem provider) ou "ilegivel" (não deu pra ler a conta).
+    /// <para>Três estados, e não um booleano, porque "não consegui ler" e "não há nada novo" produzem
+    /// telas idênticas se forem o mesmo valor — e a primeira é uma pane que o operador precisa ver.</para>
+    /// </param>
+    /// <param name="Bloqueados">Conhecidos mas descartados/opt-out. Contados pra a soma fechar, nunca oferecidos.</param>
+    public sealed record GooglePreviewResponse(
+        string Estado,
+        int NaConta,
+        int JaNoSistema,
+        int Bloqueados,
+        IReadOnlyList<GoogleContactDto> Novos,
+        IReadOnlyList<GoogleInvalidDto> Invalidos)
+    {
+        public static GooglePreviewResponse Desligado() => new("desligado", 0, 0, 0, [], []);
+
+        public static GooglePreviewResponse Ilegivel() => new("ilegivel", 0, 0, 0, [], []);
+    }
+
+    public sealed record GoogleImportRequest(IReadOnlyList<string> Phones);
+
+    private static string Digits(string raw) => PhoneDigits.Of(raw);
+
+    /// <param name="Barrados">
+    /// Selecionados que NÃO foram importados por estarem descartados ou com opt-out. Sempre 0 no
+    /// cadastro manual; só a importação do Google preenche. Reportado em vez de silenciado: o operador
+    /// escolheu N e precisa saber por que entraram menos.
+    /// </param>
     public sealed record ManualImportResponse(
-        int Total, int Added, int Duplicated, int Corrected, int Invalid, IReadOnlyList<ManualLineResponse> Lines);
+        int Total, int Added, int Duplicated, int Corrected, int Invalid, IReadOnlyList<ManualLineResponse> Lines)
+    {
+        public int Barrados { get; init; }
+    }
 
     public sealed record ManualLineResponse(
         string Input, string Status, string? Phone, string? Correction, string? Reason);

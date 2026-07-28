@@ -42,6 +42,14 @@ internal sealed class ContactRepository(MtrxDbContext db) : IContactRepository
     public async Task<IReadOnlyList<Contact>> ListByFilterAsync(ContactFilter filter, CancellationToken ct) =>
         await ApplyFilter(db.Contacts.AsQueryable(), filter).OrderBy(c => c.Phone.E164).ToListAsync(ct);
 
+    // SEM ApplyFilter de propósito: ele esconde descartado e opt-out, que é o certo pra disparo e o
+    // errado pra "esse número já é conhecido?". AsNoTracking é seguro aqui porque é PROJEÇÃO — a
+    // ressalva de não usá-lo no ListByFilterAsync vale pra entidade que o chamador muta.
+    public async Task<IReadOnlyList<ContactPhoneStatus>> ListAllPhoneStatusAsync(CancellationToken ct) =>
+        await db.Contacts.AsNoTracking()
+            .Select(c => new ContactPhoneStatus(c.Phone.E164, c.DeletedAt == null && c.OptOutAt == null))
+            .ToListAsync(ct);
+
     // Só os telefones em opt-out (projeção — não materializa a entidade). Inclui descartados de
     // propósito: opt-out continua valendo (o número não pode ser disparado por nenhum chip).
     public async Task<IReadOnlyList<string>> ListOptedOutPhonesAsync(CancellationToken ct) =>
