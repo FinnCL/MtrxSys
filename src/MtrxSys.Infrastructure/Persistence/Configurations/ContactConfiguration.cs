@@ -19,9 +19,12 @@ internal sealed class ContactConfiguration : IEntityTypeConfiguration<Contact>
         b.Navigation(x => x.Phone).IsRequired();
 
         // Coluna GERADA pelo banco (regexp_replace de phone_e164). Propriedade-sombra: não existe no
-        // domínio (Contact não a expõe), o C# a consulta por EF.Property. Nunca é escrita — o banco
-        // mantém — daí ValueGeneratedOnAddOrUpdate + a exclusão da migração de INSERT/UPDATE.
-        b.Property<string>("PhoneDigits").HasColumnName("phone_digits").ValueGeneratedOnAddOrUpdate();
+        // domínio (Contact não a expõe), o C# a consulta por EF.Property. HasComputedColumnSql
+        // (stored) descreve a coluna POR INTEIRO no modelo: o EF a exclui de INSERT/UPDATE sozinho, o
+        // snapshot fica coerente e quem usar EnsureCreated também a cria certo. A expressão é idêntica
+        // à da migração e à do índice — regexp_replace/4 é IMMUTABLE, requisito de STORED generated.
+        b.Property<string>("PhoneDigits").HasColumnName("phone_digits")
+            .HasComputedColumnSql("regexp_replace(phone_e164, '[^0-9]', '', 'g')", stored: true);
         b.HasIndex("PhoneDigits").IsUnique().HasFilter("deleted_at IS NULL")
             .HasDatabaseName("IX_contacts_phone_digits");
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(200);

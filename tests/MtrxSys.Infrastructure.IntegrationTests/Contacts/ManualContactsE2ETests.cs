@@ -87,19 +87,22 @@ public sealed class ManualContactsE2ETests : IAsyncLifetime
         var uow = new UnitOfWork(_db);
         var now = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
-        // Número BR legado sem o 9º dígito: a lib normaliza pra "+557184609253". Grava com "+".
-        var comMais = Contact.Create(Guid.NewGuid(), _phones.Validate("7184609253").Value!,
+        // Grava um contato válido (11 dígitos com o 9º). O E164 fica "+5511955550009".
+        var contato = Contact.Create(Guid.NewGuid(), _phones.Validate("11955550009").Value!,
             name: null, groupTag: "G", theme: null, optInAt: now);
-        await repo.AddAsync(comMais, CancellationToken.None);
+        await repo.AddAsync(contato, CancellationToken.None);
         await uow.SaveChangesAsync(CancellationToken.None); // se o EF escrevesse phone_digits, estouraria
 
-        var digitos = new string([.. comMais.Phone.E164.Where(char.IsDigit)]);
+        contato.Phone.E164.Should().StartWith("+"); // confirma que o gravado TEM o "+"
+        var digitos = new string([.. contato.Phone.E164.Where(char.IsDigit)]); // "5511955550009", sem "+"
 
-        // Procura só pelos DÍGITOS (sem "+"): tem que achar o mesmo contato pela coluna gerada.
+        // Procura só pelos DÍGITOS (sem "+"): tem que achar o mesmo contato pela coluna gerada,
+        // provando que o casamento ignora o formato. Se a coluna gerada não estivesse populada (ex.:
+        // o EF a marcando como coluna comum), phone_digits viria NULL e isto não acharia nada.
         var achado = await repo.GetByPhoneDigitsAsync([digitos], CancellationToken.None);
 
         achado.Should().ContainKey(digitos);
-        achado[digitos].Id.Should().Be(comMais.Id);
+        achado[digitos].Id.Should().Be(contato.Id);
     }
 
     [Fact]

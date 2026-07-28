@@ -118,6 +118,12 @@ namespace MtrxSys.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("opt_out_at");
 
+                    b.Property<string>("PhoneDigits")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("text")
+                        .HasColumnName("phone_digits")
+                        .HasComputedColumnSql("regexp_replace(phone_e164, '[^0-9]', '', 'g')", true);
+
                     b.Property<DateTimeOffset?>("ReactivatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("reactivated_at");
@@ -146,6 +152,11 @@ namespace MtrxSys.Infrastructure.Persistence.Migrations
                     b.HasIndex("GroupTag");
 
                     b.HasIndex("OptOutAt");
+
+                    b.HasIndex("PhoneDigits")
+                        .IsUnique()
+                        .HasDatabaseName("IX_contacts_phone_digits")
+                        .HasFilter("deleted_at IS NULL");
 
                     b.HasIndex("Stage");
 
