@@ -106,7 +106,14 @@ public static class DependencyInjection
         //   • redroid: sem KVM (binder/ashmem do host), leve pros 10; tela via ws-scrcpy.
         services.AddOptions<PhoneOptions>().Bind(config.GetSection(PhoneOptions.SectionName));
         var phoneEngine = config[$"{PhoneOptions.SectionName}:Engine"];
-        if (string.Equals(phoneEngine, "redroid", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(phoneEngine, "physical", StringComparison.OrdinalIgnoreCase))
+        {
+            // Aparelho FÍSICO por `adb -s <serial>`: sem container, sem proxy, sem imagem-ouro. Existe
+            // porque o emulador não passa na atestação e sai por IP de datacenter — ver
+            // docs/engine-physical.md. Inerte enquanto ninguém setar Phone__Engine=physical.
+            services.AddSingleton<IPhoneOrchestrator, MtrxSys.Infrastructure.Phone.PhysicalPhoneOrchestrator>();
+        }
+        else if (string.Equals(phoneEngine, "redroid", StringComparison.OrdinalIgnoreCase))
         {
             services.AddSingleton<IPhoneOrchestrator, MtrxSys.Infrastructure.Phone.RedroidPhoneOrchestrator>();
         }

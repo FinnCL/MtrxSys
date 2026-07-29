@@ -13,6 +13,24 @@ public sealed class PhoneOptions
     /// embute via ws-scrcpy por adb). Seleciona a implementação de IPhoneOrchestrator no DI.</summary>
     public string Engine { get; set; } = "docker-android";
 
+    /// <summary>Serial do aparelho FÍSICO no `adb devices` (ex.: RQ8WB048RFW). Só usado quando
+    /// <see cref="Engine"/> = "physical".</summary>
+    /// <remarks>
+    /// Passar o serial explicitamente, e não confiar no "aparelho único", é o que evita o modo de falha
+    /// silencioso: com dois celulares plugados na mesma máquina o adb responde "more than one device"
+    /// — ou, pior, acerta o aparelho do chip errado. Ver docs/engine-physical.md.
+    /// </remarks>
+    public string AdbSerial { get; set; } = "";
+
+    /// <summary>Executável do adb. Default "adb" (resolve pelo PATH); aceita caminho absoluto.</summary>
+    /// <remarks>
+    /// 🔴 Existe porque "está no PATH" é premissa que falha nos dois ambientes que importam: no Windows
+    /// o platform-tools do Android SDK não entra no PATH por padrão, e em container o PATH não tem adb
+    /// nenhum. Quando falha, o <c>Process.Start</c> estoura, o runner devolve código -1 e o engine
+    /// reporta "unavailable" — indistinguível de cabo solto, que é o diagnóstico errado.
+    /// </remarks>
+    public string AdbPath { get; set; } = "adb";
+
     /// <summary>Nome do container do Android deste ambiente (ex.: mtrx-android / mtrx2-android).</summary>
     public string ContainerName { get; set; } = "mtrx-android";
 
