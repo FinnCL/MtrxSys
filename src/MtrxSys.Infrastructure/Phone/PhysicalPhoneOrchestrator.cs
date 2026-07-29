@@ -102,12 +102,16 @@ internal sealed class PhysicalPhoneOrchestrator : IPhoneOrchestrator, IDisposabl
         return await GetStatusAsync(ct);
     }
 
-    /// <summary>NÃO desliga o aparelho. Só apaga a tela.</summary>
-    /// <remarks>Desligar um celular por software é irreversível remotamente: sem ninguém no local pra
-    /// apertar o botão, o aparelho fica inalcançável até alguém ir lá. O botão "Desligar" da aba existe
-    /// pro emulador, onde religar é um comando.</remarks>
-    public async Task StopAsync(CancellationToken ct) =>
-        await _adb.ShellAsync("input keyevent KEYCODE_SLEEP", ct);
+    /// <summary>NO-OP. Não desliga o aparelho nem apaga a tela.</summary>
+    /// <remarks>
+    /// 🔴 Apagar a tela aqui era um LOCKOUT. Android 15 e o Bloqueador automático da Samsung cortam
+    /// dados por USB com o aparelho bloqueado (medido em 2026-07-29: a conexão caiu exatamente assim,
+    /// duas vezes). Sem adb não há como mandar KEYCODE_WAKEUP, então o comando que apaga a tela é o
+    /// mesmo que destrói o canal usado pra desfazê-lo — o aparelho só volta se alguém encostar nele.
+    /// <para>Num piloto em casa isso é chato; num aparelho remoto é uma viagem. Operação sem volta não
+    /// pode ficar atrás de um botão de aba. Quem quiser mesmo desligar, desliga no aparelho.</para>
+    /// </remarks>
+    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 
     public async Task<string> GetLogsAsync(int tail, CancellationToken ct)
     {
@@ -156,6 +160,9 @@ internal sealed class PhysicalPhoneOrchestrator : IPhoneOrchestrator, IDisposabl
 
     public Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
         _ui.SendAsync(phoneE164, text, ct);
+
+    public Task<string?> CheckTypingCapabilityAsync(string sampleText, CancellationToken ct) =>
+        _ui.CheckTypingCapabilityAsync(sampleText, ct);
 
     public Task<string> SaveContactAsync(string phoneE164, string? name, CancellationToken ct) =>
         _contacts.SaveContactAsync(phoneE164, name, ct);

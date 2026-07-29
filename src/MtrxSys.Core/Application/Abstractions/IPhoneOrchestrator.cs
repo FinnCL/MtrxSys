@@ -171,6 +171,20 @@ public interface IPhoneOrchestrator
     /// Default: não suportado.</summary>
     Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
         Task.FromResult(WhatsAppSendResult.Fail("envio pela UI não suportado neste engine."));
+
+    /// <summary>O aparelho consegue digitar ESTE texto? null = sim (ou o engine não opina); string =
+    /// motivo pra mostrar ao operador ANTES de começar o lote.</summary>
+    /// <remarks>
+    /// 🔴 Existe por um modo de falha medido em 2026-07-29: com <c>HumanTyping</c> ligado e sem o IME
+    /// Unicode instalado, o `input text` do Android NÃO digita acento nem emoji (devolve
+    /// NullPointerException). "oi" passa; o template real, que começa com 🔥 e tem acento em toda
+    /// linha, falha em TODOS os envios. O erro só aparecia na primeira mensagem do lote, depois de
+    /// abrir conversa e tocar na tela, e se repetia contato a contato.
+    /// <para>Checar antes transforma 200 falhas idênticas num aviso na largada. Default null: engines
+    /// que não digitam (ou não sabem responder) não bloqueiam ninguém.</para>
+    /// </remarks>
+    Task<string?> CheckTypingCapabilityAsync(string sampleText, CancellationToken ct) =>
+        Task.FromResult<string?>(null);
 }
 
 /// <summary>Grupo lido do banco do WhatsApp do emulador.</summary>

@@ -193,6 +193,23 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         }
     }
 
+    /// <summary>Consegue digitar este texto? null = sim; string = motivo, pra avisar ANTES do lote.</summary>
+    public async Task<string?> CheckTypingCapabilityAsync(string sampleText, CancellationToken ct)
+    {
+        if (!_opts.HumanTyping)
+        {
+            return null; // deep link entrega o texto pronto no campo: não há digitação pra falhar
+        }
+        if (await ResolveTypingChannelAsync(sampleText ?? string.Empty, ct) is not null)
+        {
+            return null;
+        }
+        return $"o texto tem acento e/ou emoji, e este aparelho não tem o teclado {_opts.TypingImePackage} "
+            + "instalado. O `input text` do Android não digita esses caracteres, então TODOS os envios "
+            + "vão falhar. Instale o IME no aparelho, ou use Phone__HumanTyping=false (o texto vai pronto "
+            + "pelo deep link, sem simular digitação).";
+    }
+
     private Task<(int Code, string Out, string Err)> OpenChatAsync(string url, CancellationToken ct) =>
         // Aspas simples: '&' e '#' da URL não podem ser interpretados pelo shell do aparelho.
         _adb.ShellAsync($"am start -a android.intent.action.VIEW -d '{url}'", ct);
@@ -412,8 +429,22 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             }
             else
             {
-                // Sem IME não há comando de limpar: apaga em lote com o teclado virtual.
-                await _adb.ShellAsync("input keyevent " + string.Join(" ", Enumerable.Repeat("67", 40)), ct);
+                // Sem IME não há comando de limpar. SELECIONAR TUDO e apagar resolve em um golpe,
+                // independente do tamanho: CTRL+A (keycombination existe do Android 11 pra cima) e um
+                // backspace, que apaga a seleção inteira.
+                var (kc, _, _) = await _adb.ShellAsync("input keycombination 113 29", ct);
+                if (kc == 0)
+                {
+                    await _adb.ShellAsync("input keyevent 67", ct);
+                }
+                else
+                {
+                    // 🔴 Fallback pra Android antigo. 120 por volta × 12 voltas = 1440 caracteres, com
+                    // folga sobre o maior template (~1000). Antes eram 40 por volta = teto de 480, que
+                    // NÃO limpava um template e deixava o envio abortado com o campo sujo — e o campo
+                    // sujo faz a digitação seguinte entrar em cima da anterior.
+                    await _adb.ShellAsync("input keyevent " + string.Join(" ", Enumerable.Repeat("67", 120)), ct);
+                }
             }
             await Task.Delay(300, ct);
         }

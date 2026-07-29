@@ -97,6 +97,14 @@ internal sealed class PhoneSendCommand(
             return 1;
         }
 
+        // Pré-voo da DIGITAÇÃO. Sem isto, texto com acento ou emoji falha em TODOS os envios, um a um,
+        // depois de abrir conversa e tocar na tela em cada contato. Melhor descobrir aqui.
+        if (await phone.CheckTypingCapabilityAsync(s.Text, ct) is { } motivo)
+        {
+            AnsiConsole.MarkupLine($"[red]Não dá pra digitar este texto neste aparelho:[/] {motivo.EscapeMarkup()}");
+            return 1;
+        }
+
         var falhas = 0;
         for (var i = 0; i < s.To.Length; i++)
         {
