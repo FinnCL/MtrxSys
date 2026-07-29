@@ -410,6 +410,26 @@ public sealed class DispatchEngine(
                     // esta checagem. (Lá vira no-op: o SaveContact é idempotente.)
                     await TrySaveContactAsync(contact, ct);
                     var onWhatsApp = await phone.IsOnWhatsAppAsync(contact.Phone.E164, ct);
+                    if (onWhatsApp is null && job.ExceededDeferLimit(dispatchOpts.Value.MaxDeferrals))
+                    {
+                        // 🔴 O SILÊNCIO PRECISA TER PRAZO. Adiar é o certo enquanto "ainda não sei" for
+                        // plausível; depois de MaxDeferrals ele deixa de ser. No aparelho FÍSICO isso não
+                        // é hipótese: sem root não existe o `wa.db`, então a checagem NUNCA diz "não é
+                        // usuário" — só "sim" ou "não sei". Um número sem WhatsApp responderia "não sei"
+                        // para sempre, e cada volta consome um intervalo de envio inteiro.
+                        job.MarkSkipped(
+                            $"aparelho não reconheceu o número após {job.DeferCount} adiamentos "
+                            + "(~24h); tratado como inexistente");
+                        await uow.SaveChangesAsync(ct);
+                        skipped++;
+                        log.LogWarning(
+                            "Aparelho: {Phone} PULADO após {Count} adiamentos. O app nunca confirmou nem "
+                            + "negou este número — sem root não há veredito primário (wa.db), então o "
+                            + "limite de adiamento é o que impede o job de ficar na fila pra sempre.",
+                            contact.Phone.E164, job.DeferCount);
+                        await Task.Delay(delay.NextCheckCooldown(), ct);
+                        continue;
+                    }
                     if (onWhatsApp is null)
                     {
                         // "Ainda não sei": contato recém-salvo, o WhatsApp leva minutos pra reconhecer.
@@ -458,6 +478,21 @@ public sealed class DispatchEngine(
                     // consumir tentativa de envio (escassa) e SEM marcar terminal (não perde o contato). Não
                     // trava a fila (DequeueNextPending ordena por ScheduledAt ASC; o nextAt futuro sai depois
                     // dos Pending) e não arrisca 463. Re-checa quando o nextAt chegar.
+                    // Mesmo teto do caminho acima: hiccup que dura para sempre deixa de ser hiccup, e um
+                    // job imortal custa o mesmo intervalo de envio que uma mensagem real.
+                    if (job.ExceededDeferLimit(dispatchOpts.Value.MaxDeferrals))
+                    {
+                        job.MarkSkipped(
+                            $"checagem de número indisponível após {job.DeferCount} adiamentos (~24h)");
+                        await uow.SaveChangesAsync(ct);
+                        skipped++;
+                        log.LogWarning(
+                            "Checagem de número para {Phone} indisponível há {Count} adiamentos; PULADO "
+                            + "pra não ocupar a fila indefinidamente. Investigue a fonte da checagem.",
+                            contact.Phone.E164, job.DeferCount);
+                        await Task.Delay(delay.NextCheckCooldown(), ct);
+                        continue;
+                    }
                     job.Defer(clock.UtcNow.AddSeconds(NumberCheckDeferSeconds), "checagem de número indisponível (hiccup)");
                     await uow.SaveChangesAsync(ct);
                     retried++;
@@ -564,6 +599,11 @@ public sealed class DispatchEngine(
                 // Anexo de imagem DESABILITADO: todo disparo sai como texto, mesmo que o template
                 // tenha imagem. Evita rejeição do WAHA (422 por mimetype/dados) e mantém o envio
                 // simples e estável. (O texto composto preserva spintax, placeholders e o "SAIR".)
+                // Entrega lida da PRÓPRIA TELA do aparelho (sent/delivered/read), quando o envio é pela
+                // UI. É o sensor que o modo emulador nunca teve: sem WAHA não há message.ack, então o
+                // DeliveredAt ficava sempre null e o guard de shadow-restriction precisou ser desligado.
+                // Ver docs/engine-physical.md.
+                string? uiDeliveryStatus = null;
                 string waMessageId;
                 if (emulatorMode)
                 {
@@ -579,6 +619,7 @@ public sealed class DispatchEngine(
                     log.LogInformation(
                         "Emulador: enviado para {Phone} (entrega: {Status}).",
                         contact.Phone.E164, emu.DeliveryStatus ?? "?");
+                    uiDeliveryStatus = emu.DeliveryStatus;
                     waMessageId = string.Empty; // sem id do WAHA — auditoria fica sem ack async, ok no emulador
                 }
                 else
@@ -605,18 +646,30 @@ public sealed class DispatchEngine(
                 job.MarkSent(waMessageId, now);
                 contact.RegisterSend(now);
                 await contacts.UpdateAsync(contact, ct);
-                await audit.AddAsync(
-                    SendAuditEntry.Create(
-                        id: Guid.NewGuid(),
-                        dispatchJobId: job.Id,
-                        phoneE164: contact.Phone.E164,
-                        renderedText: text,
-                        typingMs: typingMs,
-                        delayMs: (int)delayBefore.TotalMilliseconds,
-                        occurredAt: now,
-                        // Id "core" (mesma normalização do webhook) pro sensor de entrega casar o message.ack.
-                        waMessageId: WahaChatIdentifier.ExtractMessageCore(waMessageId)),
-                    ct);
+                var auditEntry = SendAuditEntry.Create(
+                    id: Guid.NewGuid(),
+                    dispatchJobId: job.Id,
+                    phoneE164: contact.Phone.E164,
+                    renderedText: text,
+                    typingMs: typingMs,
+                    delayMs: (int)delayBefore.TotalMilliseconds,
+                    occurredAt: now,
+                    // Id "core" (mesma normalização do webhook) pro sensor de entrega casar o message.ack.
+                    waMessageId: WahaChatIdentifier.ExtractMessageCore(waMessageId));
+                // Entrega lida da tela → o MESMO campo que o message.ack alimenta. Sem isto, todo envio
+                // pela UI nasce e morre com DeliveredAt null, e o sensor não tem o que medir.
+                //
+                // ⚠️ SUBESTIMA de propósito, e por enquanto isso é aceitável. A leitura acontece segundos
+                // depois do toque; destinatário com o aparelho desligado aparece como "sent" e ninguém
+                // reabre a conversa pra reler. Ou seja, este número é um PISO da taxa real, não a taxa.
+                // Por isso o guard segue DESLIGADO no modo UI (ver o `!emulatorMode` lá em cima): primeiro
+                // se acumula o dado, depois se escolhe o limiar em cima da distribuição observada. Ligar
+                // agora, com limiar herdado do caminho WAHA, pausaria a fila por gente offline.
+                if (AckFromUiDelivery(uiDeliveryStatus) is { } uiAck)
+                {
+                    auditEntry.MarkAck(uiAck, now);
+                }
+                await audit.AddAsync(auditEntry, ct);
                 // Commita SÓ o registro do envio (job=Sent + contato + auditoria). A mensagem já
                 // saiu no WhatsApp (irreversível), então este commit NÃO pode tocar system_state:
                 // o reset do breaker escrevia a linha singleton (token xmin) aqui, e um conflito de
@@ -932,6 +985,21 @@ public sealed class DispatchEngine(
             snap.StartedOn, snap.ActiveDays, snap.MinDays, snap.QualifiedPeople, snap.MinPeople);
         return true;
     }
+
+    /// <summary>Entrega lida da UI do aparelho → o mesmo código de ack do `message.ack` do WAHA.</summary>
+    /// <remarks>
+    /// Os dois sensores passam a escrever no MESMO campo, então o `GetDeliveryStatsAsync` não precisa
+    /// saber de onde veio o dado. A escala é a do WhatsApp: 1 = servidor recebeu, 2 = entregue no
+    /// aparelho, 3 = lida. `null` (status desconhecido ou ausente) não marca nada, e é diferente de
+    /// marcar 1: marcar 1 afirmaria "chegou ao servidor" sem evidência.
+    /// </remarks>
+    private static int? AckFromUiDelivery(string? uiStatus) => uiStatus switch
+    {
+        "read" => 3,
+        "delivered" => 2,
+        "sent" => 1,
+        _ => null,
+    };
 
     // Saúde de entrega na janela: retorna os números SE a taxa entregue/enviado estiver abaixo do limiar
     // (com amostra mínima) — sinal de shadow-restriction. null = ok / sem dados suficientes / erro de

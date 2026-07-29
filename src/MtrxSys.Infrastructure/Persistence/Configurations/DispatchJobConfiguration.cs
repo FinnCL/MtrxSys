@@ -20,6 +20,9 @@ internal sealed class DispatchJobConfiguration : IEntityTypeConfiguration<Dispat
         b.Property(x => x.WahaMessageId).HasColumnName("waha_message_id").HasMaxLength(120);
         b.Property(x => x.ErrorReason).HasColumnName("error_reason").HasMaxLength(500);
         b.Property(x => x.AttemptCount).HasColumnName("attempt_count").HasDefaultValue(0);
+        // Adiamentos (≠ tentativas de envio). Sem o HasColumnName explícito o EF geraria "DeferCount"
+        // em PascalCase no meio de um schema snake_case, e toda consulta psql à mão precisaria de aspas.
+        b.Property(x => x.DeferCount).HasColumnName("defer_count").HasDefaultValue(0);
         b.HasIndex(x => new { x.Status, x.ScheduledAt });
         b.Ignore(x => x.DomainEvents);
         b.Property<uint>("xmin").HasColumnName("xmin").IsConcurrencyToken().ValueGeneratedOnAddOrUpdate();

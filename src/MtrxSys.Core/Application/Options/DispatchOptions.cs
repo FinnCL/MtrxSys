@@ -51,6 +51,16 @@ public sealed class DispatchOptions
     // cai abaixo do limiar — o freio automático que faltava pra não queimar o chip num número morto.
     // Auto-corrige: acks atrasados (destinatário offline) que chegam depois recuperam a taxa e o ciclo
     // volta sozinho; se a entrega não recupera, segue parado (é o que queremos). false = desliga.
+    // Teto de ADIAMENTOS de um mesmo disparo antes de virar Skipped. Adiar não consome tentativa (é
+    // de propósito: adiar não é falhar), mas sem teto o job fica na fila para sempre — e cada volta
+    // gasta um intervalo de envio, o mesmo que uma mensagem real gastaria.
+    //
+    // 180 ≈ 24h no ritmo de re-checagem de 8 min (EmulatorSyncGraceSeconds). A referência é o sync de
+    // contatos do WhatsApp, que roda DE HORA EM HORA: 24h dá 24 ciclos dele. É outra ordem de grandeza
+    // da carência de 20 min que, em 2026-07-27, descartou 10 contatos bons por julgá-los antes de o
+    // app ter olhado pra eles uma única vez. 0 = sem teto (adia para sempre — o comportamento antigo).
+    public int MaxDeferrals { get; set; } = 180;
+
     public bool DeliveryHealthGuardEnabled { get; set; } = true;
     public int DeliveryHealthWindowHours { get; set; } = 24;
     // Amostra mínima de envios na janela pra avaliar (evita pausar por 1-2 offline no começo).

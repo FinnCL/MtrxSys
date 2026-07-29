@@ -76,6 +76,11 @@ public sealed class DispatchJob : Entity<Guid>
     }
 
 
+    // Quantas vezes este disparo já foi ADIADO. Separado do AttemptCount de propósito: adiar não é
+    // tentar enviar, e não pode queimar a tentativa (escassa, teto 2). Serve pra dar um FIM ao
+    // adiamento — ver ExceededDeferLimit.
+    public int DeferCount { get; private set; }
+
     // Adia o disparo pra frente (nextAt futuro) SEM consumir tentativa de envio e SEM marcar terminal.
     // Diferente de ScheduleRetry (que incrementa AttemptCount) e de MarkSkipped (terminal). Uso: a
     // checagem de número ficou indisponível por hiccup — não é falha do número nem do envio, então não
@@ -86,5 +91,19 @@ public sealed class DispatchJob : Entity<Guid>
         Status = DispatchStatus.Retrying;
         ScheduledAt = nextAt;
         ErrorReason = reason;
+        DeferCount++;
     }
+
+    /// <summary>Já adiou vezes demais? true = parar de adiar e resolver de outro jeito.</summary>
+    /// <remarks>
+    /// 🔴 Adiamento SEM FIM entope a fila, e isso é fácil de não enxergar porque cada volta parece
+    /// inofensiva. O caso que motivou: no aparelho FÍSICO não há root, então não existe o `wa.db` que
+    /// afirma "este número NÃO é usuário" — a checagem só sabe dizer "sim" ou "não sei". Um número que
+    /// genuinamente não tem WhatsApp responde "não sei" para sempre, e o job voltava a cada ciclo
+    /// consumindo o MESMO intervalo de envio que uma mensagem real consumiria. Com 10% de números
+    /// ruins numa lista, a fila vai enchendo de jobs imortais que roubam os horários dos bons.
+    /// <para>O limite não é para "desistir rápido": é para o silêncio ter um prazo. Ver
+    /// DispatchOptions.MaxDeferrals.</para>
+    /// </remarks>
+    public bool ExceededDeferLimit(int maxDeferrals) => maxDeferrals > 0 && DeferCount >= maxDeferrals;
 }
