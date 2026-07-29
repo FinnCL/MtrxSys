@@ -124,7 +124,7 @@ chip (número/nome) e o estado. Setup durável passo a passo: **[docs/modem-keep
 
 **1b. LDPlayer (local, Windows) — Android real espelhado na aba.** O **LDPlayer** (emulador de
 desktop, multi-instância) roda o WhatsApp e é espelhado na aba "Celular" via ws-scrcpy; cada instância
-= um número/ambiente, e o WAHA segue fazendo o disparo. Runbook: **[docs/ldplayer.md](docs/ldplayer.md)**.
+= um número/ambiente, e o WAHA segue fazendo o disparo.
 (O SIM entra só no registro; ban em emulador é alto.)
 
 **2. docker-android (opção de servidor) — dispensa o físico de vez.** Um **Android real em container**
@@ -133,6 +133,18 @@ desktop, multi-instância) roda o WhatsApp e é espelhado na aba "Celular" via w
 `/dev/kvm`** — no Windows/WSL2 as vCPUs do emulador travam na virtualização aninhada (testado), então é
 **só servidor**. Fica na seção recolhível "opção de servidor" da aba. Pra eliminar o aparelho físico de
 vez (SMS de re-verificação num **SIM gateway** por API): **[docs/phone-primary-server.md](docs/phone-primary-server.md)**.
+
+## Documentação
+
+Runbooks (o "como fazer"):
+
+- **[Migrar para outro PC](docs/migrar-para-outro-pc.md)** — do zero ao ambiente rodando: pré-requisitos, `.env`, subir, e o que **não** vem no clone (senhas, banco, sessões, binários).
+- **[Aparelho físico, passo a passo](docs/aparelho-fisico-passo-a-passo.md)** — ligar um celular Android real e disparar por ele. Inclui as armadilhas medidas (cabo de carga, tela bloqueada, adb fora do PATH).
+
+Desenho (o "porquê"):
+
+- [engine-physical.md](docs/engine-physical.md) — engine de aparelho físico: motivação, fases, decisões
+- [architecture.md](docs/architecture.md) · [fluxo-operacional.md](docs/fluxo-operacional.md) · [phone.md](docs/phone.md) · [scaling.md](docs/scaling.md) · [recovery.md](docs/recovery.md)
 
 ## Notas
 
