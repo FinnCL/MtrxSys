@@ -1,8 +1,10 @@
 namespace MtrxSys.Core.Application.Abstractions;
 
-/// <summary>Estado do aparelho virtual visto pela aba "Celular".
-/// State: "unavailable" (sem docker/host não suporta) · "not_created" (container não existe) ·
-/// "exited"/"created"/"running" (estado do container). ViewUrl = noVNC a embutir quando rodando.</summary>
+/// <summary>Estado do aparelho visto pela aba "Celular".
+/// State: "unavailable" (sem docker/adb, ou aparelho fora) · "not_created" (container não existe) ·
+/// "exited"/"created"/"running" (estado do container) · "unauthorized" (SÓ no engine físico: o adb vê
+/// o celular mas o diálogo RSA não foi aceito — conserto é na tela do aparelho, não no cabo, e por isso
+/// é estado próprio e não "unavailable"). ViewUrl = noVNC (emulador) ou scrcpy (físico) quando rodando.</summary>
 public sealed record PhoneStatus(string State, bool Running, string? ViewUrl);
 
 /// <summary>Orquestra o "aparelho virtual" (Android em container, docker-android) a partir do app,

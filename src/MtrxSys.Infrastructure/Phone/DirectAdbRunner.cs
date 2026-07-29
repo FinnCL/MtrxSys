@@ -22,12 +22,23 @@ internal sealed class DirectAdbRunner(string serial, string adbPath) : IAdbRunne
 
     public Task<(int Code, string Out, string Err)> RawAsync(CancellationToken ct, params string[] args)
     {
-        // -s SEMPRE, mesmo com um aparelho só: sem ele o adb escolhe sozinho e, com dois plugados,
-        // falha com "more than one device" — ou pior, num cenário de duas máquinas compartilhando
-        // servidor adb, acerta o aparelho de outro chip.
-        string[] full = string.IsNullOrWhiteSpace(_serial)
-            ? args
-            : [.. new[] { "-s", _serial }, .. args];
+        // 🔴 SEM SERIAL NÃO RODA. O código antigo omitia o `-s` quando o serial vinha vazio, e isso é
+        // pior que falhar: com UM aparelho plugado o adb escolhe sozinho e tudo FUNCIONA — em teste, em
+        // homologação, na demonstração. O erro só aparece quando alguém pluga o segundo celular, e aí a
+        // mensagem sai pelo chip errado, em silêncio. `Phone__AdbSerial` tem default vazio, então esse
+        // caminho era alcançável só esquecendo uma variável de ambiente.
+        //
+        // Devolver código -1 é o mesmo contrato de "CLI indisponível" que o RunAsync já usa, então os
+        // chamadores tratam como aparelho fora sem nenhuma mudança — e o motivo vai junto na mensagem.
+        if (string.IsNullOrWhiteSpace(_serial))
+        {
+            return Task.FromResult((-1, string.Empty,
+                "Phone__AdbSerial não configurado. O engine físico exige o serial do aparelho "
+                + "(veja em `adb devices`) — sem ele, o adb escolheria sozinho qual celular receber o "
+                + "comando, e com mais de um plugado o envio sairia pelo chip errado."));
+        }
+
+        string[] full = [.. new[] { "-s", _serial }, .. args];
         return DockerCli.RunAsync(_exe, ct, full);
     }
 }

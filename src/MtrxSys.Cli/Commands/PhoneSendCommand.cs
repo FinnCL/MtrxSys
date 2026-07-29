@@ -109,10 +109,13 @@ internal sealed class PhoneSendCommand(
         for (var i = 0; i < s.To.Length; i++)
         {
             var to = new string([.. s.To[i].Where(char.IsDigit)]);
-            if (to.Length < 12)
+            if (to.Length is < 12 or > 13)
             {
-                // 12-13 dígitos = 55 + DDD + número. Menos que isso é DDD faltando, que é o vetor do 463.
-                AnsiConsole.MarkupLine($"[red]{to}[/]: número curto demais (esperado 55+DDD+número). Pulado.");
+                // 12-13 dígitos = 55 + DDD + número (legado sem o 9º dígito dá 12). Fora dessa faixa é
+                // DDD faltando ou dígito sobrando, e número malformado é o vetor do 463 — o mesmo erro
+                // que quase mandou "55921404487" (11 dígitos, sem DDD) em 2026-07-29.
+                AnsiConsole.MarkupLine(
+                    $"[red]{to}[/]: {to.Length} dígitos, esperado 12 ou 13 (55 + DDD + número). Pulado.");
                 falhas++;
                 continue;
             }

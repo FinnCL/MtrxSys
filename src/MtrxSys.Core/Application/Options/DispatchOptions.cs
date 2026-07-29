@@ -45,12 +45,6 @@ public sealed class DispatchOptions
     // o teto, vira Failed e aí sim conta (chip genuinamente quebrado acaba pausando).
     public int MaxSendAttempts { get; set; } = 2;
 
-    // GUARD DE SAÚDE-DE-ENTREGA (anti-shadow-restriction): o 463/shadow-ban não vem como erro do
-    // envio — o WhatsApp aceita (ack 1) mas NÃO entrega (ack nunca chega a 2). O breaker não pega isso.
-    // Este guard PARA o ciclo quando, numa janela recente com amostra mínima, a taxa entregue/enviado
-    // cai abaixo do limiar — o freio automático que faltava pra não queimar o chip num número morto.
-    // Auto-corrige: acks atrasados (destinatário offline) que chegam depois recuperam a taxa e o ciclo
-    // volta sozinho; se a entrega não recupera, segue parado (é o que queremos). false = desliga.
     // Teto de ADIAMENTOS de um mesmo disparo antes de virar Skipped. Adiar não consome tentativa (é
     // de propósito: adiar não é falhar), mas sem teto o job fica na fila para sempre — e cada volta
     // gasta um intervalo de envio, o mesmo que uma mensagem real gastaria.
@@ -61,6 +55,12 @@ public sealed class DispatchOptions
     // app ter olhado pra eles uma única vez. 0 = sem teto (adia para sempre — o comportamento antigo).
     public int MaxDeferrals { get; set; } = 180;
 
+    // GUARD DE SAÚDE-DE-ENTREGA (anti-shadow-restriction): o 463/shadow-ban não vem como erro do
+    // envio — o WhatsApp aceita (ack 1) mas NÃO entrega (ack nunca chega a 2). O breaker não pega isso.
+    // Este guard PARA o ciclo quando, numa janela recente com amostra mínima, a taxa entregue/enviado
+    // cai abaixo do limiar — o freio automático que faltava pra não queimar o chip num número morto.
+    // Auto-corrige: acks atrasados (destinatário offline) que chegam depois recuperam a taxa e o ciclo
+    // volta sozinho; se a entrega não recupera, segue parado (é o que queremos). false = desliga.
     public bool DeliveryHealthGuardEnabled { get; set; } = true;
     public int DeliveryHealthWindowHours { get; set; } = 24;
     // Amostra mínima de envios na janela pra avaliar (evita pausar por 1-2 offline no começo).
