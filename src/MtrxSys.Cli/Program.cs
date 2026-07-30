@@ -44,6 +44,8 @@ app.Configure(cfg =>
         p.SetDescription("Aparelho (emulador ou físico) — bancada do piloto, sem banco e sem fila");
         p.AddCommand<PhoneSendCommand>("send")
             .WithDescription("Envia pela UI do aparelho. Respeita Phone__Engine (physical | docker-android).");
+        p.AddCommand<PhoneConsoleCommand>("console")
+            .WithDescription("Console interativo: cola a lista de contatos e as variantes de texto e dispara o lote.");
     });
     cfg.AddBranch("groups", g =>
     {

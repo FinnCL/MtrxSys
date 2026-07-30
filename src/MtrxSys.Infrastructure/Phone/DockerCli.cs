@@ -136,6 +136,13 @@ internal static class DockerCli
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // 🔴 Redirecionar a ENTRADA também, mesmo sem nada pra escrever nela. Sem isto o filho
+                // HERDA o stdin do processo pai, e um `adb` herdeiro queima a entrada do console
+                // interativo: medido em 2026-07-30, o `mtrx phone console` lia a primeira linha antes
+                // da chamada ao adb e recebia null em TODAS as seguintes. Fechar logo após o start
+                // entrega EOF a quem tentar ler, que é o comportamento correto pra um CLI que não
+                // conversa por stdin.
+                RedirectStandardInput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
@@ -149,6 +156,7 @@ internal static class DockerCli
             {
                 return (-1, string.Empty, $"{exe} CLI indisponível");
             }
+            p.StandardInput.Close();
             // Lê stdout E stderr CONCORRENTE: ler um até o fim e só depois o outro trava se o buffer
             // de pipe do SO (~64 KB) do fluxo não-lido encher (deadlock clássico) — ex.: `docker logs`
             // com muito stderr penduraria a leitura do stdout que nunca chega ao EOF.

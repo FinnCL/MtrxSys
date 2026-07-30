@@ -134,16 +134,26 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         return max;
     }
 
-    // Nome só com alfanumérico: o valor vai como um arg pro adb shell, que re-divide em espaço.
+    /// <summary>Nome pronto pro shell do aparelho: só letra, dígito e espaço, e depois entre aspas.</summary>
+    /// <remarks>
+    /// As duas defesas são propositais. O filtro tira o que poderia virar comando (aspas, ;, $, `);
+    /// as aspas preservam o ESPAÇO, que antes era descartado e transformava "Fulano de Tal" em
+    /// "FulanodeTal" na agenda. Filtrar sem citar perde o nome; citar sem filtrar é injeção de shell.
+    /// </remarks>
     private static string SanitizeContactName(string? name, string fallbackDigits)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
-            return "C" + fallbackDigits;
+            return ShellQuote("C" + fallbackDigits);
         }
-        var clean = new string([.. name.Where(char.IsLetterOrDigit)]);
-        return clean.Length == 0 ? "C" + fallbackDigits : clean;
+        var clean = new string([.. name.Where(c => char.IsLetterOrDigit(c) || c == ' ')]).Trim();
+        return ShellQuote(clean.Length == 0 ? "C" + fallbackDigits : clean);
     }
+
+    /// <summary>Aspas simples pro shell DO APARELHO (o adb junta os argumentos e o shell de lá
+    /// reinterpreta).</summary>
+    private static string ShellQuote(string s) =>
+        "'" + s.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private static string Detail(string? outp, string? err)
     {

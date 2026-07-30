@@ -40,7 +40,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         {
             return WhatsAppSendResult.Fail("phone inválido");
         }
-        text ??= string.Empty;
+        // Normaliza a quebra de linha ANTES de qualquer medida: o \r do Windows não é digitável e
+        // entraria na contagem de caracteres que confere o campo antes de enviar.
+        text = (text ?? string.Empty).Replace("\r\n", "\n", StringComparison.Ordinal)
+                                     .Replace('\r', '\n');
         if (text.Length == 0)
         {
             return WhatsAppSendResult.Fail("texto vazio");
@@ -143,10 +146,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 }
                 await Task.Delay(Random.Shared.Next(900, 2600), sct);
 
-                if (!await TypeInChunksAsync(typing, text, sct))
+                if (await TypeInChunksAsync(typing, text, sct) is { } motivo)
                 {
                     await ClearEntryAsync(typing, sct);
-                    return WhatsAppSendResult.Fail("a digitação falhou no meio; campo limpo e envio abortado.");
+                    return WhatsAppSendResult.Fail($"digitação abortada, campo limpo. {motivo}");
                 }
 
                 // Confere o TAMANHO antes de enviar: o IME pode engolir trecho em silêncio, e mensagem
@@ -357,8 +360,12 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     }
 
     // `input text` NÃO digita acento nem emoji — devolve NullPointerException (medido, Android 14).
+    // A QUEBRA DE LINHA é exceção: ela não passa como texto, mas passa como TECLA (KEYCODE_ENTER), e
+    // é assim que SendChunkAsync a envia. Confirmado com o operador em 2026-07-30 que a opção
+    // "Tecla Enter para enviar" do WhatsApp está DESLIGADA neste aparelho — com ela ligada, o Enter
+    // mandaria a mensagem pela metade.
     private static bool IsTypeableByInputText(string text) =>
-        text.All(c => c is >= ' ' and <= '~' && c != '\'');
+        text.All(c => c == '\n' || (c is >= ' ' and <= '~' && c != '\''));
 
     private async Task<TypingChannel?> ResolveTypingChannelAsync(string text, CancellationToken ct)
     {
@@ -451,14 +458,32 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         return false;
     }
 
-    private async Task<bool> TypeInChunksAsync(TypingChannel channel, string text, CancellationToken ct)
+    /// <summary>Digita o texto. null = ok; string = motivo da parada.</summary>
+    private async Task<string?> TypeInChunksAsync(TypingChannel channel, string text, CancellationToken ct)
     {
         var perChar = 60_000.0 / Math.Clamp(_opts.TypingCharsPerMinute, 60, 1200);
+        var quebraConferida = false;
         foreach (var chunk in SplitForTyping(text))
         {
             if (!await SendChunkAsync(channel, chunk, ct))
             {
-                return false;
+                return "o aparelho recusou um trecho da digitação.";
+            }
+
+            // 🔴 Confere a PRIMEIRA quebra de linha: se a opção "Tecla Enter para enviar" estiver
+            // ligada no WhatsApp, o Enter manda a mensagem em vez de quebrar a linha. Sem esta
+            // checagem, um texto de 4 linhas viraria 4 mensagens picadas, uma por Enter. Aqui o
+            // estrago para na primeira: aborta antes de digitar o resto.
+            if (chunk == "\n" && !quebraConferida)
+            {
+                quebraConferida = true;
+                if (string.IsNullOrEmpty(await ReadEntryTextAsync(ct)))
+                {
+                    return "o campo esvaziou na primeira quebra de linha: a opção \"Tecla Enter para "
+                        + "enviar\" está LIGADA no WhatsApp deste aparelho, então o Enter mandou a "
+                        + "mensagem em vez de quebrar a linha. Desligue-a (WhatsApp → Configurações → "
+                        + "Conversas), ou use templates de uma linha só.";
+                }
             }
             var waitMs = (int)(chunk.Length * perChar * (0.75 + (Random.Shared.NextDouble() * 0.7)));
             // De vez em quando alguém para pra pensar. Sem isso a cadência é uniforme demais.
@@ -468,11 +493,19 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             }
             await Task.Delay(waitMs, ct);
         }
-        return true;
+        return null;
     }
 
     private async Task<bool> SendChunkAsync(TypingChannel channel, string chunk, CancellationToken ct)
     {
+        // Quebra de linha vai como TECLA, nos dois canais: nem o `input text` nem o broadcast do IME
+        // carregam o caractere 10. É o Enter do teclado, que no campo do WhatsApp quebra a linha
+        // enquanto "Tecla Enter para enviar" estiver desligado.
+        if (chunk == "\n")
+        {
+            var (ec, _, _) = await _adb.ShellAsync("input keyevent 66", ct);
+            return ec == 0;
+        }
         if (channel is TypingChannel.Ime)
         {
             var (rc, _, _) = await _adb.ShellAsync($"am broadcast -a ADB_INPUT_TEXT --es msg {ShellQuote(chunk)}", ct);
@@ -498,7 +531,15 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             var nl = text.IndexOf('\n', i);
             if (nl >= 0 && nl < target)
             {
-                target = nl + 1;
+                // A quebra sai SOZINHA no seu próprio trecho: SendChunkAsync a reconhece e manda a
+                // tecla. Junto com o texto ela iria pro `input text`, que não a digita.
+                if (nl > i)
+                {
+                    yield return text[i..nl];
+                }
+                yield return "\n";
+                i = nl + 1;
+                continue;
             }
             else
             {

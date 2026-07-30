@@ -4,9 +4,11 @@ Runbook para ligar um **celular Android real** ao sistema e disparar por ele, em
 emulador. Para o *porquê* e o desenho, ver [engine-physical.md](engine-physical.md); aqui é só o
 como-fazer.
 
-> **Estado hoje (2026-07-29):** o disparo pelo aparelho físico é por **linha de comando**. Não há
-> botão na tela — a variante da aba "Celular" é a Fase 4 do desenho e ainda não existe. Os botões
-> Iniciar/Parar do painel comandam o dispatcher, que hoje só está ligado ao emulador.
+> **Estado hoje (2026-07-30):** o disparo pelo aparelho físico é por **linha de comando**: uma
+> mensagem avulsa com `mtrx phone send` (seção C), ou uma lista inteira com o console interativo
+> (seção D). Não há botão na tela. A variante da aba "Celular" é a Fase 4 do desenho e ainda não
+> existe, e os botões Iniciar/Parar do painel comandam o dispatcher, que hoje só está ligado ao
+> emulador.
 
 ---
 
@@ -94,11 +96,90 @@ como-fazer.
 > aquecimento, opt-out, deduplicação nem auditoria — tudo isso mora no `DispatchEngine`, que hoje não
 > está ligado ao aparelho físico. Use para testar mecânica, não para campanha.
 
+## D. Console interativo (lista de contatos + variantes de texto)
+
+O `phone send` resolve uma mensagem. Para uma **lista**, existe o console:
+
+```powershell
+tools\phone-console.cmd
+```
+
+O atalho acha o adb, lista os aparelhos plugados, deixa você escolher um, seta `Phone__Engine`,
+`Phone__AdbSerial` e `Phone__AdbPath` sozinho e abre o `mtrx phone console` preso àquele serial.
+Para pular o menu: `tools\phone-console.cmd -Serial RQ8WB048RFW`.
+
+Ao abrir, ele **imprime sozinho o passo a passo** e depois um **menu numerado** com o valor atual de
+cada ajuste e o conteúdo já gravado. Não é preciso saber nenhum comando de antemão: digita-se o
+número. O menu é redesenhado depois de cada ação, então toda alteração aparece registrada na hora.
+
+```
+╭───┬───────────────────────┬─────────────────────────────────╮
+│ 1 │ ritmo entre mensagens │ 300-700s                        │
+│ 2 │ teto por lote         │ 7                               │
+│ 3 │ gravar na agenda      │ ligado                          │
+│ 4 │ contatos              │ 2 na lista                      │
+│ 5 │ textos (variantes)    │ 2 variante(s)                   │
+│ 6 │ ver                   │ confere o que está carregado    │
+│ 7 │ previa                │ quem recebe qual texto          │
+│ 8 │ enviar                │ dispara o lote (pergunta antes) │
+│ 9 │ ajuda                 │ o passo a passo explicado       │
+│ 0 │ sair                  │ fecha (tudo fica salvo)         │
+╰───┴───────────────────────┴─────────────────────────────────╯
+textos gravados:
+  1 Ola {nome}, tudo bem?
+  2 Oi {nome}, bom dia
+```
+
+Pelo menu, cada ajuste **pergunta o valor** em vez de exigir a sintaxe. Os comandos por extenso
+continuam valendo para quem já sabe o que quer:
+
+| comando | o que faz |
+|---|---|
+| `contatos` / `contatos +` | cola a lista (substitui / soma). Formato `numero` ou `numero;nome` |
+| `textos` / `textos +` | cola as variantes. `{nome}` vira o nome do contato |
+| `ver` | mostra lista, variantes e ajustes |
+| `previa` | simula quem receberia qual variante, sem tocar no aparelho |
+| `enviar` | pré-voo, plano, confirmação e disparo |
+| `intervalo <min> <max>` | segundos entre um envio e o próximo (default 150 360) |
+| `teto <n>` | máximo de mensagens por lote (default 30) |
+| `agenda` | liga/desliga gravar o contato na agenda antes de enviar (**ligado** por padrão) |
+| `ajuda` / `comandos` | o passo a passo explicado / a lista seca de comandos |
+| `limpar [contatos\|textos\|tudo]`, `status`, `sair` | |
+
+Cada contato recebe uma variante **sorteada**, não em rodízio. Rodízio distribui exato, mas cria a
+regularidade (contato 1 = variante A, contato 4 = variante A…) que variar o texto tenta desfazer.
+
+O que ele protege, e o `phone send` não:
+
+- **valida ao colar**: número fora de 12–13 dígitos é rejeitado com o motivo, repetido é descartado
+- **aponta o acento na hora**, e barra o lote inteiro no pré-voo antes da primeira mensagem
+- **recusa `{nome}` com contato sem nome**, em vez de mandar "Ola , tudo bem?"
+- **grava CSV linha a linha** em `%LOCALAPPDATA%\MtrxSys\phone-console\envios-<serial>.csv`, então
+  fechar a janela no meio do lote não apaga quem já recebeu
+- **guarda a sessão** em `<serial>.json` na mesma pasta: uma lista de 80 contatos colada à mão não se
+  perde ao fechar
+- **reserva o aparelho**: enquanto um console está aberto num serial, o atalho marca esse celular como
+  "já aberto em outro console" e nem oferece, e um segundo console apontado na mão para o mesmo serial
+  recusa a subir
+
+> ⚠️ Continua sendo **bancada**. O console tem teto por lote, pré-voo e log — mas não tem fila, curva
+> de aquecimento, opt-out nem dedup **entre execuções**. Rodar duas vezes a mesma lista manda duas
+> vezes. Campanha de verdade é o `DispatchEngine`, ainda não ligado ao físico.
+
 ---
 
 ## Vários aparelhos
 
-O serial isola. Cada terminal (ou script) aponta para um aparelho:
+O serial isola. Plugou um segundo celular? Abra `tools\phone-console.cmd` de novo: ele lista os
+aparelhos, marca em cinza os que já estão abertos em outra janela e só deixa escolher um livre. Se
+sobrar exatamente um livre, escolhe sozinho e avisa. Cada janela fica presa a um aparelho, com sua
+própria lista e suas próprias variantes.
+
+A reserva é o **handle** de um arquivo `<serial>.lock`, não o conteúdo dele. Isso importa porque
+console morto no tranco (janela fechada no X, queda de energia) não deixa trava presa: o Windows
+fecha o handle junto com o processo, e o aparelho volta a aparecer livre sozinho.
+
+Na mão, é o mesmo princípio, um bloco de variáveis por terminal:
 
 ```powershell
 # chip-a.ps1
@@ -112,7 +193,8 @@ paralelo sem se atrapalhar.
 
 ⚠️ **Não rode dois comandos contra o MESMO serial ao mesmo tempo.** O `uiautomator dump` grava num
 arquivo fixo dentro do aparelho; dois processos disputando o mesmo celular leriam a tela um do outro.
-Dentro de um processo há lock; entre processos, não.
+Dentro de um processo há lock; entre processos, só o `phone console` reserva o aparelho. O
+`phone send` **não** reserva nada, então dois `phone send` no mesmo serial ainda se atrapalham.
 
 Serial errado **não envia pelo aparelho errado** — devolve `unavailable` e recusa. Isso é
 proposital: o `DirectAdbRunner` sempre passa `-s <serial>`, mesmo com um aparelho só.
