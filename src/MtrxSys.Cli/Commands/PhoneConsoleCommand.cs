@@ -183,7 +183,7 @@ internal sealed class PhoneConsoleCommand(
                         {
                             case ModoLista.Editar: EditarTexto(); break;
                             case ModoLista.Cancelar: AnsiConsole.MarkupLine("[grey]cancelado.[/]"); break;
-                            case var m: LerTextos(somar: m == ModoLista.Acrescentar); break;
+                            case var m: LerTextos(serial, somar: m == ModoLista.Acrescentar); break;
                         }
                         Salvar(serial);
                         break;
@@ -215,7 +215,7 @@ internal sealed class PhoneConsoleCommand(
                         Salvar(serial);
                         break;
                     case "textos":
-                        LerTextos(somar: partes is [_, "+", ..]);
+                        LerTextos(serial, somar: partes is [_, "+", ..]);
                         Salvar(serial);
                         break;
                     case "ver":
@@ -267,7 +267,10 @@ internal sealed class PhoneConsoleCommand(
                         sair = true;
                         break;
                     case "sistema" or "s":
-                        await CarregarDoSistemaAsync(somar: partes is [_, "+", ..], ct);
+                        // PERGUNTA antes de substituir, como os menus 4 e 5 já faziam. Sem isto, um `s`
+                        // digitado por engano apagava uma lista curada e SALVAVA por cima — destrutivo,
+                        // silencioso e sem desfazer. O `+` explícito continua somando direto.
+                        await CarregarDoSistemaAsync(somar: partes is [_, "+", ..] || QuerAcrescentar(), ct);
                         Salvar(serial);
                         break;
                     case "gravar" or "g":
@@ -475,7 +478,16 @@ internal sealed class PhoneConsoleCommand(
         MostrarAlguns(rejeitados.Count, 10, i => $"[red]rejeitado:[/] {rejeitados[i].EscapeMarkup()}", " rejeitado(s)");
     }
 
-    private void LerTextos(bool somar)
+    /// <remarks>
+    /// 🔴 SALVA A CADA TEMPLATE, e não só no fim. O `Salvar` de quem chama só roda quando o bloco
+    /// INTEIRO termina, e o bloco só termina com a linha vazia extra do final. Quem colou três
+    /// templates e fechou a janela sem dar esse Enter perdia os três, mesmo tendo lido
+    /// "template N gravado" na tela — porque ali "gravado" era na memória. Medido com o operador em
+    /// 2026-08-05: estado com 16 contatos e ZERO templates depois de colar três.
+    /// Um template colado é a unidade de trabalho cara de refazer; é ela que define o ponto de
+    /// persistência, não o bloco.
+    /// </remarks>
+    private void LerTextos(string serial, bool somar)
     {
         if (!somar)
         {
@@ -495,6 +507,7 @@ internal sealed class PhoneConsoleCommand(
             if (texto is not null)
             {
                 _textos.Add(texto);
+                Salvar(serial);   // ver o remarks: "gravado" tem que significar EM DISCO
                 var linhas = texto.Count(c => c == '\n') + 1;
                 AnsiConsole.MarkupLine($"[green]template {_textos.Count} gravado[/] [grey]({linhas} linha(s))[/]");
             }
@@ -839,6 +852,22 @@ internal sealed class PhoneConsoleCommand(
                 "[yellow]dê alguns minutos antes de disparar[/][grey]: contato recém-criado precisa "
                 + "sincronizar pela conta Google até o WhatsApp do aparelho.[/]");
         }
+    }
+
+    /// <summary>Lista vazia: nada a proteger. Com conteúdo, pergunta, e o padrão (Enter) é o modo NÃO
+    /// destrutivo — mesma doutrina do <see cref="PerguntarModo"/>, que existe porque perder uma lista
+    /// carregada é caro e não tem desfazer.</summary>
+    private bool QuerAcrescentar()
+    {
+        if (_contatos.Count == 0)
+        {
+            return false;
+        }
+        AnsiConsole.MarkupLine($"[grey]já há {_contatos.Count} contato(s) na lista.[/]");
+        AnsiConsole.MarkupLine("  [bold]1[/] [grey]acrescentar (mantém o que já existe)[/]");
+        AnsiConsole.MarkupLine("  [bold]2[/] [red]apagar tudo[/] [grey]e trazer do sistema[/]");
+        AnsiConsole.Markup("[grey]escolha (Enter = acrescentar):[/] ");
+        return (Console.ReadLine()?.Trim() ?? "") is not ['2', ..];
     }
 
     /// <summary>Traz para a lista os contatos que o SISTEMA já tem (importados dos grupos pelo painel).</summary>
