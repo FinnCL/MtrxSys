@@ -50,11 +50,52 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         }
 
         // Sem digitação humana: o deep link entrega a mensagem pronta no campo e só resta tocar enviar.
-        if (!_opts.HumanTyping)
+        var resultado = !_opts.HumanTyping
+            ? await SendByDeepLinkAsync(digits, text, ct)
+            : await SendByTypingAsync(digits, text, ct);
+
+        // 🔴 FALHA DEIXA A TELA COMO ESTAVA, e "como estava" costuma ser um DIÁLOGO do WhatsApp — o
+        // "o número não está no WhatsApp" que aparece quando o deep link aponta pra quem não tem conta.
+        // Ele fica por cima de tudo, então o PRÓXIMO contato do lote abre atrás do diálogo e falha
+        // igual: uma falha isolada virava uma sequência de falhas, e o operador via o robô "travado"
+        // sem entender por quê. Relatado operando em 2026-08-05.
+        // Só no caminho de falha: no sucesso a conversa aberta é estado legítimo e mexer nela seria
+        // interferência à toa.
+        if (!resultado.Sent)
         {
-            return await SendByDeepLinkAsync(digits, text, ct);
+            await DispensarDialogoAsync(ct);
         }
-        return await SendByTypingAsync(digits, text, ct);
+        return resultado;
+    }
+
+    /// <summary>Devolve o aparelho a um estado neutro depois de uma falha, para o próximo contato do
+    /// lote não herdar um diálogo aberto na tela.</summary>
+    /// <remarks>
+    /// Dois BACK e não um: o "não está no WhatsApp" às vezes empilha o diálogo sobre uma conversa
+    /// meio aberta. O segundo BACK é inofensivo se o primeiro já resolveu — a tela inicial do WhatsApp
+    /// (ou a Home) é destino aceitável, já que o próximo envio abre a conversa por deep link de
+    /// qualquer forma.
+    /// <para>Best-effort de propósito: um erro aqui NÃO pode mascarar o erro de envio, que é o que o
+    /// operador precisa ler. Por isso engole a exceção e não altera o resultado.</para>
+    /// </remarks>
+    private async Task DispensarDialogoAsync(CancellationToken ct)
+    {
+#pragma warning disable CA1031 // recuperação best-effort: ver o remarks
+        try
+        {
+            await _adb.ShellAsync("input keyevent KEYCODE_BACK", ct);
+            await Task.Delay(400, ct);
+            await _adb.ShellAsync("input keyevent KEYCODE_BACK", ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // aparelho sumiu no meio da limpeza: o erro de envio ja explica o lote
+        }
+#pragma warning restore CA1031
     }
 
     private async Task<WhatsAppSendResult> SendByDeepLinkAsync(string digits, string text, CancellationToken ct)
