@@ -141,6 +141,7 @@ Runbooks (o "como fazer"):
 
 - **[Migrar para outro PC](docs/migrar-para-outro-pc.md)** — do zero ao ambiente rodando: o `instalar.cmd` (automático), o caminho na mão, e o que **não** vem no clone (senhas, banco, sessões, binários).
 - **[Aparelho físico, passo a passo](docs/aparelho-fisico-passo-a-passo.md)** — ligar um celular Android real e disparar por ele. Inclui as armadilhas medidas (cabo de carga, tela bloqueada, adb fora do PATH).
+- **[PC novo, do zero até o aparelho físico](docs/pc-novo-com-aparelho-fisico.md)** — a costura entre os dois anteriores: Docker + virtualização, .NET SDK, instalar o adb, e a tabela dos erros reais na ordem em que aparecem.
 
 Desenho (o "porquê"):
 

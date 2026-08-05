@@ -185,6 +185,22 @@ rem ---------------------------------------------------------------------------
 echo.
 echo [5/5] Subindo o sistema. A primeira vez leva de 2 a 5 minutos (build das imagens).
 echo.
+
+rem A imagem do emulador e construida por um servico separado, o waha-emulator-build, e
+rem so existe LOCALMENTE. O servico "waha" a referencia por nome e nao tem secao build,
+rem entao num PC limpo o Compose tenta BAIXAR "mtrxsys-waha-emulator:latest" do Docker Hub
+rem e falha com "pull access denied" antes de qualquer build rodar. Construir aqui, antes
+rem do up, faz a imagem existir e o erro sumir. Medido num PC realmente novo em 2026-08-05;
+rem nao aparece em maquina de dev porque la a imagem ja esta no cache.
+pushd "%RAIZ%"
+docker image inspect mtrxsys-waha-emulator:latest >nul 2>nul
+if not errorlevel 1 goto :emuladorpronto
+echo       Construindo a imagem do emulador (so na primeira vez)...
+docker compose build waha-emulator-build
+if errorlevel 1 echo       AVISO: o build do emulador falhou. Seguindo assim mesmo; o start.cmd reporta.
+:emuladorpronto
+popd
+
 call "%RAIZ%\start.cmd"
 if errorlevel 1 (
     call :fatal "O start.cmd falhou." "O motivo esta nas mensagens acima. Diagnostico util: docker compose logs api"
