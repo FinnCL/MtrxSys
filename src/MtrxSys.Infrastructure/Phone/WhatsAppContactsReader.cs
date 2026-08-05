@@ -73,13 +73,21 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
             return "phone inválido";
         }
 
-        // 1) Já está na agenda? Os DOIS formatos, pelo mesmo motivo do lookup acima — com um formato só,
-        //    o "já existe" falhava e criávamos DUPLICATA a cada disparo.
-        if (await LookupContactIdAsync(digits, ct) is not null
-            || await LookupContactIdAsync("%2B" + digits, ct) is not null)
+        // 1) Já está na agenda? A pergunta que vale é sobre a forma E.164, COM o "+": é a única que o
+        //    WhatsApp consegue resolver. Um contato gravado só com os dígitos crus existe pro Android
+        //    e é INVISÍVEL pro WhatsApp, que o marca como sem conta.
+        var comMais = await LookupContactIdAsync("%2B" + digits, ct) is not null;
+        if (comMais)
         {
             return "já existe";
         }
+
+        // 🔴 SÓ A FORMA CRUA EXISTE = REGISTRO ENVENENADO, de antes desta correção. Devolver
+        //    "já existe" aqui deixaria o aparelho permanentemente incapaz de alcançar essa pessoa, e
+        //    exigiria apagar contato a contato na mão. Seguimos e criamos a forma correta ao lado.
+        //    Sim, ficam duas entradas para o mesmo telefone; a antiga o WhatsApp já não enxergava, então
+        //    não é duplicata do ponto de vista dele. Curar sozinho vale o registro extra.
+        var cru = await LookupContactIdAsync(digits, ct) is not null;
 
         // 2) Cria o raw contact. Conta VAZIA: num aparelho COM conta Google o Android atribui à conta
         //    padrão sozinho e o contato sincroniza.
@@ -112,12 +120,28 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         {
             return $"não gravei o nome do contato {rid}: {Detail(no, ne)}";
         }
+        // 🔴 GRAVA EM E.164, COM O "+". Sem ele o valor é só uma sequência de 12-13 dígitos, e o
+        // Android/WhatsApp normalizam contra o país do CHIP: no Brasil o número nacional tem 10 ou 11
+        // dígitos, então "558498420730" não casa com nada e a normalização produz lixo. O WhatsApp
+        // sincroniza a agenda, não resolve aquele contato e o marca como SEM CONTA — de forma
+        // persistente, porque a resposta fica em cache. A partir daí o deep link responde "não tem
+        // WhatsApp" para uma pessoa que existe e está ativa.
+        //
+        // Diagnosticado em 2026-08-05: falhava com o 9º dígito E sem ele, o que descartava o formato
+        // do número e apontava pra o que era COMUM a todos — a forma como foram gravados.
+        //
+        // O próprio LookupContactIdAsync já documentava que o phone_lookup casa STRING e não número,
+        // e por isso procura nos dois formatos. Gravar no ambíguo contradizia o que a busca sabia.
         var (rc, outp, err) = await _adb.ShellAsync("content insert --uri content://com.android.contacts/data "
             + $"--bind raw_contact_id:i:{rid} --bind mimetype:s:vnd.android.cursor.item/phone_v2 "
-            + $"--bind data1:s:{digits}", ct);
-        return rc == 0
-            ? "ok"
-            : $"não gravei o telefone (contato {rid} ficou órfão na agenda): {Detail(outp, err)}";
+            + $"--bind data1:s:+{digits}", ct);
+        if (rc != 0)
+        {
+            return $"não gravei o telefone (contato {rid} ficou órfão na agenda): {Detail(outp, err)}";
+        }
+        // Distingue criar de CURAR: quem opera precisa saber que o aparelho tinha um registro que o
+        // WhatsApp não enxergava, porque isso explica as falhas anteriores daquele número.
+        return cru ? "ok (corrigido: havia um registro sem o +, invisível pro WhatsApp)" : "ok";
     }
 
     // Maior _id entre as linhas do content query — o raw contact recém-inserido.

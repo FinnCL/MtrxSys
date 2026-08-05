@@ -813,6 +813,18 @@ internal sealed class PhoneConsoleCommand(
         AnsiConsole.MarkupLine(
             $"vai gravar [bold]{_contatos.Count}[/] contato(s) na agenda do aparelho "
             + $"[grey](~{estimativaMin} min; sincroniza pra conta Google do aparelho)[/].");
+
+        // 🔴 O AVISO NÃO É BUROCRACIA. Número na forma errada (sem o 9º dígito, por exemplo) gravado na
+        // agenda faz o WhatsApp sincronizar, não achar conta e passar a responder "não tem WhatsApp"
+        // TODA VEZ para aquele número — inclusive quando a pessoa existe e está ativa. E não há como
+        // desfazer por aqui: o adb grava contato, não apaga. Fazer isso com uma lista inteira de
+        // origem duvidosa estraga o alcance do aparelho pra aquelas pessoas de forma persistente.
+        // Diagnosticado em 2026-08-05, depois de horas perseguindo um contato que existia e o app
+        // insistia em negar.
+        AnsiConsole.MarkupLine(
+            "[yellow]só faça isso com lista confiável.[/] [grey]número na forma errada gravado aqui faz "
+            + "o WhatsApp marcá-lo como \"sem conta\" de forma PERSISTENTE, mesmo para quem existe — "
+            + "e não dá pra desfazer pelo adb. Na dúvida, dispare primeiro e grave depois.[/]");
         AnsiConsole.Markup("[yellow]digite[/] [bold]sim[/] [yellow]para confirmar:[/] ");
         if (!string.Equals(Console.ReadLine()?.Trim(), "sim", StringComparison.OrdinalIgnoreCase))
         {
@@ -834,19 +846,24 @@ internal sealed class PhoneConsoleCommand(
             // Se um dia divergirem, o sintoma aqui é TUDO virar "falha" com o contato gravado do mesmo
             // jeito — por isso a mensagem crua vai no relatório, em vez de só o contador.
             var r = await phone.SaveContactAsync(c.Numero, c.Nome, ct);
-            switch (r)
+            // ⚠️ StartsWith e não igualdade: o sucesso pode vir qualificado ("ok (corrigido: …)"), e
+            // comparar exato transformaria uma gravação BEM SUCEDIDA em falha no relatório. Aconteceu
+            // ao acrescentar o aviso de registro curado, em 2026-08-05 — o mesmo acoplamento por texto
+            // que este trecho já documentava como frágil.
+            if (r.StartsWith("ok", StringComparison.OrdinalIgnoreCase))
             {
-                case "ok":
-                    criados++;
-                    AnsiConsole.MarkupLine(
-                        $"  [grey]{i + 1}/{_contatos.Count}[/] [green]criado[/] {c.Numero} {(c.Nome ?? "").EscapeMarkup()}");
-                    break;
-                case "já existe":
-                    jaTinha++;
-                    break;
-                default:
-                    falhas.Add($"{c.Numero}: {r}");
-                    break;
+                criados++;
+                AnsiConsole.MarkupLine(
+                    $"  [grey]{i + 1}/{_contatos.Count}[/] [green]criado[/] {c.Numero} "
+                    + $"{(c.Nome ?? "").EscapeMarkup()} {(r.Length > 2 ? $"[yellow]{r[2..].EscapeMarkup()}[/]" : "")}");
+            }
+            else if (r == "já existe")
+            {
+                jaTinha++;
+            }
+            else
+            {
+                falhas.Add($"{c.Numero}: {r}");
             }
         }
 
@@ -1125,6 +1142,20 @@ internal sealed class PhoneConsoleCommand(
                         AnsiConsole.MarkupLine(
                             $"[yellow]a lista tem esse contato na forma errada:[/] {contato.Numero} "
                             + $"[yellow]→[/] [bold]{alternativo}[/] [grey](corrija na origem)[/]");
+
+                        // 🔴 A agenda ficou com o número ERRADO, gravado logo antes da primeira
+                        // tentativa. Isso não é só informação faltando: o WhatsApp sincroniza a agenda,
+                        // não acha conta pra aquele número e passa a responder "não tem WhatsApp" toda
+                        // vez, mesmo para a pessoa que existe. Gravar aqui a forma que REALMENTE recebeu
+                        // é o que impede a agenda de continuar envenenando as próximas tentativas.
+                        // O errado continua lá (o adb não apaga contato por aqui), mas ao lado do certo.
+                        if (_agenda)
+                        {
+                            var corrigido = await phone.SaveContactAsync(alternativo, contato.Nome, ct);
+                            AnsiConsole.MarkupLine(
+                                $"[grey]agenda[/] {alternativo}: {corrigido.EscapeMarkup()} "
+                                + "[grey](a forma que funciona)[/]");
+                        }
                     }
                 }
 

@@ -620,8 +620,11 @@ internal sealed class DockerCliPhoneOrchestrator(
         }
         var (rc, outp, err) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "content", "insert", "--uri", "content://com.android.contacts/data",
+            // Grava em E.164, COM o "+": sem ele o Android/WhatsApp normalizam contra o país do chip,
+            // 12-13 dígitos não casam com número nacional brasileiro, e o contato acaba marcado como
+            // SEM CONTA em cache. Mesma correção do WhatsAppContactsReader, onde está o diagnóstico.
             "--bind", $"raw_contact_id:i:{rid}", "--bind", "mimetype:s:vnd.android.cursor.item/phone_v2",
-            "--bind", $"data1:s:{digits}");
+            "--bind", $"data1:s:+{digits}");
         return rc == 0
             ? "ok"
             : $"não gravei o telefone (contato {rid} ficou órfão na agenda): {Detail(outp, err)}";

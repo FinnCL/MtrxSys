@@ -68,6 +68,49 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         return resultado;
     }
 
+    /// <summary>Por que o campo de envio não apareceu: lê a tela e distingue "o WhatsApp respondeu que
+    /// este número não tem conta" de "a tela não respondeu".</summary>
+    /// <remarks>
+    /// 🔴 A mensagem antiga era "botão enviar não apareceu (o chat não abriu ou o texto não
+    /// preencheu)" — um OU que juntava duas causas com consertos opostos: uma é qualidade da lista,
+    /// a outra é o aparelho. O operador passou horas em 2026-08-05 sem conseguir distinguir, tentando
+    /// o mesmo número várias vezes porque o erro não dizia que o próprio WhatsApp já tinha respondido.
+    ///
+    /// <para>A resposta está NA TELA: quando o número não tem conta, o app mostra um diálogo dizendo
+    /// isso. Basta ler. Casar por TRECHO e em vários idiomas porque o texto exato muda com a versão e
+    /// com o idioma do aparelho, e um casamento exato quebraria em silêncio na próxima atualização.</para>
+    ///
+    /// <para>Na dúvida devolve a mensagem genérica: afirmar a causa errada é pior que admitir que não
+    /// se sabe — foi justamente o que custou as horas acima.</para>
+    /// </remarks>
+    private async Task<string> DiagnosticarChatNaoAbertoAsync(CancellationToken ct)
+    {
+        const string generico = "botão enviar não apareceu (o chat não abriu ou o texto não preencheu).";
+        var xml = await DumpUiAsync(ct);
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return generico;
+        }
+
+        // Trechos estáveis do aviso, sem acento e em minúsculas, pra sobreviver a variação de texto.
+        // ⚠️ SÓ pistas inequívocas. "convidar para o WhatsApp" foi tirado de propósito: essa palavra
+        // aparece em outras telas do app, e um falso positivo aqui afirma a causa errada COM
+        // CONFIANÇA — que é o defeito que este método existe pra corrigir. O diálogo de número sem
+        // conta sempre traz alguma variação de "não está no WhatsApp"; isso basta.
+        string[] pistas =
+        [
+            "nao esta no whatsapp", "não está no whatsapp",
+            "nao existe no whatsapp", "não existe no whatsapp",
+            "isn't on whatsapp", "is not on whatsapp", "not on whatsapp",
+        ];
+
+        var tela = xml.ToLowerInvariant();
+        return pistas.Any(p => tela.Contains(p, StringComparison.Ordinal))
+            ? "o WhatsApp respondeu que ESTE NÚMERO não tem conta. Não é o aparelho nem a conexão: "
+              + "é a forma do número ou o contato mesmo. Se o contato existe, confira o 9º dígito."
+            : generico;
+    }
+
     /// <summary>Devolve o aparelho a um estado neutro depois de uma falha, para o próximo contato do
     /// lote não herdar um diálogo aberto na tela.</summary>
     /// <remarks>
@@ -121,7 +164,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             var send = await PollNodeCenterAsync("com.whatsapp:id/send", _opts.WhatsAppOpenWaitMs, sct);
             if (send is null)
             {
-                return WhatsAppSendResult.Fail("botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
+                return WhatsAppSendResult.Fail(await DiagnosticarChatNaoAbertoAsync(sct));
             }
             await TapAsync(send.Value, sct);
             if (!await PollEntryClearedAsync(_opts.WhatsAppSendWaitMs, sct))
