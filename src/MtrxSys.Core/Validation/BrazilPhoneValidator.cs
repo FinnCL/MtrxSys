@@ -148,6 +148,49 @@ public sealed partial class BrazilPhoneValidator
 
     private const int BrazilCountryCode = 55;
 
+    /// <summary>A OUTRA forma do mesmo celular brasileiro: com o 9º dígito se veio sem, sem ele se veio
+    /// com. <c>null</c> quando não existe forma alternativa plausível.</summary>
+    /// <remarks>
+    /// 🔴 Existe porque o WhatsApp guarda a conta ora numa forma, ora na outra, conforme a época do
+    /// registro, e abrir a conversa pela forma errada faz o app responder "não tem WhatsApp" — um
+    /// contato BOM parece morto. Medido em 2026-08-05: num mesmo DDD 84, um número de 12 dígitos
+    /// entregou e outro falhou.
+    ///
+    /// <para>NÃO serve pra normalizar na entrada. Converter tudo pra 13 dígitos quebraria justamente
+    /// os que funcionam em 12 — não há como saber qual forma a conta usa sem tentar. O uso correto é
+    /// como SEGUNDA tentativa, depois de a primeira falhar.</para>
+    ///
+    /// <para>O 9 só é inserido quando o assinante começa em 6-9, a faixa histórica de celular. Fixo
+    /// começa em 2-5, e enfiar um 9 nele inventa um número que nunca existiu.</para>
+    /// </remarks>
+    public static string? AlternateBrazilianForm(string? phone)
+    {
+        var digits = new string([.. (phone ?? string.Empty).Where(char.IsAsciiDigit)]);
+        if (!digits.StartsWith("55", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var nacional = digits[2..];
+        if (nacional.Length < 10 || !ValidAreaCodes.Contains(nacional[..2]))
+        {
+            return null;
+        }
+
+        var outra = nacional.Length switch
+        {
+            11 when nacional[2] == '9' => "55" + nacional[..2] + nacional[3..],
+            10 when nacional[2] is >= '6' and <= '9' => "55" + nacional[..2] + "9" + nacional[2..],
+            _ => null,
+        };
+
+        // A alternativa passa pelo MESMO corte da entrada: gerar uma forma que o próprio sistema
+        // recusaria seria só trocar um número morto por outro.
+        return outra is not null && new BrazilPhoneValidator().IsPlausibleBrazilian("+" + outra)
+            ? outra
+            : null;
+    }
+
     /// <summary>
     /// Normaliza entrada DIGITADA pelo operador, de gente que ele conhece (o círculo de aquecimento,
     /// os participantes de um grupo que ele vai criar). Devolve null se não der — o chamador vira 400.

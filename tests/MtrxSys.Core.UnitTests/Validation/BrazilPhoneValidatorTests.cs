@@ -111,6 +111,33 @@ public sealed class BrazilPhoneValidatorTests
             esperado,
             $"'{e164}' é o formato que o console do aparelho cola e valida antes de gravar na agenda");
 
+    // ── A outra forma do mesmo celular ────────────────────────────────────────────────────────────
+    // O WhatsApp guarda a conta ora com o 9º dígito, ora sem, conforme a época do registro. Abrir a
+    // conversa pela forma errada faz o app dizer "não tem WhatsApp", e um contato BOM parece morto.
+    // Serve como SEGUNDA tentativa, nunca pra normalizar na entrada: em 2026-08-05, no mesmo DDD 84,
+    // um número de 12 dígitos entregou e outro falhou — converter tudo quebraria o que funciona.
+    [Theory]
+    [InlineData("558498420730", "5584998420730")]   // 12 -> 13, ganha o 9
+    [InlineData("5584998420730", "558498420730")]   // 13 -> 12, perde o 9
+    [InlineData("+55 84 9842-0730", "5584998420730")] // formatado: só os dígitos importam
+    public void AlternateBrazilianForm_troca_o_nono_digito(string entrada, string esperado) =>
+        BrazilPhoneValidator.AlternateBrazilianForm(entrada).Should().Be(esperado);
+
+    [Theory]
+    [InlineData("558432104567")]   // fixo (assinante começa em 3): inserir 9 inventaria um número
+    [InlineData("5500998420730")]  // DDD 00 não existe
+    [InlineData("+351912345678")]  // estrangeiro
+    [InlineData("5584")]           // curto demais
+    [InlineData("")]
+    public void AlternateBrazilianForm_devolve_null_quando_nao_ha_alternativa(string entrada) =>
+        BrazilPhoneValidator.AlternateBrazilianForm(entrada).Should().BeNull();
+
+    [Fact]
+    public void AlternateBrazilianForm_e_reversivel() =>
+        BrazilPhoneValidator.AlternateBrazilianForm(
+            BrazilPhoneValidator.AlternateBrazilianForm("558498420730"))
+            .Should().Be("558498420730", "ida e volta tem que devolver o original");
+
     // O bug que este teste guarda: colar os dígitos atrás de um "+" mandava número em formato
     // NACIONAL pro país errado, EM SILÊNCIO. "71991072835" (o jeito que sai de qualquer planilha)
     // virava "+71991072835" — e +7 é RÚSSIA, com 11 dígitos batendo o comprimento de lá. Esse número

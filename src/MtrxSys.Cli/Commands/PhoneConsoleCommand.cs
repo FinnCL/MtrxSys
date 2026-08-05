@@ -1073,6 +1073,24 @@ internal sealed class PhoneConsoleCommand(
             {
                 var (contato, variante, texto) = plano[i];
 
+                // 🔴 A MESMA PESSOA NAS DUAS FORMAS. Uma lista de fontes misturadas traz o mesmo
+                // contato com e sem o 9º dígito, e a dedup da colagem compara dígitos exatos, então os
+                // dois entram como contatos diferentes. Sem esta guarda, o de 12 falha, a segunda
+                // chance entrega pela forma de 13, e o contato de 13 — que está mais adiante no MESMO
+                // plano — entrega de novo. A pessoa recebe a campanha duas vezes, que é das piores
+                // coisas que se pode fazer com contato frio.
+                // O plano é um retrato tirado antes do laço, então remover de `_contatos` não basta:
+                // a checagem tem que ser aqui, contra o que já saiu NESTA execução.
+                var irmao = BrazilPhoneValidator.AlternateBrazilianForm(contato.Numero);
+                if (entregues.Contains(contato.Numero) || (irmao is not null && entregues.Contains(irmao)))
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[grey]({i + 1}/{plano.Count}) pulado[/] {contato.Numero} "
+                        + "[grey]— a mesma pessoa já recebeu neste lote, na outra forma do número.[/]");
+                    entregues.Add(contato.Numero);   // sai da lista junto: é duplicata, não pendência
+                    continue;
+                }
+
                 if (_agenda)
                 {
                     var saved = await phone.SaveContactAsync(contato.Numero, contato.Nome, ct);
@@ -1080,13 +1098,46 @@ internal sealed class PhoneConsoleCommand(
                 }
 
                 var r = await phone.SendWhatsAppMessageAsync(contato.Numero, texto, ct);
+
+                // 🔴 SEGUNDA CHANCE COM A OUTRA FORMA DO NÚMERO. O WhatsApp guarda a conta ora com o
+                // 9º dígito, ora sem, conforme a época do registro, e abrir a conversa pela forma
+                // errada faz o app responder "não tem WhatsApp": um contato BOM parece morto. Medido
+                // em 2026-08-05, no mesmo DDD 84 — um número de 12 dígitos entregou e outro falhou.
+                //
+                // Aqui e não na entrada: converter a lista toda pra 13 dígitos quebraria justamente os
+                // que funcionam em 12, e não há como saber qual forma a conta usa sem tentar.
+                //
+                // UMA tentativa a mais, nunca um laço: duas formas é diagnóstico, N formas é
+                // enumeração de números — o padrão que se quer evitar. Se as duas falharem, o número
+                // é morto de verdade.
+                var numeroUsado = contato.Numero;
+                if (!r.Sent && BrazilPhoneValidator.AlternateBrazilianForm(contato.Numero) is { } alternativo)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[grey]tentando a outra forma do número ({alternativo})…[/]");
+                    await Task.Delay(
+                        TimeSpan.FromSeconds(Random.Shared.Next(FalhaEsperaMin, FalhaEsperaMax + 1)), ct);
+                    var r2 = await phone.SendWhatsAppMessageAsync(alternativo, texto, ct);
+                    if (r2.Sent)
+                    {
+                        r = r2;
+                        numeroUsado = alternativo;
+                        AnsiConsole.MarkupLine(
+                            $"[yellow]a lista tem esse contato na forma errada:[/] {contato.Numero} "
+                            + $"[yellow]→[/] [bold]{alternativo}[/] [grey](corrija na origem)[/]");
+                    }
+                }
+
                 if (r.Sent)
                 {
                     enviados++;
                     seguidas = 0;   // sucesso zera: o disjuntor mede sequência, não total
                     entregues.Add(contato.Numero);
+                    // A forma que REALMENTE recebeu também entra, senão o irmão dela (mesma pessoa,
+                    // outro formato) passaria pela guarda lá em cima e receberia de novo.
+                    entregues.Add(numeroUsado);
                     AnsiConsole.MarkupLine(
-                        $"[green]({i + 1}/{plano.Count}) enviado[/] {contato.Numero} tpl {variante} "
+                        $"[green]({i + 1}/{plano.Count}) enviado[/] {numeroUsado} tpl {variante} "
                         + $"(entrega: {r.DeliveryStatus ?? "?"})");
                 }
                 else
