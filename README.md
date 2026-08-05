@@ -16,6 +16,7 @@ tests/ Core.UnitTests · Infrastructure.IntegrationTests · Dispatcher.Integrati
 Pré-requisito: **Docker Desktop** (`docker compose` v2+). Cada ambiente é uma stack de 6 containers (inclui um WAHA/Chromium); 10 ambientes ≈ 61 containers e vários GB de RAM — suba só os que usar. 1ª execução leva 2–5 min (builds); depois ~10s (cache).
 
 ```powershell
+instalar.cmd  # PC novo: clona (se preciso), confere Docker, cria .env e sobe. Só na 1ª vez
 start.cmd     # ambiente A, prod-like → http://localhost:5173
 dev.cmd       # ambiente A com HMR completo (front + dotnet watch)
 
@@ -138,7 +139,7 @@ vez (SMS de re-verificação num **SIM gateway** por API): **[docs/phone-primary
 
 Runbooks (o "como fazer"):
 
-- **[Migrar para outro PC](docs/migrar-para-outro-pc.md)** — do zero ao ambiente rodando: pré-requisitos, `.env`, subir, e o que **não** vem no clone (senhas, banco, sessões, binários).
+- **[Migrar para outro PC](docs/migrar-para-outro-pc.md)** — do zero ao ambiente rodando: o `instalar.cmd` (automático), o caminho na mão, e o que **não** vem no clone (senhas, banco, sessões, binários).
 - **[Aparelho físico, passo a passo](docs/aparelho-fisico-passo-a-passo.md)** — ligar um celular Android real e disparar por ele. Inclui as armadilhas medidas (cabo de carga, tela bloqueada, adb fora do PATH).
 
 Desenho (o "porquê"):

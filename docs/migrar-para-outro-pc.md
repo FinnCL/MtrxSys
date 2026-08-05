@@ -4,6 +4,32 @@ Passo a passo para sair do zero, num computador novo, e chegar no mesmo estado f
 
 ---
 
+## Caminho rápido: `instalar.cmd`
+
+O `instalar.cmd` na raiz faz os passos 2 a 5 sozinho. Ele confere o git, clona se precisar, confere
+o Docker (e **abre o Docker Desktop** se estiver fechado, esperando até 3 minutos), cria o `.env` com
+uma chave JWT aleatória de 64 caracteres, avisa se alguma porta está ocupada e chama o `start.cmd`.
+
+Se você **já clonou**, é só dar duplo clique nele. Se **ainda não clonou**, baixe só esse arquivo
+numa pasta vazia e rode; ele clona o projeto do lado e continua:
+
+```powershell
+irm https://raw.githubusercontent.com/FinnCL/MtrxSys/main/instalar.cmd -OutFile instalar.cmd
+.\instalar.cmd
+```
+
+Pré-requisitos que ele **não** instala por você: **Docker Desktop** (obrigatório) e **Git** (só no
+caso de ainda não ter clonado). Ele avisa com o link se faltar algum.
+
+> ⚠️ Rode num PC que **ainda não tem** o MtrxSys. O nome do projeto do Compose vem do nome da pasta,
+> então clonar um segundo `MtrxSys` na mesma máquina faz os dois brigarem pelos mesmos containers, e
+> quem subir por último recria os do outro com o próprio `.env`. Medido, não suposto.
+
+O resto deste documento é o mesmo caminho na mão, e continua valendo para entender o que o script faz
+e para consertar quando algo sair do previsto.
+
+---
+
 ## A ideia que faz o resto ficar óbvio
 
 **O código viaja. O estado, não.**
