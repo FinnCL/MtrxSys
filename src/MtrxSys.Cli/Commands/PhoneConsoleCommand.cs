@@ -72,6 +72,12 @@ internal sealed class PhoneConsoleCommand(
     /// números diferentes pra ela só dariam a quem opera mais uma coisa pra lembrar.</summary>
     private const int LimiteFalhasSeguidas = 3;
 
+    /// <summary>Espera depois de uma FALHA, em segundos. Curta porque nada foi enviado, mas não zero
+    /// porque abrir conversas em rajada para números inexistentes é o padrão de um bot enumerando.
+    /// Mesmo intervalo que o Dispatcher usa para operações que não enviam.</summary>
+    private const int FalhaEsperaMin = 8;
+    private const int FalhaEsperaMax = 21;
+
     /// <summary>Stateless, então uma instância serve. Valida o que é COLADO — ver ParseContato.</summary>
     private static readonly BrazilPhoneValidator Telefones = new();
 
@@ -1111,8 +1117,19 @@ internal sealed class PhoneConsoleCommand(
 
                 if (i < plano.Count - 1)
                 {
-                    var espera = Random.Shared.Next(_min, _max + 1);
-                    AnsiConsole.MarkupLine($"[grey]aguardando {espera}s antes do próximo…  (Ctrl+C interrompe)[/]");
+                    // 🔴 FALHA NÃO É ENVIO. Nada saiu, então esperar os 150-360s do ritmo normal é
+                    // pagar o preço do anti-ban por uma mensagem que não existiu: um lote com cinco
+                    // números mortos custava meia hora só de espera por nada.
+                    // Mas NÃO é zero. Abrir conversa atrás de conversa para números que não existem é
+                    // exatamente o padrão de um bot enumerando números, e isso é sinal forte de ban.
+                    // 8-21s é o mesmo intervalo que o DispatchEngine já usa para operações que NÃO
+                    // enviam (o check-exists); reusado aqui de propósito, em vez de inventar um número.
+                    var (min, max) = r.Sent ? (_min, _max) : (FalhaEsperaMin, FalhaEsperaMax);
+                    var espera = Random.Shared.Next(min, max + 1);
+                    AnsiConsole.MarkupLine(
+                        r.Sent
+                            ? $"[grey]aguardando {espera}s antes do próximo…  (Ctrl+C interrompe)[/]"
+                            : $"[grey]nada foi enviado, então só {espera}s antes do próximo…  (Ctrl+C interrompe)[/]");
                     await Task.Delay(TimeSpan.FromSeconds(espera), ct);
                 }
             }
