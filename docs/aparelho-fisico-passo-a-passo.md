@@ -69,7 +69,18 @@ como-fazer.
    | deep link (`Phone__HumanTyping=false`) | ✅ | ❌ |
 
    Sem o IME você fica preso entre perder os emoji ou perder o "digitando…". Com ele, os dois
-   funcionam juntos. Com o celular plugado:
+   funcionam juntos.
+
+   **Com o celular plugado, um comando resolve** (e ele instala o `platform-tools` do passo 8 se
+   ainda faltar, então serve como passo único num PC novo):
+
+   ```
+   tools\preparar-aparelho.cmd
+   ```
+
+   Com mais de um celular, escolha pelo serial: `tools\preparar-aparelho.cmd RQ8WB048RFW`.
+
+   Na mão, se preferir:
 
    ```
    adb install ADBKeyboard.apk
@@ -79,6 +90,8 @@ como-fazer.
 
    O APK vem do projeto **ADB Keyboard** (`senzhk/ADBKeyBoard` no GitHub). O terceiro comando tem que
    listar `com.android.adbkeyboard`, que é exatamente o que o código procura.
+   ⚠️ O APK legítimo tem só **17 KB** (é um IME sem recursos gráficos). Não conclua que o download
+   falhou por ele ser pequeno; página de erro se reconhece pelo conteúdo, não pelo tamanho.
 
    ⚠️ **Habilite, mas NUNCA defina como teclado padrão.** Ele não desenha teclas, só recebe texto por
    broadcast: como padrão, o teclado **some da tela** do celular e você não consegue mais digitar nele
