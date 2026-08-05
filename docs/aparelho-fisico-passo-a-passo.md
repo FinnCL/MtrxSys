@@ -12,6 +12,13 @@ como-fazer.
 
 ---
 
+> ⚠️ **Os blocos deste runbook são PowerShell** (`$env:`, `&`, `Invoke-WebRequest`). Colados no
+> Prompt de Comando eles dão `'$env:' não é reconhecido como um comando interno`, um erro por linha.
+> Confira o prompt: `PS C:\...>` é PowerShell, `C:\...>` é `cmd`. Para trocar sem abrir outra janela,
+> digite `powershell` e Enter.
+
+---
+
 ## A. No celular (uma vez por aparelho)
 
 1. **Colocar o chip** no aparelho.
@@ -34,9 +41,53 @@ como-fazer.
 
 ## B. No computador (uma vez)
 
-8. Ter o **adb** (`platform-tools` do Android SDK).
-   ⚠️ Ele **não entra no PATH** por padrão no Windows. Anote o caminho completo, ex.:
-   `C:\Users\<voce>\AppData\Local\Android\Sdk\platform-tools\adb.exe`
+8. Ter o **adb** (`platform-tools` do Android SDK). Não tem instalador: é um zip que você extrai.
+   No `cmd`:
+   ```
+   curl -L -o "%TEMP%\platform-tools.zip" https://dl.google.com/android/repository/platform-tools-latest-windows.zip
+   if not exist "%LOCALAPPDATA%\Android\Sdk" mkdir "%LOCALAPPDATA%\Android\Sdk"
+   tar -xf "%TEMP%\platform-tools.zip" -C "%LOCALAPPDATA%\Android\Sdk"
+   "%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe" version
+   ```
+   ⚠️ Ele **não entra no PATH** por padrão no Windows. Extraia nesse caminho exato:
+   `C:\Users\<voce>\AppData\Local\Android\Sdk\platform-tools\adb.exe`. É um dos lugares que o
+   `phone-console.ps1` procura sozinho, então ali você não precisa configurar nada. Em qualquer outro
+   lugar, passe `-AdbPath` ou defina `Phone__AdbPath`.
+
+   E o **.NET SDK 10** também é obrigatório para o console (passo 13 compila o `mtrx.exe` com ele).
+   Do zero num PC limpo, incluindo Docker e virtualização:
+   [pc-novo-com-aparelho-fisico.md](pc-novo-com-aparelho-fisico.md).
+8b. **ADB Keyboard** — obrigatório se as mensagens tiverem **acento ou emoji**.
+
+   Existem três canais de digitação, e o driver escolhe o melhor disponível
+   (`WhatsAppUiDriver.ResolveTypingChannelAsync`):
+
+   | Canal | Digita acento e emoji | Destinatário vê "digitando…" |
+   |---|---|---|
+   | **IME (ADB Keyboard)** | ✅ | ✅ |
+   | `input text` (padrão do Android) | ❌ | ✅ |
+   | deep link (`Phone__HumanTyping=false`) | ✅ | ❌ |
+
+   Sem o IME você fica preso entre perder os emoji ou perder o "digitando…". Com ele, os dois
+   funcionam juntos. Com o celular plugado:
+
+   ```
+   adb install ADBKeyboard.apk
+   adb shell ime enable com.android.adbkeyboard/.AdbIME
+   adb shell ime list -s
+   ```
+
+   O APK vem do projeto **ADB Keyboard** (`senzhk/ADBKeyBoard` no GitHub). O terceiro comando tem que
+   listar `com.android.adbkeyboard`, que é exatamente o que o código procura.
+
+   ⚠️ **Habilite, mas NUNCA defina como teclado padrão.** Ele não desenha teclas, só recebe texto por
+   broadcast: como padrão, o teclado **some da tela** do celular e você não consegue mais digitar nele
+   à mão — e o sintoma ("o teclado sumiu") não aponta pra cá. Não é preciso: o driver seleciona o IME
+   só em volta da digitação e **restaura o teclado anterior** depois (`SelectTypingImeAsync`).
+
+   O sistema **não** instala esse APK sozinho, por decisão explícita: instalar aplicativo à revelia num
+   celular de uso real é invasivo.
+
 9. Usar **cabo de DADOS**, não de carga.
    **Teste rápido:** o Explorador de Arquivos do Windows precisa abrir o celular. Se não abrir, o
    cabo não transfere dados e o adb não tem chance.
@@ -98,7 +149,20 @@ como-fazer.
 
 ## D. Console interativo (lista de contatos + variantes de texto)
 
-O `phone send` resolve uma mensagem. Para uma **lista**, existe o console:
+O `phone send` resolve uma mensagem. Para uma **lista**, existe o console.
+
+> **Traz do sistema, e grava sem disparar.** Duas ações resolvem o fluxo "importei no painel, quero no
+> aparelho": **`sistema`** (ou `s`) traz os contatos que o painel importou dos grupos, perguntando o
+> grupo; **`gravar`** (ou `g`) grava a lista inteira na agenda do aparelho **sem enviar nada**.
+> Gravar antes é melhor que deixar o `enviar` gravar: ele grava 2s antes de cada mensagem, e o contato
+> ainda precisa descer pela conta Google até o WhatsApp do aparelho (é a mesma espera de 180s que o
+> `DispatchEngine` faz). Grave o lote, espere alguns minutos, dispare depois.
+>
+> ⚠️ O console **não expande spintax**. `{a|b}` chega literal ao destinatário; só o `{nome}` é
+> substituído. Variação aqui se faz com **vários templates**, e cada contato sorteia um. Colar spintax
+> agora dispara um aviso na hora.
+
+
 
 ```powershell
 tools\phone-console.cmd

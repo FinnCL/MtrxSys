@@ -8,6 +8,21 @@ using Spectre.Console.Cli;
 
 Console.OutputEncoding = Encoding.UTF8;
 
+// A ENTRADA também, e não só a saída. Sem isto o `Console.ReadLine` lê pela página de código do
+// console (850/437 no Windows pt-BR) e todo caractere que não existe lá vira "?" NA LEITURA — perda
+// de dado silenciosa, num console cujo uso principal é COLAR texto com emoji e acento. A saída em
+// UTF-8 sozinha é pior que nada: mascara o problema, porque o que sobrou aparece bonito.
+// Try/catch porque `SetConsoleCP` falha quando não há console de verdade (stdin redirecionado, pipe,
+// serviço). Aí não há colagem humana pra proteger, e o padrão serve.
+try
+{
+    Console.InputEncoding = Encoding.UTF8;
+}
+catch (IOException)
+{
+    // sem console interativo: segue com o padrão
+}
+
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
 {

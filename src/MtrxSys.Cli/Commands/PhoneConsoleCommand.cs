@@ -2,10 +2,13 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using MtrxSys.Cli.Infrastructure;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Validation;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -26,9 +29,16 @@ namespace MtrxSys.Cli.Commands;
 /// diferentes operam dois celulares em paralelo sem se enxergar. Duas janelas no MESMO serial, não:
 /// o <c>uiautomator dump</c> grava num arquivo fixo dentro do aparelho e uma leria a tela da outra.</para>
 /// </remarks>
+/// <remarks>
+/// <para>O <c>IServiceScopeFactory</c> em vez do <c>IContactRepository</c> direto NÃO é preciosismo: o
+/// repositório é Scoped e o <c>TypeResolver</c> do CLI resolve do provider RAIZ, então injetá-lo aqui
+/// o tornaria cativo — um <c>DbContext</c> vivo pelas HORAS que o console fica aberto, segurando
+/// conexão e acumulando change tracker. Escopo curto por consulta é o certo.</para>
+/// </remarks>
 internal sealed class PhoneConsoleCommand(
     IPhoneOrchestrator phone,
     IOptions<PhoneOptions> options,
+    IServiceScopeFactory escopos,
     CancellationTokenProvider cancellation) : AsyncCommand<PhoneConsoleCommand.Settings>
 {
     internal sealed class Settings : CommandSettings
@@ -56,6 +66,12 @@ internal sealed class PhoneConsoleCommand(
     }
 
     private const string TokenNome = "{nome}";
+
+    /// <summary>Stateless, então uma instância serve. Valida o que é COLADO — ver ParseContato.</summary>
+    private static readonly BrazilPhoneValidator Telefones = new();
+
+    /// <summary>Spintax do painel: <c>{a|b}</c>. Aqui NÃO é expandido, e é isso que o aviso conta.</summary>
+    private static readonly Regex SpintaxRx = new(@"\{[^{}]*\|[^{}]*\}", RegexOptions.Compiled);
 
     private readonly List<Contato> _contatos = [];
     private readonly List<string> _textos = [];
@@ -250,7 +266,27 @@ internal sealed class PhoneConsoleCommand(
                     case "sair" or "exit" or "quit":
                         sair = true;
                         break;
+                    case "sistema" or "s":
+                        await CarregarDoSistemaAsync(somar: partes is [_, "+", ..], ct);
+                        Salvar(serial);
+                        break;
+                    case "gravar" or "g":
+                        await GravarAgendaAsync(ct);
+                        break;
                     default:
+                        // 🔴 UMA LINHA EM BRANCO NO MEIO DA LISTA ENCERRA O BLOCO (ver FimDoBloco), e as
+                        // linhas seguintes caem AQUI, uma a uma, como "comando desconhecido". Medido com
+                        // o operador: 31 números colados, bloco cortado, e a mensagem genérica não
+                        // ligava uma coisa à outra. Reconhecer que o "comando" é um telefone custa uma
+                        // linha e transforma quinze erros crípticos num diagnóstico.
+                        if (ParecemDigitosDeTelefone(linha))
+                        {
+                            AnsiConsole.MarkupLine(
+                                "[yellow]isso parece um telefone, não um comando.[/] [grey]uma linha em "
+                                + "branco no meio da lista encerra o bloco. use[/] [bold]contatos +[/] "
+                                + "[grey]para SOMAR o resto sem perder o que já entrou.[/]");
+                            break;
+                        }
                         AnsiConsole.MarkupLine($"[red]comando desconhecido:[/] {partes[0].EscapeMarkup()}. digite [bold]ajuda[/].");
                         break;
                 }
@@ -303,6 +339,16 @@ internal sealed class PhoneConsoleCommand(
     /// console travou.</summary>
     private static bool FimDoBloco(string? linha) =>
         linha is null || linha.Trim() is "" or "." or "fim";
+
+    /// <summary>A linha digitada no menu parece um telefone? Usado só para dar um diagnóstico melhor
+    /// que "comando desconhecido" quando o bloco de contatos foi cortado por uma linha em branco.</summary>
+    private static bool ParecemDigitosDeTelefone(string linha)
+    {
+        var digitos = linha.Count(char.IsDigit);
+        // 10+ dígitos cobre do fixo com DDD ao E.164 completo, e nenhum comando do console tem
+        // isso. "intervalo 150 360" tem 6, "teto 30" tem 2 — não caem aqui.
+        return digitos >= 10;
+    }
 
     /// <summary>Lê UMA variante, que pode ter várias linhas. Linha vazia fecha a variante; "fim" (ou o
     /// fim da entrada) encerra tudo.</summary>
@@ -360,9 +406,28 @@ internal sealed class PhoneConsoleCommand(
 
         // 12-13 = 55 + DDD + número (legado sem o 9º dígito dá 12). Fora disso é DDD faltando ou
         // dígito sobrando — o mesmo erro que quase mandou "55921404487" em 2026-07-29.
-        return numero.Length is < 12 or > 13
-            ? (null, $"{numero.Length} dígitos, esperado 12 ou 13")
-            : (new Contato(numero, string.IsNullOrWhiteSpace(nome) ? null : nome), null);
+        if (numero.Length is < 12 or > 13)
+        {
+            return (null, $"{numero.Length} dígitos, esperado 12 ou 13");
+        }
+
+        // 🔴 COMPRIMENTO CERTO NÃO É NÚMERO CERTO. "5537368544314" tem 13 dígitos e DDD que existe,
+        // mas o dígito depois do DDD não é 9 — não é celular brasileiro. Um caso IGUAL (um número da
+        // Moldávia) passou por checagem só de comprimento em 2026-07-27, virou contato ativo, ganhou
+        // entrada na agenda Google e foi enfileirado; só não recebeu porque alguém olhou a lista à mão.
+        //
+        // IsPlausibleBrazilian e NÃO o Validate estrito: o legado de 12 dígitos, SEM o 9º, é o caso
+        // normal na base fria, e exigir validade de hoje já fez um grupo inteiro importar zero contatos.
+        //
+        // Só vale para o que é COLADO. Contato vindo do banco (comando `sistema`) não passa por aqui de
+        // propósito: ele veio do WhatsApp, que não rotearia número inexistente, e revalidar formato ali
+        // descartaria contato bom. Rigor se calibra pela origem do dado.
+        if (!Telefones.IsPlausibleBrazilian("+" + numero))
+        {
+            return (null, "não parece um celular brasileiro (confira o 55, o DDD e o 9)");
+        }
+
+        return (new Contato(numero, string.IsNullOrWhiteSpace(nome) ? null : nome), null);
     }
 
     private void LerContatos(bool somar)
@@ -441,7 +506,42 @@ internal sealed class PhoneConsoleCommand(
 
         AnsiConsole.MarkupLine(
             $"[green]{_textos.Count - antes}[/] template(s) neste bloco; total [bold]{_textos.Count}[/].");
+        AvisarSpintax();
         AvisarNaoDigitaveis();
+    }
+
+    /// <summary>Aponta spintax colada num console que NÃO a expande.</summary>
+    /// <remarks>
+    /// O painel expande <c>{a|b}</c> (SpintaxExpander); aqui a ÚNICA substituição é o
+    /// <see cref="TokenNome"/>. Sem este aviso, o texto é aceito em silêncio e o destinatário recebe
+    /// literalmente <c>{Oi|E aí}</c>, com chaves e barra — descoberto por leitura, não por teste, e a
+    /// única razão de ninguém ter recebido assim é que o operador perguntou antes de disparar.
+    /// A variação aqui se faz com VÁRIOS templates: cada contato sorteia um.
+    /// </remarks>
+    private void AvisarSpintax()
+    {
+        var comSpintax = _textos
+            .Select((t, i) => (Indice: i + 1, Achados: SpintaxRx.Matches(t)))
+            .Where(x => x.Achados.Count > 0)
+            .ToList();
+        if (comSpintax.Count == 0)
+        {
+            return;
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[yellow]atenção:[/] {comSpintax.Count} template(s) têm [bold]{{a|b}}[/], e este console "
+            + "[bold]não expande[/] spintax (só o " + TokenNome + ").");
+        foreach (var (indice, achados) in comSpintax)
+        {
+            var amostra = string.Join(" ", achados.Take(3).Select(m => m.Value));
+            AnsiConsole.MarkupLine(
+                $"  [yellow]template {indice}:[/] {amostra.EscapeMarkup()}"
+                + (achados.Count > 3 ? $" [grey](+{achados.Count - 3})[/]" : ""));
+        }
+        AnsiConsole.MarkupLine(
+            "[grey]do jeito que está, o contato recebe as chaves e a barra. escreva cada variação como "
+            + "um template separado — cada contato sorteia um.[/]");
     }
 
     /// <summary>Aponta o que o `input text` do Android não digita, no momento em que o texto é colado.
@@ -652,6 +752,147 @@ internal sealed class PhoneConsoleCommand(
             return false;
         }
         return true;
+    }
+
+    // ── Agenda e banco ───────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Grava na agenda do aparelho TODOS os contatos carregados, sem enviar nada.</summary>
+    /// <remarks>
+    /// <para>O <c>enviar</c> já grava, mas DOIS SEGUNDOS antes de cada mensagem — tarde demais para a
+    /// cadeia anti-463. O contato precisa descer pela conta Google até o WhatsApp do aparelho; o
+    /// <c>DispatchEngine</c> reconhece isso esperando <c>GraceSeconds</c> (180s) depois de criar.</para>
+    /// <para>Separando a ação, você grava o lote inteiro, deixa sincronizar, e dispara depois com a
+    /// agenda pronta — em vez de pagar a espera no meio do lote. É também o modo de usar o console SÓ
+    /// como sincronizador, sem disparar por ele.</para>
+    /// <para>Gravar é idempotente (<c>SaveContactAsync</c> devolve "já existe"), então repetir é
+    /// seguro e barato.</para>
+    /// </remarks>
+    private async Task GravarAgendaAsync(CancellationToken ct)
+    {
+        if (_contatos.Count == 0)
+        {
+            AnsiConsole.MarkupLine(
+                "[red]sem contatos.[/] use [bold]sistema[/] (traz do banco) ou [bold]contatos[/] (cola a lista).");
+            return;
+        }
+        if (!await AparelhoPronto(ct))
+        {
+            return;
+        }
+
+        var criados = 0;
+        var jaTinha = 0;
+        var falhas = new List<string>();
+
+        AnsiConsole.MarkupLine($"gravando [bold]{_contatos.Count}[/] contato(s) na agenda do aparelho...");
+        foreach (var c in _contatos)
+        {
+            var r = await phone.SaveContactAsync(c.Numero, c.Nome, ct);
+            switch (r)
+            {
+                case "ok":
+                    criados++;
+                    AnsiConsole.MarkupLine($"  [green]criado[/] {c.Numero} {(c.Nome ?? "").EscapeMarkup()}");
+                    break;
+                case "já existe":
+                    jaTinha++;
+                    break;
+                default:
+                    falhas.Add($"{c.Numero}: {r}");
+                    break;
+            }
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[green]{criados}[/] criado(s), [grey]{jaTinha} já estava(m) na agenda[/]"
+            + (falhas.Count > 0 ? $", [red]{falhas.Count} falha(s)[/]" : "") + ".");
+        MostrarAlguns(falhas.Count, 10, i => $"[red]falhou:[/] {falhas[i].EscapeMarkup()}", " falha(s)");
+
+        if (criados > 0)
+        {
+            // Não é enfeite: é o MESMO motivo do Defer de 180s do DispatchEngine. Disparar agora para
+            // um contato recém-criado é disparar antes de o WhatsApp do aparelho conhecê-lo.
+            AnsiConsole.MarkupLine(
+                "[yellow]dê alguns minutos antes de disparar[/][grey]: contato recém-criado precisa "
+                + "sincronizar pela conta Google até o WhatsApp do aparelho.[/]");
+        }
+    }
+
+    /// <summary>Traz para a lista os contatos que o SISTEMA já tem (importados dos grupos pelo painel).</summary>
+    /// <remarks>
+    /// <para>Escopo curto por consulta — ver a nota do <c>IServiceScopeFactory</c> no topo da classe.</para>
+    /// <para>Vem pelo <see cref="ContactFilter"/> padrão, que já esconde descartados e opt-out: montar
+    /// lista com <c>ListAllPhoneStatusAsync</c> ofereceria de volta quem pediu para SAIR.</para>
+    /// <para>Estes contatos NÃO passam pelo <c>ParseContato</c>: vieram do WhatsApp, que não rotearia
+    /// número inexistente, e revalidar formato aqui descartaria o celular legado de 8 dígitos — o erro
+    /// que já fez um grupo inteiro importar zero. Dedup continua valendo, contra o que já está na lista.</para>
+    /// </remarks>
+    private async Task CarregarDoSistemaAsync(bool somar, CancellationToken ct)
+    {
+        using var escopo = escopos.CreateScope();
+        var repo = escopo.ServiceProvider.GetRequiredService<IContactRepository>();
+
+        IReadOnlyList<ContactGroupTag> grupos;
+        try
+        {
+            grupos = await repo.ListGroupTagsAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // O banco é do stack em Docker; console aberto com os containers no chão é rotina. Dizer o
+            // que houve evita o diagnóstico virar "o comando não funciona".
+            AnsiConsole.MarkupLine($"[red]não consegui ler o banco:[/] {ex.Message.EscapeMarkup()}");
+            AnsiConsole.MarkupLine("[grey]os containers estão no ar? (start.cmd)[/]");
+            return;
+        }
+
+        string? grupo = null;
+        if (grupos.Count > 0)
+        {
+            var t = new Table().Border(TableBorder.Rounded).AddColumn("n").AddColumn("grupo").AddColumn("contatos");
+            t.AddRow("[bold]0[/]", "[bold]todos[/]", grupos.Sum(g => g.Count).ToString(CultureInfo.InvariantCulture));
+            for (var i = 0; i < grupos.Count; i++)
+            {
+                t.AddRow(
+                    $"[bold]{i + 1}[/]",
+                    grupos[i].GroupTag.EscapeMarkup(),
+                    grupos[i].Count.ToString(CultureInfo.InvariantCulture));
+            }
+            AnsiConsole.Write(t);
+            AnsiConsole.Markup("[grey]número do grupo (Enter = todos):[/] ");
+            var escolha = Console.ReadLine()?.Trim();
+            if (int.TryParse(escolha, out var n) && n >= 1 && n <= grupos.Count)
+            {
+                grupo = grupos[n - 1].GroupTag;
+            }
+        }
+
+        var doBanco = await repo.ListByFilterAsync(new ContactFilter(GroupTag: grupo), ct);
+        if (!somar)
+        {
+            _contatos.Clear();
+        }
+
+        var jaTem = _contatos.Select(c => c.Numero).ToHashSet(StringComparer.Ordinal);
+        var trazidos = 0;
+        var repetidos = 0;
+        foreach (var c in doBanco)
+        {
+            var digitos = new string([.. c.Phone.E164.Where(char.IsDigit)]);
+            if (!jaTem.Add(digitos))
+            {
+                repetidos++;
+                continue;
+            }
+            _contatos.Add(new Contato(digitos, string.IsNullOrWhiteSpace(c.Name) ? null : c.Name));
+            trazidos++;
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[green]{trazidos}[/] contato(s) do sistema"
+            + (grupo is null ? "" : $" [grey](grupo {grupo.EscapeMarkup()})[/]")
+            + $"; lista agora tem [bold]{_contatos.Count}[/]."
+            + (repetidos > 0 ? $" [grey]{repetidos} já estava(m) na lista.[/]" : ""));
     }
 
     // ── Envio ────────────────────────────────────────────────────────────────────────────────────
@@ -883,6 +1124,10 @@ internal sealed class PhoneConsoleCommand(
             _contatos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_contatos.Count}[/] na lista");
         t.AddRow("[bold]5[/]", "templates",
             _textos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_textos.Count}[/] template(s)");
+        t.AddEmptyRow();
+        // Letras porque os dígitos acabaram, e renumerar 1..9 quebraria a memória de quem já usa.
+        t.AddRow("[bold]s[/]", "sistema", "[grey]traz os contatos importados no painel[/]");
+        t.AddRow("[bold]g[/]", "gravar", "[grey]grava a lista na agenda do aparelho, sem enviar[/]");
         t.AddEmptyRow();
         t.AddRow("[bold]6[/]", "ver", "[grey]confere o que está carregado[/]");
         t.AddRow("[bold]7[/]", "previa", "[grey]quem recebe qual texto[/]");
@@ -1209,6 +1454,8 @@ internal sealed class PhoneConsoleCommand(
     private static void Comandos()
     {
         var t = new Table().Border(TableBorder.Rounded).AddColumn("comando").AddColumn("o que faz");
+        t.AddRow("sistema [grey]| sistema +[/]", "traz os contatos do banco (substitui | soma). pergunta o grupo");
+        t.AddRow("gravar", "grava a lista na agenda do aparelho, SEM enviar nada");
         t.AddRow("contatos [grey]| contatos +[/]", "cola a lista (substitui | soma). formato: numero ou numero;nome");
         t.AddRow("textos [grey]| textos +[/]", $"cola os templates (substitui | soma). {TokenNome} vira o nome do contato");
         t.AddRow("ver", "mostra a lista, os templates e os ajustes atuais");

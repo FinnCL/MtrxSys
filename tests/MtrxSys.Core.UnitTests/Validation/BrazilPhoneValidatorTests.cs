@@ -93,6 +93,24 @@ public sealed class BrazilPhoneValidatorTests
     public void IsPlausibleBrazilian_recusa_lixo(string junk) =>
         _validator.IsPlausibleBrazilian(junk).Should().BeFalse();
 
+    // ── O contrato de que o console do aparelho depende ───────────────────────────────────────────
+    // O `ParseContato` (PhoneConsoleCommand) monta "+" + dígitos e pergunta AQUI. Antes ele conferia
+    // só o COMPRIMENTO (12 ou 13), e comprimento certo não é número certo: "+5537368544314" tem 13
+    // dígitos e DDD 37, que existe, mas o dígito depois do DDD não é 9. Um caso da mesma forma (um
+    // número da Moldávia) passou por checagem de comprimento em 2026-07-27 e chegou à fila de disparo.
+    // Estes casos existem pra que ninguém "simplifique" a validação de volta pra um Length.
+    [Theory]
+    [InlineData("+5571993836443", true)]   // 13 dígitos, celular moderno com o 9
+    [InlineData("+557199383644", true)]    // 12 dígitos, legado sem o 9 — o caso NORMAL na base fria
+    [InlineData("+5537368544314", false)]  // 13 dígitos, DDD real, mas sem o 9 no lugar certo
+    [InlineData("+9999999999999", false)]  // 13 dígitos e nada mais
+    [InlineData("+5500993836443", false)]  // DDD 00 não existe
+    [InlineData("+1234567890123", false)]  // 13 dígitos sem o 55 na frente
+    public void IsPlausibleBrazilian_e_o_corte_que_o_console_usa(string e164, bool esperado) =>
+        _validator.IsPlausibleBrazilian(e164).Should().Be(
+            esperado,
+            $"'{e164}' é o formato que o console do aparelho cola e valida antes de gravar na agenda");
+
     // O bug que este teste guarda: colar os dígitos atrás de um "+" mandava número em formato
     // NACIONAL pro país errado, EM SILÊNCIO. "71991072835" (o jeito que sai de qualquer planilha)
     // virava "+71991072835" — e +7 é RÚSSIA, com 11 dígitos batendo o comprimento de lá. Esse número
