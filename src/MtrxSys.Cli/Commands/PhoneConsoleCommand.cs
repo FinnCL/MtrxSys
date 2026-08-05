@@ -67,6 +67,11 @@ internal sealed class PhoneConsoleCommand(
 
     private const string TokenNome = "{nome}";
 
+    /// <summary>Falhas SEGUIDAS que interrompem o lote. Mesmo valor do
+    /// <c>CircuitBreaker.FailureThreshold</c> do Dispatcher, de propósito: é a mesma ideia, e dois
+    /// números diferentes pra ela só dariam a quem opera mais uma coisa pra lembrar.</summary>
+    private const int LimiteFalhasSeguidas = 3;
+
     /// <summary>Stateless, então uma instância serve. Valida o que é COLADO — ver ParseContato.</summary>
     private static readonly BrazilPhoneValidator Telefones = new();
 
@@ -1053,6 +1058,7 @@ internal sealed class PhoneConsoleCommand(
     {
         var enviados = 0;
         var falhas = 0;
+        var seguidas = 0;
         var entregues = new HashSet<string>(StringComparer.Ordinal);
 
         try
@@ -1071,6 +1077,7 @@ internal sealed class PhoneConsoleCommand(
                 if (r.Sent)
                 {
                     enviados++;
+                    seguidas = 0;   // sucesso zera: o disjuntor mede sequência, não total
                     entregues.Add(contato.Numero);
                     AnsiConsole.MarkupLine(
                         $"[green]({i + 1}/{plano.Count}) enviado[/] {contato.Numero} tpl {variante} "
@@ -1079,10 +1086,28 @@ internal sealed class PhoneConsoleCommand(
                 else
                 {
                     falhas++;
+                    seguidas++;
                     AnsiConsole.MarkupLine(
                         $"[red]({i + 1}/{plano.Count}) falhou[/] {contato.Numero}: {(r.Error ?? "").EscapeMarkup()}");
                 }
                 Registrar(log, serial, contato, variante, texto, r);
+
+                // 🔴 DISJUNTOR. Falhar N vezes seguidas não é N acidentes, é UM problema estrutural
+                // sendo repetido: tela bloqueada, WhatsApp fechado, cabo solto, alguém mexeu no
+                // aparelho. Sem isto o laço queimava a lista inteira, uma a uma, e só parava no fim —
+                // e cada tentativa a número inexistente pesa contra um chip em aquecimento.
+                // Medido em 2026-08-05: duas falhas seguidas logo na abertura do lote, e o console
+                // seguiria tentando as outras treze.
+                // O mesmo limiar do DispatchEngine (CircuitBreaker.FailureThreshold = 3), pra o
+                // operador não ter que lembrar dois números diferentes pra a mesma ideia.
+                if (seguidas >= LimiteFalhasSeguidas)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]{seguidas} falhas seguidas: lote interrompido.[/] "
+                        + "[grey]isso quase nunca é o contato — confira a tela do aparelho (desbloqueada? "
+                        + "WhatsApp aberto? cabo firme?) e retome com[/] [bold]enviar[/][grey].[/]");
+                    break;
+                }
 
                 if (i < plano.Count - 1)
                 {
