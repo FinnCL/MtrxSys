@@ -12,15 +12,20 @@ Console.OutputEncoding = Encoding.UTF8;
 // console (850/437 no Windows pt-BR) e todo caractere que não existe lá vira "?" NA LEITURA — perda
 // de dado silenciosa, num console cujo uso principal é COLAR texto com emoji e acento. A saída em
 // UTF-8 sozinha é pior que nada: mascara o problema, porque o que sobrou aparece bonito.
-// Try/catch porque `SetConsoleCP` falha quando não há console de verdade (stdin redirecionado, pipe,
-// serviço). Aí não há colagem humana pra proteger, e o padrão serve.
-try
+// SÓ com console interativo de verdade. Quando a entrada está redirecionada (pipe, arquivo, CI), o
+// .NET já lê o stream com a codificação dele e mexer na página de código do console não ajuda — pode
+// atrapalhar, e o caminho redirecionado é o que os scripts usam.
+// Try/catch porque o setter chama SetConsoleCP, que falha se não houver console anexado.
+if (!Console.IsInputRedirected)
 {
-    Console.InputEncoding = Encoding.UTF8;
-}
-catch (IOException)
-{
-    // sem console interativo: segue com o padrão
+    try
+    {
+        Console.InputEncoding = Encoding.UTF8;
+    }
+    catch (IOException)
+    {
+        // sem console de verdade: segue com o padrão em vez de derrubar o CLI por causa de encoding
+    }
 }
 
 using var cts = new CancellationTokenSource();

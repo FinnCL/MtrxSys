@@ -780,19 +780,42 @@ internal sealed class PhoneConsoleCommand(
             return;
         }
 
+        // 🔴 CONFIRMAÇÃO OBRIGATÓRIA, e não é simetria com o `enviar` por gosto. Gravar escreve na
+        // agenda de um celular REAL, que sincroniza pra conta Google: é ação difícil de desfazer, e o
+        // `sistema` traz a base inteira com uma tecla (549 contatos na base do operador em 2026-08-05).
+        // Cada contato custa 3-4 chamadas adb, então a base inteira é DEZENAS DE MINUTOS de laço. Sem
+        // este passo, um `g` distraído logo depois de um `s` vira meia hora de escrita não intencional.
+        var estimativaMin = Math.Max(1, _contatos.Count * 3 / 60);
+        AnsiConsole.MarkupLine(
+            $"vai gravar [bold]{_contatos.Count}[/] contato(s) na agenda do aparelho "
+            + $"[grey](~{estimativaMin} min; sincroniza pra conta Google do aparelho)[/].");
+        AnsiConsole.Markup("[yellow]digite[/] [bold]sim[/] [yellow]para confirmar:[/] ");
+        if (!string.Equals(Console.ReadLine()?.Trim(), "sim", StringComparison.OrdinalIgnoreCase))
+        {
+            AnsiConsole.MarkupLine("[grey]cancelado. nada foi gravado.[/]");
+            return;
+        }
+
         var criados = 0;
         var jaTinha = 0;
         var falhas = new List<string>();
 
-        AnsiConsole.MarkupLine($"gravando [bold]{_contatos.Count}[/] contato(s) na agenda do aparelho...");
-        foreach (var c in _contatos)
+        AnsiConsole.MarkupLine("[grey]Ctrl+C interrompe. gravar é idempotente, então rodar de novo continua de onde parou.[/]");
+        for (var i = 0; i < _contatos.Count; i++)
         {
+            var c = _contatos[i];
+            // 🔴 As comparações abaixo dependem do TEXTO devolvido pelas implementações de
+            // SaveContactAsync (WhatsAppContactsReader no físico, DockerCliPhoneOrchestrator no
+            // emulador). As duas concordam hoje em "ok" e "já existe"; nada no compilador garante isso.
+            // Se um dia divergirem, o sintoma aqui é TUDO virar "falha" com o contato gravado do mesmo
+            // jeito — por isso a mensagem crua vai no relatório, em vez de só o contador.
             var r = await phone.SaveContactAsync(c.Numero, c.Nome, ct);
             switch (r)
             {
                 case "ok":
                     criados++;
-                    AnsiConsole.MarkupLine($"  [green]criado[/] {c.Numero} {(c.Nome ?? "").EscapeMarkup()}");
+                    AnsiConsole.MarkupLine(
+                        $"  [grey]{i + 1}/{_contatos.Count}[/] [green]criado[/] {c.Numero} {(c.Nome ?? "").EscapeMarkup()}");
                     break;
                 case "já existe":
                     jaTinha++;
@@ -876,6 +899,7 @@ internal sealed class PhoneConsoleCommand(
         var jaTem = _contatos.Select(c => c.Numero).ToHashSet(StringComparer.Ordinal);
         var trazidos = 0;
         var repetidos = 0;
+        var estranhos = new List<string>();
         foreach (var c in doBanco)
         {
             var digitos = new string([.. c.Phone.E164.Where(char.IsDigit)]);
@@ -883,6 +907,15 @@ internal sealed class PhoneConsoleCommand(
             {
                 repetidos++;
                 continue;
+            }
+            // AVISA, mas NÃO descarta. "veio do banco, logo é confiável" é quase verdade e a exceção
+            // está documentada: em 2026-07-27 um número da Moldávia (37368544314) virou contato ATIVO,
+            // ganhou entrada na agenda Google e foi enfileirado — só não recebeu porque alguém olhou a
+            // lista à mão. Descartar aqui repetiria o erro oposto, o que apagou um grupo inteiro na
+            // importação por rejeitar o celular legado. Contar e mostrar deixa a decisão com quem sabe.
+            if (!Telefones.IsPlausibleBrazilian("+" + digitos))
+            {
+                estranhos.Add(digitos);
             }
             _contatos.Add(new Contato(digitos, string.IsNullOrWhiteSpace(c.Name) ? null : c.Name));
             trazidos++;
@@ -893,6 +926,23 @@ internal sealed class PhoneConsoleCommand(
             + (grupo is null ? "" : $" [grey](grupo {grupo.EscapeMarkup()})[/]")
             + $"; lista agora tem [bold]{_contatos.Count}[/]."
             + (repetidos > 0 ? $" [grey]{repetidos} já estava(m) na lista.[/]" : ""));
+
+        if (estranhos.Count > 0)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]atenção:[/] {estranhos.Count} não parece(m) celular brasileiro. "
+                + "[grey]vieram assim do banco e foram trazidos; confira antes de gravar ou disparar.[/]");
+            MostrarAlguns(estranhos.Count, 10, i => $"  [yellow]{estranhos[i]}[/]", " suspeito(s)");
+        }
+
+        // 🔴 SEM o gate de chip. O DispatchEngine filtra por ImportedByPhone (só dispara pra contato
+        // importado PELO chip conectado), que é a defesa anti-463; aqui não dá pra aplicar, porque o
+        // engine físico não passa pelo WAHA e o console não tem como saber que número está no aparelho.
+        // Dito em voz alta em vez de escondido: quem opera vários chips precisa saber que esta lista
+        // pode conter contato de outro chip.
+        AnsiConsole.MarkupLine(
+            "[grey]sem filtro por chip: se você opera mais de um número, a lista pode ter contato "
+            + "importado por outro.[/]");
     }
 
     // ── Envio ────────────────────────────────────────────────────────────────────────────────────
