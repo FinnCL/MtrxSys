@@ -714,6 +714,14 @@ internal sealed class PhoneConsoleCommand(
             return;
         }
 
+        // Diz pra que serve ANTES da tabela. Uma tabela que aparece sem introdução obriga quem lê a
+        // deduzir a pergunta a partir das colunas, e as duas primeiras ("número", "díg") sugerem que
+        // o assunto é comprimento — que é justamente a leitura errada.
+        AnsiConsole.MarkupLine(
+            "[grey]a FORMA de cada número, pelas mesmas regras que o envio usa. o que decide não é o "
+            + "total de dígitos, é o[/] [bold]primeiro dígito depois do DDD[/][grey]: 6 a 9 é celular, "
+            + "2 a 5 é fixo.[/]");
+
         var t = new Table().Border(TableBorder.Rounded);
         t.AddColumn("#");
         t.AddColumn("número");
@@ -1460,6 +1468,10 @@ internal sealed class PhoneConsoleCommand(
     /// A lista numerada da ajuda parecia um menu sem ser, e a primeira pessoa a usar o console
     /// perguntou se digitava "1" para configurar o passo 1. Em vez de avisar que não era menu, virou
     /// menu. Os comandos por extenso continuam valendo: quem já sabe não quer navegar.
+    /// <para>🔴 TODO COMANDO NOVO ENTRA AQUI. O `conferir` nasceu só na ajuda de abertura e na lista do
+    /// `comandos`, e o operador perguntou "c serve pra quê? não tem nada explicando" — com razão: a
+    /// ajuda rola pra fora da tela e o `comandos` exige saber que ele existe. ESTE painel é o único
+    /// que fica visível o tempo todo, então um comando que não está nele, na prática, não existe.</para>
     /// </remarks>
     private void Menu(string serial)
     {
@@ -1485,6 +1497,7 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("[bold]g[/]", "gravar", "[grey]grava a lista na agenda do aparelho, sem enviar[/]");
         t.AddEmptyRow();
         t.AddRow("[bold]6[/]", "ver", "[grey]confere o que está carregado[/]");
+        t.AddRow("[bold]c[/]", "conferir", "[grey]a forma de cada número: celular, legado ou fixo[/]");
         t.AddRow("[bold]7[/]", "previa", "[grey]quem recebe qual texto[/]");
         t.AddRow("[bold]8[/]", "enviar", "[grey]dispara o lote (pergunta antes)[/]");
         t.AddEmptyRow();
