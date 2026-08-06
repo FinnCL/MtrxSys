@@ -21,8 +21,29 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         new([.. (phoneE164 ?? string.Empty).Where(char.IsDigit)]);
 
     /// <summary>contact_id do primeiro resultado do phone_lookup, ou null.</summary>
-    /// <remarks>O phone_lookup casa STRING, não número: um contato gravado como "+55…" NÃO é achado por
-    /// "55…" e vice-versa (medido). Por isso quem chama tenta os dois formatos.</remarks>
+    /// <remarks>
+    /// 🔴 O comentário antigo dizia, como fato medido, que o phone_lookup casa STRING e que "+55…" NÃO é
+    /// achado por "55…". É FALSO neste aparelho. Medido em 2026-08-06 no Galaxy A14 (SM_A145M,
+    /// Android 15), com um contato gravado como "+55DDD9XXXXXXXX" e contact_id conhecido:
+    /// <code>
+    /// adb shell content query --uri content://com.android.contacts/phone_lookup/&lt;valor&gt; --projection contact_id
+    ///   %2B + digitos  -> ACHOU (mesmo id)
+    ///   digitos crus   -> ACHOU (mesmo id)   &lt;- o comentário antigo dizia que não
+    ///   últimos 7      -> não achou          &lt;- logo, NÃO é min-match
+    ///   forma irmã (com/sem o 9º dígito) -> não achou
+    /// </code>
+    /// A explicação que cobre os quatro resultados: a comparação é sobre a SEQUÊNCIA DE DÍGITOS, com o
+    /// "+" e a formatação normalizados fora dos dois lados.
+    ///
+    /// <para>Consequência: perguntar nas duas formas é redundante AQUI, mas segue sendo feito por quem
+    /// chama, porque a semântica é do provider e pode mudar com versão de Android. O que NÃO pode é
+    /// alguém decidir a forma do registro a partir desta função — para isso existe
+    /// <see cref="TemFormaE164Async"/>, que olha o valor gravado e não depende de como o provider
+    /// compara.</para>
+    ///
+    /// <para>⚠️ Se for medir de novo, escreva aqui a DATA, o APARELHO e o COMANDO. Foi a ausência dos
+    /// três que deixou uma afirmação errada de pé, com cara de evidência, até alguém conferir.</para>
+    /// </remarks>
     private async Task<string?> LookupContactIdAsync(string lookupValue, CancellationToken ct)
     {
         var (rc, outp, _) = await _adb.ShellAsync($"content query --uri content://com.android.contacts/phone_lookup/{lookupValue} --projection contact_id", ct);
@@ -33,6 +54,36 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         var m = Regex.Match(outp ?? "", @"contact_id=(\d+)");
         return m.Success ? m.Groups[1].Value : null;
     }
+
+    /// <summary>As linhas de dados do contato (nome, telefones, espelhos). null = não deu pra ler.</summary>
+    private async Task<string?> ContactDataAsync(string contactId, CancellationToken ct)
+    {
+        var (rc, dados, _) = await _adb.ShellAsync(
+            $"content query --uri content://com.android.contacts/contacts/{contactId}/data", ct);
+        return rc == 0 && !string.IsNullOrWhiteSpace(dados) ? dados : null;
+    }
+
+    /// <summary>Este contato está gravado na forma E.164, com o "+"? null = não deu pra ler.</summary>
+    /// <remarks>
+    /// 🔴 Existe porque o <see cref="LookupContactIdAsync"/> NÃO consegue responder isto. Ele compara
+    /// sequências de dígitos, então perguntar por "%2B…" e por "…" devolve a mesma coisa: o par de
+    /// chamadas que o SaveContactAsync fazia eram DUAS VEZES A MESMA PERGUNTA, e a segunda nunca podia
+    /// dar um resultado diferente da primeira. Na prática o ramo da cura era inalcançável, e um registro
+    /// envenenado (só dígitos crus, invisível pro WhatsApp) fazia o método responder "já existe" e nunca
+    /// criar a forma boa.
+    ///
+    /// <para>A pergunta certa não é "o provider acha este número?", é "COMO ele está gravado?". Essa só
+    /// o valor armazenado responde, e ele não depende de como o provider compara — o que também torna
+    /// isto imune a mudar de versão de Android.</para>
+    ///
+    /// <para>Busca a string literal em vez de parsear as colunas: o valor gravado aparece cru nas linhas
+    /// de dados (conferido no A14 em 2026-08-06), e um contains é robusto à ordem e ao conjunto de
+    /// colunas que o provider resolve devolver.</para>
+    /// </remarks>
+    private async Task<bool?> TemFormaE164Async(string contactId, string digits, CancellationToken ct) =>
+        await ContactDataAsync(contactId, ct) is { } dados
+            ? dados.Contains("+" + digits, StringComparison.Ordinal)
+            : null;
 
     /// <summary>O número tem WhatsApp, segundo o próprio aparelho?</summary>
     /// <returns>true = o app publicou o espelho (é usuário). null = NÃO SEI. NUNCA devolve false.</returns>
@@ -55,13 +106,11 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         {
             return null; // nem está na agenda: quem chama salva e re-pergunta depois do sync
         }
-        var (rc, data, _) = await _adb.ShellAsync($"content query --uri content://com.android.contacts/contacts/{contactId}/data", ct);
-        if (rc != 0)
-        {
-            return null;
-        }
         // A marca que o WhatsApp cria para quem é usuário da plataforma. Só o SIM sai daqui.
-        return data.Contains("vnd.com.whatsapp.profile", StringComparison.Ordinal) ? true : null;
+        return await ContactDataAsync(contactId, ct) is { } data
+            && data.Contains("vnd.com.whatsapp.profile", StringComparison.Ordinal)
+                ? true
+                : null;
     }
 
     /// <summary>Grava o número na agenda do Android. Idempotente e best-effort.</summary>
@@ -73,21 +122,45 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
             return "phone inválido";
         }
 
-        // 1) Já está na agenda? A pergunta que vale é sobre a forma E.164, COM o "+": é a única que o
-        //    WhatsApp consegue resolver. Um contato gravado só com os dígitos crus existe pro Android
-        //    e é INVISÍVEL pro WhatsApp, que o marca como sem conta.
-        var comMais = await LookupContactIdAsync("%2B" + digits, ct) is not null;
-        if (comMais)
-        {
-            return "já existe";
-        }
+        // 1) Já está na agenda? Duas perguntas DIFERENTES, nesta ordem: primeiro "existe?", depois
+        //    "COMO está gravado?". A segunda é a que importa, porque só a forma E.164 com o "+" é
+        //    resolvível pelo WhatsApp: um contato gravado com os dígitos crus existe pro Android e é
+        //    INVISÍVEL pro app, que passa a marcá-lo como sem conta de forma persistente.
+        //
+        // 🔴 As duas ESTAVAM sendo feitas pelo phone_lookup, com e sem o "%2B", como se a forma da
+        //    consulta revelasse a forma do registro. Não revela: o provider compara sequências de
+        //    dígitos (medido em 2026-08-06, ver LookupContactIdAsync). Eram duas vezes a mesma pergunta,
+        //    a segunda nunca podia discordar da primeira, e a cura abaixo era inalcançável — pior, um
+        //    registro envenenado respondia "já existe" e a forma boa nunca era criada.
+        //
+        //    As duas formas seguem sendo consultadas porque a semântica é do provider e pode variar com
+        //    a versão do Android; sob comparação por string exata isto continua achando o registro.
+        var contactId = await LookupContactIdAsync("%2B" + digits, ct)
+            ?? await LookupContactIdAsync(digits, ct);
 
-        // 🔴 SÓ A FORMA CRUA EXISTE = REGISTRO ENVENENADO, de antes desta correção. Devolver
-        //    "já existe" aqui deixaria o aparelho permanentemente incapaz de alcançar essa pessoa, e
-        //    exigiria apagar contato a contato na mão. Seguimos e criamos a forma correta ao lado.
-        //    Sim, ficam duas entradas para o mesmo telefone; a antiga o WhatsApp já não enxergava, então
-        //    não é duplicata do ponto de vista dele. Curar sozinho vale o registro extra.
-        var cru = await LookupContactIdAsync(digits, ct) is not null;
+        var cru = false;
+        if (contactId is not null)
+        {
+            switch (await TemFormaE164Async(contactId, digits, ct))
+            {
+                case true:
+                    return "já existe";
+                case null:
+                    // Achei o contato e não consegui ver como ele está gravado. Criar às cegas duplica;
+                    // dizer "já existe" pode estar escondendo um registro envenenado. Nenhuma das duas
+                    // se sustenta sem o dado, então não faço nada e digo por quê.
+                    return $"o número já está na agenda (contato {contactId}) mas não consegui ler em que "
+                        + "forma. Não mexi em nada. Tente de novo.";
+                default:
+                    // 🔴 ESTÁ NA AGENDA, MAS NÃO NA FORMA QUE O WHATSAPP RESOLVE. Registro envenenado,
+                    //    de antes da correção do E.164. Seguimos e criamos a forma correta AO LADO.
+                    //    Sim, ficam duas entradas para o mesmo telefone; a antiga o app já não enxergava,
+                    //    então não é duplicata do ponto de vista dele. Curar sozinho vale o registro
+                    //    extra, e a alternativa seria apagar contato a contato na mão.
+                    cru = true;
+                    break;
+            }
+        }
 
         // 2) O MAIOR _id ANTES de inserir. Ver o passo 3: é ele que transforma "o último deve ser o
         //    nosso" numa afirmação conferível.

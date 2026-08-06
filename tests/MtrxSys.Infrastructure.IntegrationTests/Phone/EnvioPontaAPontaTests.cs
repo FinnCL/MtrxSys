@@ -266,18 +266,57 @@ public sealed class EnvioPontaAPontaTests
     [Fact]
     public async Task Contato_gravado_so_com_digitos_crus_e_curado()
     {
-        // Registro envenenado de antes da correção do E.164: existe pro Android e é invisível pro
+        // 🔴 Registro envenenado de antes da correção do E.164: existe pro Android e é invisível pro
         // WhatsApp, que passa a responder "sem conta" pra uma pessoa que existe.
+        //
+        // Este é o teste que o phone_lookup nunca poderia satisfazer. Ele compara sequências de
+        // dígitos, entao "achei o contato" vem igual para as duas formas de gravação, e a decisão de
+        // curar tem que sair do VALOR ARMAZENADO. Com a lógica antiga isto respondia "já existe" e a
+        // pessoa seguia inalcançável pelo aparelho.
         var android = new AndroidFalso();
         android.ContasExistentes.Add(Com9);
-        android.CriarContatoDeTerceiro("Fulano", Com9); // sem o "+"
+        android.CriarContatoDeTerceiro("Fulano", Com9); // gravado SEM o "+"
         var (_, agenda) = Montar(android);
 
         var r = await agenda.SaveContactAsync("+" + Com9, "Fulano", CancellationToken.None);
 
+        android.Agenda.Values.Select(c => c.Telefone).Should().Contain("+" + Com9,
+            "a forma que o WhatsApp resolve tem que passar a existir, ao lado da envenenada");
         r.Should().StartWith("ok", "curar é sucesso; o console conta o resultado por StartsWith(\"ok\")");
         r.Should().Contain("sem o +");
-        android.Agenda.Values.Select(c => c.Telefone).Should().Contain("+" + Com9);
+    }
+
+    [Fact]
+    public async Task Contato_ja_gravado_em_E164_nao_duplica()
+    {
+        // O outro lado do teste acima: com a forma boa ja presente, nao ha o que curar nem o que criar.
+        var android = new AndroidFalso();
+        android.ContasExistentes.Add(Com9);
+        android.CriarContatoDeTerceiro("Fulano", "+" + Com9);
+        var (_, agenda) = Montar(android);
+
+        var r = await agenda.SaveContactAsync("+" + Com9, "Fulano", CancellationToken.None);
+
+        r.Should().Be("já existe");
+        android.Agenda.Should().ContainSingle("gravar de novo nao pode criar um segundo registro");
+    }
+
+    [Fact]
+    public async Task Forma_do_registro_ilegivel_nao_vira_palpite()
+    {
+        // O contato existe e nao deu pra ver COMO esta gravado. Criar as cegas duplica; dizer "ja
+        // existe" pode estar escondendo um registro envenenado. Sem o dado, nenhuma das duas se
+        // sustenta, entao o certo e nao fazer nada e dizer por que.
+        var android = new AndroidFalso { FalharLeituraDeDados = true };
+        android.ContasExistentes.Add(Com9);
+        android.CriarContatoDeTerceiro("Fulano", "+" + Com9);
+        var (_, agenda) = Montar(android);
+
+        var r = await agenda.SaveContactAsync("+" + Com9, "Fulano", CancellationToken.None);
+
+        android.Agenda.Should().ContainSingle("nada pode ser criado sem saber o que ja esta la");
+        r.Should().NotStartWith("ok");
+        r.Should().Contain("não consegui ler em que forma");
     }
 
     // ── Fluxo do lote, com o aparelho no meio ────────────────────────────────────────────────────

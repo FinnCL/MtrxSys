@@ -133,47 +133,10 @@ public sealed class WhatsAppContactsReaderTests
         r.Should().Contain("não encontra");
     }
 
-    [Fact]
-    public async Task Registro_so_na_forma_crua_e_curado_e_o_aviso_diz_isso()
-    {
-        // Registro envenenado de antes da correção do E.164: existe só sem o "+", que o WhatsApp não
-        // enxerga. O método segue e cria a forma certa ao lado, mas quem opera precisa SABER — é isso
-        // que explica as falhas anteriores daquele número.
-        var achouCru = false;
-        var telefoneGravado = false;
-        var leitura = 0;
-        string[] leituras = [Linhas(10), Linhas(10, 11)];
-        var adb = new AdbFalso(cmd =>
-        {
-            if (cmd.Contains("phone_lookup", StringComparison.Ordinal))
-            {
-                // A forma COM "+" nunca é achada antes de gravarmos; a CRUA (sem %2B) é.
-                if (!cmd.Contains("%2B", StringComparison.Ordinal))
-                {
-                    achouCru = true;
-                    return (0, "Row: 0 contact_id=7", "");
-                }
-                return telefoneGravado ? (0, "Row: 0 contact_id=8", "") : (0, "No result found.", "");
-            }
-            if (cmd.Contains("query", StringComparison.Ordinal) && cmd.Contains("raw_contacts", StringComparison.Ordinal))
-            {
-                var r = leituras[Math.Min(leitura, leituras.Length - 1)];
-                leitura++;
-                return (0, r, "");
-            }
-            if (cmd.Contains("phone_v2", StringComparison.Ordinal))
-            {
-                telefoneGravado = true;
-            }
-            return (0, "", "");
-        });
-
-        var r = await new WhatsAppContactsReader(adb).SaveContactAsync(Numero, "Fulano", CancellationToken.None);
-
-        achouCru.Should().BeTrue();
-        r.Should().StartWith("ok", "curar é sucesso, e o console conta o resultado por StartsWith(\"ok\")");
-        r.Should().Contain("sem o +");
-    }
+    // A cura do registro envenenado (gravado só com dígitos crus) vive em EnvioPontaAPontaTests, contra
+    // o AndroidFalso. Ela depende de COMO o phone_lookup compara valores, e o falso de lá reproduz a
+    // semântica medida no aparelho em 2026-08-06; o `AdbFalso` daqui roteia por trecho de comando e
+    // modelaria essa parte por conta própria, com risco de validar uma ficção.
 
     [Fact]
     public async Task Numero_curto_nem_toca_no_aparelho()

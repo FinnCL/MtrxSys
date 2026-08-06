@@ -193,24 +193,45 @@ internal sealed class AndroidFalso : IAdbRunner
 
     // ── Agenda: implementação ────────────────────────────────────────────────────────────────────
 
+    /// <summary>Casa pela SEQUÊNCIA DE DÍGITOS, com o "+" e a formatação normalizados fora dos dois
+    /// lados.</summary>
     /// <remarks>
-    /// Casa por STRING EXATA do que foi gravado, que é o comportamento documentado no
-    /// <c>LookupContactIdAsync</c>: "+55…" não é achado por "55…". Se o aparelho real casar pelos
-    /// últimos dígitos, este falso está otimista e os testes que dependem disso mentem — é a medição
-    /// que ficou pendente, e está registrada como tal.
+    /// 🔴 MEDIDO em 2026-08-06 no Galaxy A14 (SM_A145M, Android 15), contra um contato gravado como
+    /// "+55DDD9XXXXXXXX" e com contact_id conhecido:
+    /// <code>
+    /// adb shell content query --uri content://com.android.contacts/phone_lookup/&lt;valor&gt; --projection contact_id
+    ///   %2B + digitos                    -> ACHOU (mesmo id)
+    ///   digitos crus                     -> ACHOU (mesmo id)
+    ///   últimos 7 dígitos                -> não achou
+    ///   forma irmã (com/sem o 9º dígito) -> não achou
+    /// </code>
+    /// Comparar dígitos cobre os quatro resultados de uma vez: o "+" some na normalização, os últimos 7
+    /// não são a sequência inteira, e a forma irmã é outra sequência.
+    /// <para>Este falso ANTES casava por string exata, seguindo o que o código afirmava ter medido. A
+    /// medição derrubou a afirmação, e um falso otimista faria os testes validarem uma ficção — por isso
+    /// ele mudou junto.</para>
     /// </remarks>
     private (int, string, string) PhoneLookup(string cmd)
     {
         var m = Regex.Match(cmd, @"phone_lookup/(\S+)");
-        var procurado = Uri.UnescapeDataString(m.Groups[1].Value);
-        var achado = _agenda.Values.FirstOrDefault(c => c.Telefone == procurado);
+        var procurado = SoDigitos(Uri.UnescapeDataString(m.Groups[1].Value));
+        var achado = _agenda.Values.FirstOrDefault(
+            c => c.Telefone is not null && SoDigitos(c.Telefone) == procurado);
         return achado is null
             ? (0, "No result found.", "")
             : (0, $"Row: 0 contact_id={achado.Id.ToString(CultureInfo.InvariantCulture)}", "");
     }
 
+    /// <summary>Faz a leitura das linhas de dados do contato falhar, para exercitar o "não sei" de quem
+    /// precisa decidir COMO o número está gravado.</summary>
+    public bool FalharLeituraDeDados { get; set; }
+
     private (int, string, string) ContactData(string cmd)
     {
+        if (FalharLeituraDeDados)
+        {
+            return (1, "", "Error while accessing provider");
+        }
         var m = Regex.Match(cmd, @"/contacts/(\d+)/data");
         if (!int.TryParse(m.Groups[1].Value, out var id) || !_agenda.TryGetValue(id, out var c))
         {
