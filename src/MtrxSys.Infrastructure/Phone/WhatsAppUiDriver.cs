@@ -141,6 +141,43 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 #pragma warning restore CA1031
     }
 
+    /// <summary>Garante que a tela NÃO tem texto pendente no campo antes de abrir a próxima conversa.
+    /// null = pode seguir; string = motivo pra não enviar.</summary>
+    /// <remarks>
+    /// 🔴 O toque em enviar é a única ação deste driver que produz efeito irreversível, e ele nunca
+    /// confirmou EM QUAL conversa está. `am start` devolver 0 diz que a intent foi despachada, não que
+    /// o WhatsApp navegou; o poll do `id/send` casa já no primeiro dump, que pode ainda mostrar a tela
+    /// anterior; e o `id/send` existe sempre que o campo tem texto. Junte as três e o caminho do deep
+    /// link podia tocar enviar numa conversa ALHEIA: o contato anterior recebia, e o console registrava
+    /// sucesso pro contato atual.
+    ///
+    /// <para>A verificação vem ANTES e não depois de propósito. Conferir o texto do campo depois de
+    /// abrir não resolve, porque dois contatos do mesmo lote costumam sortear o MESMO template: um
+    /// rascunho do anterior é idêntico ao texto pretendido pro atual, e a comparação passaria. Já a
+    /// pré-condição ataca a causa — sem botão de enviar na tela, o toque em conversa errada deixa de
+    /// ter como acontecer, e um deep link que não navegou vira um poll que estoura, ou seja, uma falha
+    /// limpa e legível.</para>
+    ///
+    /// <para>Dump ilegível NÃO barra o envio: nesse caso o poll seguinte falha sozinho, e travar o lote
+    /// por uma leitura de tela que não veio seria trocar um risco raro por uma parada garantida.</para>
+    /// </remarks>
+    private async Task<string?> GarantirTelaSemRascunhoAsync(CancellationToken ct)
+    {
+        if (LerEstadoDoCampo(await DumpUiAsync(ct)) is not EstadoDoCampo.ComTexto)
+        {
+            return null;
+        }
+        // Os mesmos dois BACK da limpeza de falha: sair da conversa faz o WhatsApp guardar o texto como
+        // RASCUNHO daquela conversa, em vez de deixá-lo na tela onde o próximo envio tropeça nele.
+        await DispensarDialogoAsync(ct);
+        await Task.Delay(600, ct);
+        return LerEstadoDoCampo(await DumpUiAsync(ct)) is not EstadoDoCampo.ComTexto
+            ? null
+            : "a tela do aparelho está numa conversa com texto pendente no campo e não consegui sair "
+              + "dela. Não enviei: daqui o toque em enviar iria para a conversa errada. Confira o "
+              + "aparelho (alguém digitando nele?) e retome.";
+    }
+
     private async Task<WhatsAppSendResult> SendByDeepLinkAsync(string digits, string text, CancellationToken ct)
     {
         var url = WhatsAppUi.DeepLink(digits, text);
@@ -150,11 +187,17 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         }
 
         await _uiLock.WaitAsync(ct);
+        var tocouEnviar = false;
         try
         {
             using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             sendCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(15, _opts.WhatsAppSendTimeoutSeconds)));
             var sct = sendCts.Token;
+
+            if (await GarantirTelaSemRascunhoAsync(sct) is { } sujeira)
+            {
+                return WhatsAppSendResult.Fail(sujeira);
+            }
 
             var (rc, outp, err) = await OpenChatAsync(url, sct);
             if (rc != 0)
@@ -166,16 +209,31 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             {
                 return WhatsAppSendResult.Fail(await DiagnosticarChatNaoAbertoAsync(sct));
             }
+
+            // Daqui pra frente NADA é conclusivo. O toque é irreversível e não tem confirmação síncrona:
+            // tudo o que vier depois só pode dizer "confirmei que saiu" ou "não confirmei", nunca
+            // "garanto que não saiu". A marca existe pra o catch lá embaixo saber de que lado do toque
+            // o tempo estourou.
+            tocouEnviar = true;
             await TapAsync(send.Value, sct);
-            if (!await PollEntryClearedAsync(_opts.WhatsAppSendWaitMs, sct))
+
+            return await PollEntryClearedAsync(_opts.WhatsAppSendWaitMs, sct) switch
             {
-                return WhatsAppSendResult.Fail("toquei enviar mas o campo não esvaziou — envio não confirmado.");
-            }
-            return WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct));
+                EstadoDoCampo.Vazio => WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct)),
+                EstadoDoCampo.ComTexto => WhatsAppSendResult.Fail(
+                    "toquei enviar e o texto CONTINUA no campo: a mensagem não saiu."),
+                _ => WhatsAppSendResult.Unconfirmed(
+                    "toquei enviar mas não consegui ler a tela pra confirmar. Pode ter saído; não vou "
+                    + "tentar de novo sozinho pra não mandar duas vezes."),
+            };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return WhatsAppSendResult.Fail("envio excedeu o tempo total (aparelho lento/travado?).");
+            const string motivo = "envio excedeu o tempo total (aparelho lento/travado?).";
+            return tocouEnviar
+                ? WhatsAppSendResult.Unconfirmed(motivo + " O toque em enviar JÁ tinha acontecido, então "
+                    + "pode ter saído.")
+                : WhatsAppSendResult.Fail(motivo + " Estourou antes de tocar enviar, então nada saiu.");
         }
         finally
         {
@@ -196,6 +254,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         }
 
         await _uiLock.WaitAsync(ct);
+        var tocouEnviar = false;
         try
         {
             // Teto calculado: digitar é a única etapa cujo custo depende do TAMANHO da mensagem.
@@ -230,10 +289,18 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 }
                 await Task.Delay(Random.Shared.Next(900, 2600), sct);
 
-                if (await TypeInChunksAsync(typing, text, sct) is { } motivo)
+                var (motivo, jaSaiuAlgo) = await TypeInChunksAsync(typing, text, sct);
+                if (motivo is not null)
                 {
                     await ClearEntryAsync(typing, sct);
-                    return WhatsAppSendResult.Fail($"digitação abortada, campo limpo. {motivo}");
+                    // 🔴 "Digitação abortada" nem sempre significa "nada saiu". Com a opção "Tecla Enter
+                    // para enviar" LIGADA, o Enter da primeira quebra de linha JÁ mandou a mensagem
+                    // pela metade — o aborto impede o resto, não desfaz o que foi. Devolver isso como
+                    // falha conclusiva fazia o console reabrir a conversa na outra forma do número e
+                    // mandar de novo, somando uma segunda mensagem à metade que a pessoa já recebeu.
+                    return jaSaiuAlgo
+                        ? WhatsAppSendResult.Unconfirmed($"digitação abortada, campo limpo. {motivo}")
+                        : WhatsAppSendResult.Fail($"digitação abortada, campo limpo. {motivo}");
                 }
 
                 // Confere o TAMANHO antes de enviar: o IME pode engolir trecho em silêncio, e mensagem
@@ -250,7 +317,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             }
             finally
             {
-                await RestoreImeAsync(previousIme, sct);
+                await RestoreImeAsync(previousIme);
             }
 
             await Task.Delay(Random.Shared.Next(700, 2200), sct);
@@ -260,19 +327,30 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 await ClearEntryAsync(typing, sct);
                 return WhatsAppSendResult.Fail("botão enviar não apareceu mesmo com o campo preenchido.");
             }
+
+            // Ver a mesma marca no caminho do deep link: depois do toque não existe mais conclusão
+            // negativa, só confirmação ou ausência dela.
+            tocouEnviar = true;
             await TapAsync(send.Value, sct);
 
-            if (!await PollEntryClearedAsync(_opts.WhatsAppSendWaitMs, sct))
+            return await PollEntryClearedAsync(_opts.WhatsAppSendWaitMs, sct) switch
             {
-                return WhatsAppSendResult.Fail("toquei enviar mas o campo não esvaziou — envio não confirmado.");
-            }
-            return WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct));
+                EstadoDoCampo.Vazio => WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct)),
+                EstadoDoCampo.ComTexto => WhatsAppSendResult.Fail(
+                    "toquei enviar e o texto CONTINUA no campo: a mensagem não saiu."),
+                _ => WhatsAppSendResult.Unconfirmed(
+                    "toquei enviar mas não consegui ler a tela pra confirmar. Pode ter saído; não vou "
+                    + "tentar de novo sozinho pra não mandar duas vezes."),
+            };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return WhatsAppSendResult.Fail(
-                $"envio excedeu o teto (base {_opts.WhatsAppSendTimeoutSeconds}s + orçamento de digitação "
-                + $"pra {text.Length} caracteres a {_opts.TypingCharsPerMinute} cpm).");
+            var motivo = $"envio excedeu o teto (base {_opts.WhatsAppSendTimeoutSeconds}s + orçamento de "
+                + $"digitação pra {text.Length} caracteres a {_opts.TypingCharsPerMinute} cpm).";
+            return tocouEnviar
+                ? WhatsAppSendResult.Unconfirmed(motivo + " O toque em enviar JÁ tinha acontecido, então "
+                    + "pode ter saído.")
+                : WhatsAppSendResult.Fail(motivo + " Estourou antes de tocar enviar, então nada saiu.");
         }
         finally
         {
@@ -307,7 +385,14 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// <remarks>Não exige root, nem no aparelho físico — confirmado em 2026-07-29.</remarks>
     public async Task<string?> DumpUiAsync(CancellationToken ct)
     {
-        var (rc, _, _) = await _adb.ShellAsync($"uiautomator dump {DumpPath}", ct);
+        // 🔴 APAGA ANTES DE DUMPAR. O caminho é fixo, então o arquivo sobrevive entre chamadas. Há
+        // versões do `uiautomator` que falham ("could not get idle state"), imprimem o erro e ainda
+        // saem com código 0 — e aí o `cat` devolveria o dump ANTERIOR, com a tela de antes passando
+        // por tela de agora. Não medi este A14 fazendo isso, e provocar sob demanda é caro; apagar
+        // antes torna a pergunta irrelevante, porque leitura obsoleta vira arquivo ausente, o `cat`
+        // falha, e isto devolve null. Null aqui significa "não sei", que é tratado como incerteza em
+        // todo mundo que lê a tela.
+        var (rc, _, _) = await _adb.ShellAsync($"rm -f {DumpPath}; uiautomator dump {DumpPath}", ct);
         if (rc != 0)
         {
             return null;
@@ -358,24 +443,71 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     //
     // O sinal confiável é o BOTÃO DE ENVIAR: o WhatsApp mostra o microfone com o campo vazio e troca
     // pelo botão de enviar quando tem texto. Não depende de idioma nem do texto da dica.
-    private static bool HasSendButton(string? xml) =>
-        xml is not null && xml.Contains("com.whatsapp:id/send\"", StringComparison.Ordinal);
 
-    private async Task<bool> PollEntryClearedAsync(int timeoutMs, CancellationToken ct)
+    /// <summary>O que a tela respondeu sobre o campo de mensagem. TRÊS estados, e o terceiro é o que
+    /// importa.</summary>
+    /// <remarks>
+    /// 🔴 Isto era um bool, e o bool não tinha onde pôr "não consegui ler". O
+    /// <c>HasSendButton(string? xml)</c> resolvia o nulo devolvendo false, e false ali significava
+    /// "campo vazio", ou seja, ENVIO CONFIRMADO. Dump falho virava prova de entrega: o contato saía da
+    /// lista, o CSV gravava "sim" e a pessoa podia não ter recebido nada.
+    ///
+    /// <para>E o agravante estava no relógio. O primeiro poll roda LOGO DEPOIS do toque, com a tela
+    /// animando, que é quando o `uiautomator dump` mais falha ("could not get idle state"). Como o
+    /// primeiro sucesso encerrava o laço, o dump com maior chance de falhar era justamente aquele cuja
+    /// falha virava sucesso.</para>
+    ///
+    /// <para>O <see cref="PollNodeCenterAsync"/>, no mesmo arquivo, sempre tratou o nulo certo
+    /// (<c>if (xml is not null)</c>). Eram dois tratamentos opostos da mesma incerteza a poucas linhas
+    /// um do outro, e o daqui nunca foi decidido: veio junto com o operador de nulo.</para>
+    /// </remarks>
+    private enum EstadoDoCampo
     {
+        /// <summary>Botão de enviar na tela: tem texto no campo.</summary>
+        ComTexto,
+
+        /// <summary>Tela LIDA, e sem botão de enviar: o campo está vazio.</summary>
+        Vazio,
+
+        /// <summary>Não deu pra ler a tela. NÃO é vazio, é desconhecido.</summary>
+        NaoLido,
+    }
+
+    private static EstadoDoCampo LerEstadoDoCampo(string? xml) =>
+        xml is null ? EstadoDoCampo.NaoLido
+        : xml.Contains("com.whatsapp:id/send\"", StringComparison.Ordinal) ? EstadoDoCampo.ComTexto
+        : EstadoDoCampo.Vazio;
+
+    /// <summary>Depois de tocar enviar: o campo esvaziou?</summary>
+    /// <returns>
+    /// <see cref="EstadoDoCampo.Vazio"/> = envio confirmado.
+    /// <see cref="EstadoDoCampo.ComTexto"/> = o texto continua lá, então NÃO saiu (conclusivo).
+    /// <see cref="EstadoDoCampo.NaoLido"/> = nunca consegui ler a tela; não dá pra afirmar nada.
+    /// </returns>
+    private async Task<EstadoDoCampo> PollEntryClearedAsync(int timeoutMs, CancellationToken ct)
+    {
+        // Só vira conclusão quando ALGUMA leitura deu certo. Sem isso, um poll inteiro de dumps falhos
+        // devolveria a mesma coisa que um poll que viu o texto parado no campo, e são fatos diferentes:
+        // um é "não saiu", o outro é "não sei".
+        var conclusao = EstadoDoCampo.NaoLido;
         var attempts = Math.Max(1, timeoutMs / 500);
         for (var i = 0; i <= attempts; i++)
         {
-            if (!HasSendButton(await DumpUiAsync(ct)))
+            var estado = LerEstadoDoCampo(await DumpUiAsync(ct));
+            if (estado is EstadoDoCampo.Vazio)
             {
-                return true;
+                return EstadoDoCampo.Vazio;
+            }
+            if (estado is EstadoDoCampo.ComTexto)
+            {
+                conclusao = EstadoDoCampo.ComTexto;
             }
             if (i < attempts)
             {
                 await Task.Delay(500, ct);
             }
         }
-        return false;
+        return conclusao;
     }
 
     // O `text` do nó vem ANTES do `resource-id` no dump. Por isso a busca é pelo NÓ inteiro e o
@@ -497,12 +629,38 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         return string.IsNullOrWhiteSpace(previous) || previous == "null" ? null : previous;
     }
 
-    private async Task RestoreImeAsync(string? previous, CancellationToken ct)
+    /// <summary>Devolve o teclado de antes. SEM token do envio, de propósito.</summary>
+    /// <remarks>
+    /// 🔴 Isto recebia o token do envio e rodava num `finally`. Quando o envio acabava por CANCELAMENTO
+    /// (Ctrl+C do operador, ou o teto de tempo estourando), o token já estava cancelado, o
+    /// <c>DockerCli.RunAsync</c> relançava, e o `ime set` de volta simplesmente não acontecia. Ou seja:
+    /// funcionava em todos os caminhos MENOS naqueles em que era necessário.
+    ///
+    /// <para>O estrago é no aparelho, não no lote. O IME de digitação não desenha teclas (ver
+    /// <see cref="SelectTypingImeAsync"/>), então o celular ficava sem teclado utilizável para quem o
+    /// pegasse na mão, e "o teclado sumiu" não aponta pra cá. Ctrl+C é o jeito documentado de
+    /// interromper um lote, então esse era o caminho comum, não o raro.</para>
+    ///
+    /// <para>Token próprio com teto curto, e engolindo exceção: é limpeza, e limpeza não pode nem
+    /// pendurar o encerramento nem mascarar o erro que o operador precisa ler.</para>
+    /// </remarks>
+    private async Task RestoreImeAsync(string? previous)
     {
-        if (!string.IsNullOrWhiteSpace(previous))
+        if (string.IsNullOrWhiteSpace(previous))
         {
-            await _adb.ShellAsync($"ime set {previous}", ct);
+            return;
         }
+#pragma warning disable CA1031 // limpeza best-effort: ver o remarks
+        try
+        {
+            using var restoreCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await _adb.ShellAsync($"ime set {previous}", restoreCts.Token);
+        }
+        catch
+        {
+            // aparelho sumiu: o teclado fica pro operador arrumar, e o erro do envio é o que importa
+        }
+#pragma warning restore CA1031
     }
 
     /// <summary>Esvazia o campo. false = não consegui confirmar que ficou vazio.</summary>
@@ -510,7 +668,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     {
         for (var i = 0; i < 12; i++)
         {
-            if (!HasSendButton(await DumpUiAsync(ct)))
+            // 🔴 SÓ `Vazio` encerra. Antes, dump falho também encerrava (o bool não separava "li e o
+            // campo está vazio" de "não li"), e aí a digitação começava por cima de um campo que podia
+            // estar cheio. Não ler é motivo pra dar outra volta, nunca pra concluir.
+            if (LerEstadoDoCampo(await DumpUiAsync(ct)) is EstadoDoCampo.Vazio)
             {
                 return true; // sem botão de enviar = campo vazio
             }
@@ -542,8 +703,13 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         return false;
     }
 
-    /// <summary>Digita o texto. null = ok; string = motivo da parada.</summary>
-    private async Task<string?> TypeInChunksAsync(TypingChannel channel, string text, CancellationToken ct)
+    /// <summary>Digita o texto.</summary>
+    /// <returns>
+    /// <c>Motivo</c> null = digitou tudo. <c>PodeTerSaido</c> = alguma coisa JÁ foi para o destinatário
+    /// antes da parada, então abortar não desfaz nada e reenviar somaria uma segunda mensagem.
+    /// </returns>
+    private async Task<(string? Motivo, bool PodeTerSaido)> TypeInChunksAsync(
+        TypingChannel channel, string text, CancellationToken ct)
     {
         var perChar = 60_000.0 / Math.Clamp(_opts.TypingCharsPerMinute, 60, 1200);
         var quebraConferida = false;
@@ -551,7 +717,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         {
             if (!await SendChunkAsync(channel, chunk, ct))
             {
-                return "o aparelho recusou um trecho da digitação.";
+                return ("o aparelho recusou um trecho da digitação.", false);
             }
 
             // 🔴 Confere a PRIMEIRA quebra de linha: se a opção "Tecla Enter para enviar" estiver
@@ -563,10 +729,13 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 quebraConferida = true;
                 if (string.IsNullOrEmpty(await ReadEntryTextAsync(ct)))
                 {
-                    return "o campo esvaziou na primeira quebra de linha: a opção \"Tecla Enter para "
+                    // PodeTerSaido = true: o Enter MANDOU o que já estava digitado. Parar aqui evita as
+                    // outras três mensagens picadas, mas a primeira já chegou ao destinatário.
+                    return ("o campo esvaziou na primeira quebra de linha: a opção \"Tecla Enter para "
                         + "enviar\" está LIGADA no WhatsApp deste aparelho, então o Enter mandou a "
-                        + "mensagem em vez de quebrar a linha. Desligue-a (WhatsApp → Configurações → "
-                        + "Conversas), ou use templates de uma linha só.";
+                        + "mensagem em vez de quebrar a linha. O começo do texto JÁ FOI ENVIADO. "
+                        + "Desligue a opção (WhatsApp → Configurações → Conversas), ou use templates de "
+                        + "uma linha só.", true);
                 }
             }
             var waitMs = (int)(chunk.Length * perChar * (0.75 + (Random.Shared.NextDouble() * 0.7)));
@@ -577,7 +746,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             }
             await Task.Delay(waitMs, ct);
         }
-        return null;
+        return (null, false);
     }
 
     private async Task<bool> SendChunkAsync(TypingChannel channel, string chunk, CancellationToken ct)

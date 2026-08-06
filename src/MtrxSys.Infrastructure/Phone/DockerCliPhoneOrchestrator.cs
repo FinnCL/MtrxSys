@@ -663,6 +663,7 @@ internal sealed class DockerCliPhoneOrchestrator(
         }
         // Um envio por vez por emulador (uiautomator dump não roda concorrente e usa arquivo fixo).
         await _uiLock.WaitAsync(ct);
+        var tocouEnviar = false;
         try
         {
             // Teto TOTAL do envio: cada adb já tem 60s, mas um envio faz várias chamadas — sem um teto
@@ -685,28 +686,36 @@ internal sealed class DockerCliPhoneOrchestrator(
             {
                 return WhatsAppSendResult.Fail("botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
             }
-            // 3) Toca enviar.
+            // 3) Toca enviar. Daqui pra frente nada é conclusivo: o toque não tem desfazer nem
+            //    confirmação síncrona, então só cabe "confirmei que saiu" ou "não confirmei".
+            tocouEnviar = true;
             var (tc, to, te) = await DockerCli.DockerAsync(sct, "exec", Opts.ContainerName,
                 "adb", "shell", "input", "tap",
                 send.Value.X.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 send.Value.Y.ToString(System.Globalization.CultureInfo.InvariantCulture));
             if (tc != 0)
             {
-                return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(te) ? to : te);
+                return WhatsAppSendResult.Unconfirmed(string.IsNullOrWhiteSpace(te) ? to : te);
             }
             // 4) CONFIRMA o envio: o campo de texto ESVAZIA quando a msg sai (correlação confiável — se o
             //    tap errou o botão, o texto fica no campo e sabemos que NÃO enviou).
-            if (!await PollEntryClearedAsync(Opts.WhatsAppSendWaitMs, sct))
+            return await PollEntryClearedAsync(Opts.WhatsAppSendWaitMs, sct) switch
             {
-                return WhatsAppSendResult.Fail("toquei enviar mas o campo não esvaziou — envio não confirmado.");
-            }
-            // 5) Status de ENTREGA (normalizado sent/delivered/read, locale-independente) — best-effort.
-            return WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct));
+                // 5) Status de ENTREGA (normalizado sent/delivered/read, locale-independente) — best-effort.
+                EstadoDoCampo.Vazio => WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct)),
+                EstadoDoCampo.ComTexto => WhatsAppSendResult.Fail(
+                    "toquei enviar e o texto CONTINUA no campo: a mensagem não saiu."),
+                _ => WhatsAppSendResult.Unconfirmed(
+                    "toquei enviar mas não consegui ler a tela pra confirmar; pode ter saído."),
+            };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Estourou o teto TOTAL (não foi cancelamento do chamador): emulador lento/travado.
-            return WhatsAppSendResult.Fail("envio excedeu o tempo total (emulador lento/travado?).");
+            const string motivo = "envio excedeu o tempo total (emulador lento/travado?).";
+            return tocouEnviar
+                ? WhatsAppSendResult.Unconfirmed(motivo + " O toque em enviar JÁ tinha acontecido.")
+                : WhatsAppSendResult.Fail(motivo + " Estourou antes de tocar enviar, então nada saiu.");
         }
         finally
         {
@@ -742,6 +751,7 @@ internal sealed class DockerCliPhoneOrchestrator(
         }
 
         await _uiLock.WaitAsync(ct);
+        var tocouEnviar = false;
         try
         {
             // Teto TOTAL calculado, não fixo. Digitar é a única etapa cujo custo depende do TAMANHO da
@@ -812,7 +822,7 @@ internal sealed class DockerCliPhoneOrchestrator(
             }
             finally
             {
-                await RestoreImeAsync(previousIme, sct);
+                await RestoreImeAsync(previousIme);
             }
 
             // 5) Relê antes de enviar, como quem confere o que escreveu.
@@ -823,11 +833,17 @@ internal sealed class DockerCliPhoneOrchestrator(
                 await ClearEntryAsync(typing, sct);
                 return WhatsAppSendResult.Fail("botão enviar não apareceu mesmo com o campo preenchido.");
             }
+
+            tocouEnviar = true;
             await TapAsync(send.Value, sct);
 
-            if (!await PollEntryClearedAsync(Opts.WhatsAppSendWaitMs, sct))
+            var confirmacao = await PollEntryClearedAsync(Opts.WhatsAppSendWaitMs, sct);
+            if (confirmacao is not EstadoDoCampo.Vazio)
             {
-                return WhatsAppSendResult.Fail("toquei enviar mas o campo não esvaziou — envio não confirmado.");
+                return confirmacao is EstadoDoCampo.ComTexto
+                    ? WhatsAppSendResult.Fail("toquei enviar e o texto CONTINUA no campo: a mensagem não saiu.")
+                    : WhatsAppSendResult.Unconfirmed(
+                        "toquei enviar mas não consegui ler a tela pra confirmar; pode ter saído.");
             }
             log.LogInformation(
                 "Emulador: {Chars} caracteres digitados em {Secs:F0}s ({Cpm:F0} cpm) via {Canal}.",
@@ -837,9 +853,12 @@ internal sealed class DockerCliPhoneOrchestrator(
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return WhatsAppSendResult.Fail(
-                $"envio excedeu o teto (base {Opts.WhatsAppSendTimeoutSeconds}s + orçamento de digitação "
-                + $"pra {text.Length} caracteres a {Opts.TypingCharsPerMinute} cpm) — emulador lento/travado?");
+            var motivo = $"envio excedeu o teto (base {Opts.WhatsAppSendTimeoutSeconds}s + orçamento de "
+                + $"digitação pra {text.Length} caracteres a {Opts.TypingCharsPerMinute} cpm) — emulador "
+                + "lento/travado?";
+            return tocouEnviar
+                ? WhatsAppSendResult.Unconfirmed(motivo + " O toque em enviar JÁ tinha acontecido.")
+                : WhatsAppSendResult.Fail(motivo + " Estourou antes de tocar enviar, então nada saiu.");
         }
         finally
         {
@@ -934,12 +953,20 @@ internal sealed class DockerCliPhoneOrchestrator(
     // Devolve o teclado que o aparelho tinha. Best-effort de propósito: se falhar, o envio já aconteceu
     // e não faz sentido reportar erro por causa disso — mas fica registrado, porque o efeito (aparelho
     // sem teclado na tela) é confuso de diagnosticar depois.
-    private async Task RestoreImeAsync(string? previous, CancellationToken ct)
+    /// <remarks>
+    /// 🔴 SEM o token do envio. Recebia o `sct` e rodava num `finally`, então quando o envio terminava
+    /// por CANCELAMENTO (teto de tempo, ou o chamador desistindo) o token já estava cancelado, o
+    /// `DockerCli.RunAsync` relançava e o `ime set` de volta não acontecia — falhava exatamente nos
+    /// casos em que era necessário, deixando o aparelho sem teclado de tela. Token próprio, curto.
+    /// </remarks>
+    private async Task RestoreImeAsync(string? previous)
     {
         if (string.IsNullOrEmpty(previous))
         {
             return;
         }
+        using var restoreCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var ct = restoreCts.Token;
         var (rc, _, err) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "ime", "set", previous);
         if (rc != 0)
@@ -1103,8 +1130,30 @@ internal sealed class DockerCliPhoneOrchestrator(
     //
     // O sinal confiável é o BOTÃO DE ENVIAR: o WhatsApp mostra o microfone quando o campo está vazio e
     // troca pelo botão de enviar quando tem texto. Não depende de idioma nem do texto da dica.
-    private static bool HasSendButton(string? xml) =>
-        xml is not null && xml.Contains("com.whatsapp:id/send\"", StringComparison.Ordinal);
+    /// <summary>O que a tela respondeu sobre o campo. TRÊS estados, e o terceiro é o que importa.</summary>
+    /// <remarks>
+    /// 🔴 Era um bool, e o bool não tinha onde pôr "não consegui ler": o nulo virava false, e false aqui
+    /// significa "campo vazio". Quem lê isto usa "campo vazio" como PROVA (o campo limpou = a mensagem
+    /// saiu; o campo está limpo = pode digitar), então dump falho virava afirmação inventada.
+    /// <para>Mesma correção do <c>WhatsAppUiDriver</c> do engine físico, que é cópia deste. Ver a
+    /// duplicação consciente registrada lá e em docs/engine-physical.md.</para>
+    /// </remarks>
+    private enum EstadoDoCampo
+    {
+        /// <summary>Botão de enviar na tela: tem texto no campo.</summary>
+        ComTexto,
+
+        /// <summary>Tela LIDA, e sem botão de enviar: o campo está vazio.</summary>
+        Vazio,
+
+        /// <summary>Não deu pra ler a tela. NÃO é vazio, é desconhecido.</summary>
+        NaoLido,
+    }
+
+    private static EstadoDoCampo LerEstadoDoCampo(string? xml) =>
+        xml is null ? EstadoDoCampo.NaoLido
+        : xml.Contains("com.whatsapp:id/send\"", StringComparison.Ordinal) ? EstadoDoCampo.ComTexto
+        : EstadoDoCampo.Vazio;
 
     /// <summary>Esvazia o campo de mensagem. false = não consegui confirmar que ficou vazio.</summary>
     /// <remarks>
@@ -1117,7 +1166,9 @@ internal sealed class DockerCliPhoneOrchestrator(
     {
         for (var i = 0; i < 12; i++)
         {
-            if (!HasSendButton(await DumpUiAsync(ct)))
+            // SÓ `Vazio` encerra: não ler a tela é motivo pra dar outra volta, nunca pra concluir que o
+            // campo está limpo e começar a digitar por cima.
+            if (LerEstadoDoCampo(await DumpUiAsync(ct)) is EstadoDoCampo.Vazio)
             {
                 return true; // sem botão de enviar = campo vazio
             }
@@ -1142,8 +1193,18 @@ internal sealed class DockerCliPhoneOrchestrator(
     // as operações de UI são serializadas por _uiLock.
     private async Task<string?> DumpUiAsync(CancellationToken ct)
     {
-        await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
-            "adb", "shell", "uiautomator", "dump", "/sdcard/mtrx_ui.xml");
+        // 🔴 APAGA ANTES, e CONFERE o código de saída do dump. O arquivo é fixo e sobrevive entre
+        // chamadas; o retorno do `uiautomator dump` era ignorado por completo. Juntos, os dois davam o
+        // pior resultado possível: dump que falha e `cat` que devolve a leitura ANTERIOR, com a tela de
+        // antes passando por tela de agora — e é sobre essa leitura que se decide onde tocar e se a
+        // mensagem saiu. Apagando antes, leitura obsoleta vira arquivo ausente e isto devolve null,
+        // que todo mundo aqui trata como "não sei".
+        var (dc, _, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
+            "adb", "shell", "rm -f /sdcard/mtrx_ui.xml; uiautomator dump /sdcard/mtrx_ui.xml");
+        if (dc != 0)
+        {
+            return null;
+        }
         var (rc, xml, _) = await DockerCli.DockerAsync(ct, "exec", Opts.ContainerName,
             "adb", "shell", "cat", "/sdcard/mtrx_ui.xml");
         return rc == 0 && !string.IsNullOrWhiteSpace(xml) ? xml : null;
@@ -1188,28 +1249,35 @@ internal sealed class DockerCliPhoneOrchestrator(
         return ((x1 + x2) / 2, (y1 + y2) / 2);
     }
 
-    // O campo de texto (id/entry) esvaziou = a msg saiu. Repete até timeoutMs.
-    private async Task<bool> PollEntryClearedAsync(int timeoutMs, CancellationToken ct)
+    /// <summary>Depois de tocar enviar: o campo esvaziou?</summary>
+    /// <returns>
+    /// <see cref="EstadoDoCampo.Vazio"/> = envio confirmado (o botão de enviar SUMIR é a evidência de
+    /// que o texto deixou o campo; comparar o texto com "" não serve, porque campo vazio devolve a DICA).
+    /// <see cref="EstadoDoCampo.ComTexto"/> = o texto continua lá, então NÃO saiu (conclusivo).
+    /// <see cref="EstadoDoCampo.NaoLido"/> = nunca consegui ler a tela; não dá pra afirmar nada, e quem
+    /// chama NÃO pode reenviar por conta própria.
+    /// </returns>
+    private async Task<EstadoDoCampo> PollEntryClearedAsync(int timeoutMs, CancellationToken ct)
     {
+        var conclusao = EstadoDoCampo.NaoLido;
         var attempts = Math.Max(1, timeoutMs / 500);
         for (var i = 0; i <= attempts; i++)
         {
-            var xml = await DumpUiAsync(ct);
-            if (xml is not null)
+            var estado = LerEstadoDoCampo(await DumpUiAsync(ct));
+            if (estado is EstadoDoCampo.Vazio)
             {
-                // O botão de enviar SUMIR é a evidência de que o texto deixou o campo. Comparar o texto
-                // com "" NÃO serve: campo vazio devolve a DICA, não string vazia (ver HasSendButton).
-                if (!HasSendButton(xml))
-                {
-                    return true;
-                }
+                return EstadoDoCampo.Vazio;
+            }
+            if (estado is EstadoDoCampo.ComTexto)
+            {
+                conclusao = EstadoDoCampo.ComTexto;
             }
             if (i < attempts)
             {
                 await Task.Delay(500, ct);
             }
         }
-        return false;
+        return conclusao;
     }
 
     // content-desc do ÚLTIMO id/status, NORMALIZADO (locale-independente): sent/delivered/read/null.

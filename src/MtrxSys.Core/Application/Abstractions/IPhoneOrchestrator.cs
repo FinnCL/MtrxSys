@@ -285,6 +285,27 @@ public sealed record WhatsAppAccountState(string State, string? Phone)
 /// <param name="Error">Motivo da falha quando <paramref name="Sent"/> = false; null no sucesso.</param>
 public sealed record WhatsAppSendResult(bool Sent, string? DeliveryStatus, string? Error)
 {
+    /// <summary>A falha é CONCLUSIVA ("nada saiu") ou apenas NÃO CONFIRMADA ("pode ter saído")?</summary>
+    /// <remarks>
+    /// 🔴 Existe porque <see cref="Sent"/> é bool e engolia três estados em dois. "o WhatsApp respondeu
+    /// que este número não tem conta" e "toquei enviar mas não consegui confirmar" chegavam idênticos a
+    /// quem chama, e a diferença entre eles decide se é seguro TENTAR DE NOVO.
+    ///
+    /// <para>O console reage a uma falha reabrindo a conversa na outra forma do número. Fazer isso num
+    /// envio que talvez tenha saído entrega a campanha DUAS VEZES para a mesma pessoa, que é o pior
+    /// resultado possível com contato frio. Por isso a retentativa só pode rodar quando a falha é
+    /// conclusiva.</para>
+    ///
+    /// <para>Mesma doutrina do <c>IsOnWhatsAppAsync</c>, que nunca devolve false: quando a consequência
+    /// de errar é cara, "não sei" precisa caber no tipo, senão vira uma afirmação inventada.</para>
+    /// </remarks>
+    public bool Uncertain { get; init; }
+
     public static WhatsAppSendResult Ok(string? deliveryStatus) => new(true, deliveryStatus, null);
+
+    /// <summary>Falha CONCLUSIVA: nada saiu, e tentar de novo é seguro.</summary>
     public static WhatsAppSendResult Fail(string error) => new(false, null, error);
+
+    /// <summary>NÃO DEU PRA CONFIRMAR: a mensagem pode ter saído. Não tentar de novo sozinho.</summary>
+    public static WhatsAppSendResult Unconfirmed(string error) => new(false, null, error) { Uncertain = true };
 }

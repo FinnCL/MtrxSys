@@ -832,14 +832,50 @@ internal sealed class PhoneConsoleCommand(
             return;
         }
 
+        AnsiConsole.MarkupLine("[grey]Ctrl+C interrompe. gravar é idempotente, então rodar de novo continua de onde parou.[/]");
+        var (criados, jaTinha, falhas) = await GravarPassadaAsync(_contatos, ct);
+
+        // 🔴 SEGUNDA PASSADA SÓ NOS QUE FALHARAM. A gravação recusa quando outro escritor mexe na agenda
+        // no meio (o sync do WhatsApp ou o da conta Google), e essa recusa é TRANSITÓRIA por construção.
+        // Numa base inteira o laço leva dezenas de minutos com o sync ativo o tempo todo, então algumas
+        // voltas vão cair aí. Sem isto, o operador teria que reparar no contador e rodar o comando de
+        // novo pra algo que o próprio programa sabe que é só repetir.
+        if (falhas.Count > 0)
+        {
+            AnsiConsole.MarkupLine(
+                $"[grey]{falhas.Count} não entrou(aram) na primeira passada; repetindo só esses…[/]");
+            var (c2, j2, f2) = await GravarPassadaAsync([.. falhas.Select(f => f.Contato)], ct);
+            (criados, jaTinha, falhas) = (criados + c2, jaTinha + j2, f2);
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[green]{criados}[/] criado(s), [grey]{jaTinha} já estava(m) na agenda[/]"
+            + (falhas.Count > 0 ? $", [red]{falhas.Count} falha(s)[/]" : "") + ".");
+        MostrarAlguns(falhas.Count, 10,
+            i => $"[red]falhou:[/] {falhas[i].Contato.Numero} {falhas[i].Motivo.EscapeMarkup()}", " falha(s)");
+
+        if (criados > 0)
+        {
+            // Não é enfeite: é o MESMO motivo do Defer de 180s do DispatchEngine. Disparar agora para
+            // um contato recém-criado é disparar antes de o WhatsApp do aparelho conhecê-lo.
+            AnsiConsole.MarkupLine(
+                "[yellow]dê alguns minutos antes de disparar[/][grey]: contato recém-criado precisa "
+                + "sincronizar pela conta Google até o WhatsApp do aparelho.[/]");
+        }
+    }
+
+    /// <summary>Uma passada de gravação sobre a lista. Devolve os que falharam, pra quem chama decidir
+    /// se repete.</summary>
+    private async Task<(int Criados, int JaTinha, List<(Contato Contato, string Motivo)> Falhas)>
+        GravarPassadaAsync(List<Contato> lista, CancellationToken ct)
+    {
         var criados = 0;
         var jaTinha = 0;
-        var falhas = new List<string>();
+        var falhas = new List<(Contato, string)>();
 
-        AnsiConsole.MarkupLine("[grey]Ctrl+C interrompe. gravar é idempotente, então rodar de novo continua de onde parou.[/]");
-        for (var i = 0; i < _contatos.Count; i++)
+        for (var i = 0; i < lista.Count; i++)
         {
-            var c = _contatos[i];
+            var c = lista[i];
             // 🔴 As comparações abaixo dependem do TEXTO devolvido pelas implementações de
             // SaveContactAsync (WhatsAppContactsReader no físico, DockerCliPhoneOrchestrator no
             // emulador). As duas concordam hoje em "ok" e "já existe"; nada no compilador garante isso.
@@ -854,7 +890,7 @@ internal sealed class PhoneConsoleCommand(
             {
                 criados++;
                 AnsiConsole.MarkupLine(
-                    $"  [grey]{i + 1}/{_contatos.Count}[/] [green]criado[/] {c.Numero} "
+                    $"  [grey]{i + 1}/{lista.Count}[/] [green]criado[/] {c.Numero} "
                     + $"{(c.Nome ?? "").EscapeMarkup()} {(r.Length > 2 ? $"[yellow]{r[2..].EscapeMarkup()}[/]" : "")}");
             }
             else if (r == "já existe")
@@ -863,23 +899,11 @@ internal sealed class PhoneConsoleCommand(
             }
             else
             {
-                falhas.Add($"{c.Numero}: {r}");
+                falhas.Add((c, r));
             }
         }
 
-        AnsiConsole.MarkupLine(
-            $"[green]{criados}[/] criado(s), [grey]{jaTinha} já estava(m) na agenda[/]"
-            + (falhas.Count > 0 ? $", [red]{falhas.Count} falha(s)[/]" : "") + ".");
-        MostrarAlguns(falhas.Count, 10, i => $"[red]falhou:[/] {falhas[i].EscapeMarkup()}", " falha(s)");
-
-        if (criados > 0)
-        {
-            // Não é enfeite: é o MESMO motivo do Defer de 180s do DispatchEngine. Disparar agora para
-            // um contato recém-criado é disparar antes de o WhatsApp do aparelho conhecê-lo.
-            AnsiConsole.MarkupLine(
-                "[yellow]dê alguns minutos antes de disparar[/][grey]: contato recém-criado precisa "
-                + "sincronizar pela conta Google até o WhatsApp do aparelho.[/]");
-        }
+        return (criados, jaTinha, [.. falhas]);
     }
 
     /// <summary>Lista vazia: nada a proteger. Com conteúdo, pergunta, e o padrão (Enter) é o modo NÃO
@@ -1084,6 +1108,15 @@ internal sealed class PhoneConsoleCommand(
         var seguidas = 0;
         var entregues = new HashSet<string>(StringComparer.Ordinal);
 
+        // 🔴 TENTADOS, ao lado de ENTREGUES. O de entregues só registra SUCESSO, então um número morto
+        // não deixava rastro: o irmão dele (mesma pessoa, outra forma), mais adiante no mesmo plano,
+        // tentava a forma B e depois a A na segunda chance — as duas já tentadas. Quatro aberturas de
+        // conversa para um número que não existe, e abrir conversa atrás de conversa para números
+        // inexistentes é o padrão de bot enumerando que o comentário da espera pós-falha diz evitar.
+        // Quem falhou CONTINUA na lista pra ser tentado noutro lote; o que este conjunto impede é a
+        // repetição dentro da MESMA execução.
+        var tentados = new HashSet<string>(StringComparer.Ordinal);
+
         try
         {
             for (var i = 0; i < plano.Count; i++)
@@ -1108,12 +1141,23 @@ internal sealed class PhoneConsoleCommand(
                     continue;
                 }
 
+                // Já tentei esta pessoa neste lote e não deu certo nas duas formas. Repetir agora só
+                // gastaria sinal de bot; ela fica na lista pra uma execução futura.
+                if (tentados.Contains(contato.Numero) || (irmao is not null && tentados.Contains(irmao)))
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[grey]({i + 1}/{plano.Count}) pulado[/] {contato.Numero} "
+                        + "[grey]— a mesma pessoa já foi tentada neste lote, nas duas formas do número.[/]");
+                    continue;
+                }
+
                 if (_agenda)
                 {
                     var saved = await phone.SaveContactAsync(contato.Numero, contato.Nome, ct);
                     AnsiConsole.MarkupLine($"[grey]agenda[/] {contato.Numero}: {saved.EscapeMarkup()}");
                 }
 
+                tentados.Add(contato.Numero);
                 var r = await phone.SendWhatsAppMessageAsync(contato.Numero, texto, ct);
 
                 // 🔴 SEGUNDA CHANCE COM A OUTRA FORMA DO NÚMERO. O WhatsApp guarda a conta ora com o
@@ -1127,13 +1171,21 @@ internal sealed class PhoneConsoleCommand(
                 // UMA tentativa a mais, nunca um laço: duas formas é diagnóstico, N formas é
                 // enumeração de números — o padrão que se quer evitar. Se as duas falharem, o número
                 // é morto de verdade.
+                // 🔴 SÓ COM FALHA CONCLUSIVA. `Uncertain` significa que o toque em enviar já aconteceu e
+                // não deu pra confirmar o resultado — a mensagem PODE ter saído. Reabrir a conversa na
+                // outra forma do número nesse estado entrega a campanha DUAS VEZES para a mesma pessoa,
+                // que é o pior desfecho possível com contato frio.
+                // Antes isto não tinha como ser distinguido: o `Sent` era bool e "não saiu" chegava aqui
+                // igual a "não sei se saiu".
                 var numeroUsado = contato.Numero;
-                if (!r.Sent && BrazilPhoneValidator.AlternateBrazilianForm(contato.Numero) is { } alternativo)
+                if (!r.Sent && !r.Uncertain
+                    && BrazilPhoneValidator.AlternateBrazilianForm(contato.Numero) is { } alternativo)
                 {
                     AnsiConsole.MarkupLine(
                         $"[grey]tentando a outra forma do número ({alternativo})…[/]");
                     await Task.Delay(
                         TimeSpan.FromSeconds(Random.Shared.Next(FalhaEsperaMin, FalhaEsperaMax + 1)), ct);
+                    tentados.Add(alternativo);
                     var r2 = await phone.SendWhatsAppMessageAsync(alternativo, texto, ct);
                     if (r2.Sent)
                     {
@@ -1171,6 +1223,19 @@ internal sealed class PhoneConsoleCommand(
                         $"[green]({i + 1}/{plano.Count}) enviado[/] {numeroUsado} tpl {variante} "
                         + $"(entrega: {r.DeliveryStatus ?? "?"})");
                 }
+                else if (r.Uncertain)
+                {
+                    // NÃO conta como enviado nem sai da lista: não há o que afirmar. Mas também não é
+                    // uma falha comum, e chamá-la assim faria o operador reenviar achando que nada saiu.
+                    falhas++;
+                    seguidas++;
+                    AnsiConsole.MarkupLine(
+                        $"[yellow]({i + 1}/{plano.Count}) NÃO CONFIRMADO[/] {contato.Numero}: "
+                        + $"{(r.Error ?? "").EscapeMarkup()}");
+                    AnsiConsole.MarkupLine(
+                        "[yellow]  confira esta conversa no aparelho antes de mandar de novo.[/] "
+                        + "[grey]fica na lista, e o log guarda como \"incerto\" pra avisar no próximo lote.[/]");
+                }
                 else
                 {
                     falhas++;
@@ -1178,7 +1243,15 @@ internal sealed class PhoneConsoleCommand(
                     AnsiConsole.MarkupLine(
                         $"[red]({i + 1}/{plano.Count}) falhou[/] {contato.Numero}: {(r.Error ?? "").EscapeMarkup()}");
                 }
-                Registrar(log, serial, contato, variante, texto, r);
+                // 🔴 REGISTRA QUEM RECEBEU, não quem estava na lista. Quando a segunda chance entrega
+                // pela outra forma do número, `contato.Numero` é justamente a forma que FALHOU: o CSV
+                // gravava "enviado=sim" para um número que não recebeu nada, e quem recebeu não
+                // aparecia em lugar nenhum.
+                // Não é só auditoria errada. O CSV é a ÚNICA memória entre execuções (ver
+                // NumerosJaEnviados), então a pessoa colada amanhã na forma certa passava sem aviso e
+                // podia receber a campanha de novo. A dedup DENTRO do lote já sabia que as duas formas
+                // são a mesma pessoa; a de fora do lote não ficava sabendo.
+                Registrar(log, serial, contato with { Numero = numeroUsado }, variante, texto, r);
 
                 // 🔴 DISJUNTOR. Falhar N vezes seguidas não é N acidentes, é UM problema estrutural
                 // sendo repetido: tela bloqueada, WhatsApp fechado, cabo solto, alguém mexeu no
@@ -1237,10 +1310,21 @@ internal sealed class PhoneConsoleCommand(
 
     /// <summary>Avisa quem desta lista já recebeu deste aparelho. O log é a única memória entre
     /// execuções. Avisa e deixa decidir, em vez de pular calado: reenviar às vezes é intencional.</summary>
+    /// <remarks>
+    /// 🔴 Confere as DUAS FORMAS do número, igual à dedup dentro do lote (ver DispararAsync). Com
+    /// comparação de dígitos exatos conviviam duas noções de "mesmo contato" no mesmo arquivo, e a mais
+    /// fraca era justamente a que guarda o reenvio ENTRE sessões: quem recebeu ontem em 12 dígitos e é
+    /// colado hoje em 13 não era reconhecido, e o aviso que existe pra impedir a segunda mensagem não
+    /// aparecia.
+    /// </remarks>
     private void AvisarRepeticao(List<(Contato Contato, int Variante, string Texto)> plano, string serial)
     {
         var jaReceberam = NumerosJaEnviados(serial);
-        var repetidos = plano.Where(p => jaReceberam.Contains(p.Contato.Numero)).ToList();
+        var repetidos = plano
+            .Where(p => jaReceberam.Contains(p.Contato.Numero)
+                || (BrazilPhoneValidator.AlternateBrazilianForm(p.Contato.Numero) is { } outra
+                    && jaReceberam.Contains(outra)))
+            .ToList();
         if (repetidos.Count == 0)
         {
             return;
@@ -1820,10 +1904,15 @@ internal sealed class PhoneConsoleCommand(
     {
         try
         {
+            // Três valores na coluna "enviado", não dois. "incerto" é o envio cujo toque aconteceu e não
+            // deu pra confirmar: gravar isso como "nao" mentiria pro NumerosJaEnviados, que é a única
+            // memória entre execuções, e a pessoa voltaria amanhã sem nenhum aviso de que talvez já
+            // tenha recebido.
+            var enviado = r.Sent ? "sim" : r.Uncertain ? "incerto" : "nao";
             var linha = string.Join(';',
                 DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture),
                 Csv(serial), Csv(c.Numero), Csv(c.Nome ?? ""), variante.ToString(CultureInfo.InvariantCulture),
-                r.Sent ? "sim" : "nao", Csv(r.DeliveryStatus ?? ""), Csv(r.Error ?? ""), Csv(texto));
+                enviado, Csv(r.DeliveryStatus ?? ""), Csv(r.Error ?? ""), Csv(texto));
             File.AppendAllText(caminho, linha + "\n", Encoding.UTF8);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -1847,7 +1936,10 @@ internal sealed class PhoneConsoleCommand(
             foreach (var linha in File.ReadLines(caminho).Skip(1))
             {
                 var campos = CamposCsv(linha);
-                if (campos.Count > 5 && campos[5] == "sim")
+                // "incerto" entra JUNTO com "sim": a pergunta que este conjunto responde é "pode já ter
+                // recebido?", e não "recebeu com certeza?". Deixar o incerto de fora devolveria o
+                // silêncio que o aviso existe pra quebrar.
+                if (campos.Count > 5 && campos[5] is "sim" or "incerto")
                 {
                     numeros.Add(campos[2]);
                 }
