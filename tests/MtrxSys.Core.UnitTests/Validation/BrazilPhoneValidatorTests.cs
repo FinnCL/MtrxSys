@@ -132,6 +132,39 @@ public sealed class BrazilPhoneValidatorTests
     public void AlternateBrazilianForm_devolve_null_quando_nao_ha_alternativa(string entrada) =>
         BrazilPhoneValidator.AlternateBrazilianForm(entrada).Should().BeNull();
 
+    // 🔴 A ASSIMETRIA. Ao INSERIR o 9 a regra sempre conferiu a faixa do assinante; ao REMOVER, não
+    // conferia nada. Tirar o 9 de "11 9 2140-4487" deixa "11 2140-4487", que é faixa de FIXO — outro
+    // telefone, de outra pessoa, e a segunda chance mandaria pra ele.
+    //
+    // Números "9 2xxx-xxxx" foram alocados DEPOIS da migração e nunca tiveram forma de 8 dígitos, então
+    // a "outra forma" deles não existe. Achado em 2026-08-06 ao classificar uma lista real: 8 de 15
+    // celulares modernos caíam nesse caso.
+    [Theory]
+    [InlineData("5511921404487")]  // 11 92140-4487 -> tirar o 9 daria 11 2140-4487, faixa de fixo
+    [InlineData("5586920001222")]  // 86 92000-1222 -> daria 86 2000-1222
+    [InlineData("5591920072473")]  // 91 92007-2473 -> daria 91 2007-2473
+    public void AlternateBrazilianForm_nao_inventa_forma_antiga_para_celular_pos_migracao(string entrada) =>
+        BrazilPhoneValidator.AlternateBrazilianForm(entrada).Should().BeNull(
+            "esse número nunca teve forma de 8 dígitos; a que sairia é o telefone de outra pessoa");
+
+    [Theory]
+    [InlineData("5584998420730", BrazilPhoneValidator.BrazilNumberShape.CelularModerno)]
+    [InlineData("558494715083", BrazilPhoneValidator.BrazilNumberShape.CelularLegado)]
+    [InlineData("551121404487", BrazilPhoneValidator.BrazilNumberShape.FixoOuSemONono)]
+    [InlineData("559620270056", BrazilPhoneValidator.BrazilNumberShape.FixoOuSemONono)]
+    [InlineData("5500998420730", BrazilPhoneValidator.BrazilNumberShape.NaoBrasileiro)]
+    [InlineData("+351912345678", BrazilPhoneValidator.BrazilNumberShape.NaoBrasileiro)]
+    public void ShapeOf_separa_pela_faixa_do_assinante_e_nao_pelo_comprimento(
+        string entrada, BrazilPhoneValidator.BrazilNumberShape esperado) =>
+        BrazilPhoneValidator.ShapeOf(entrada).Should().Be(esperado);
+
+    [Fact]
+    public void ShapeOf_dois_numeros_de_12_digitos_com_formas_diferentes() =>
+        // A prova de que contar dígitos separa mal: os dois têm 12, e só um é celular.
+        BrazilPhoneValidator.ShapeOf("558494715083").Should().NotBe(
+            BrazilPhoneValidator.ShapeOf("551121404487"),
+            "84 9471-5083 é celular legado; 11 2140-4487 é faixa de fixo");
+
     [Fact]
     public void AlternateBrazilianForm_e_reversivel() =>
         BrazilPhoneValidator.AlternateBrazilianForm(

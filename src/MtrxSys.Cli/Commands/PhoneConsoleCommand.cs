@@ -235,6 +235,9 @@ internal sealed class PhoneConsoleCommand(
                     case "previa":
                         Previa();
                         break;
+                    case "c" or "conferir":
+                        Conferir();
+                        break;
                     case "enviar":
                         await EnviarAsync(serial, ct);
                         break;
@@ -691,6 +694,71 @@ internal sealed class PhoneConsoleCommand(
         }
         AnsiConsole.Write(t);
     }
+
+    /// <summary>Classifica cada número da lista pela FORMA, e diz se ele tem outra forma para a segunda
+    /// chance. Não toca no aparelho.</summary>
+    /// <remarks>
+    /// 🔴 Existe porque "12 ou 13 dígitos" é a conta errada, e ela confundiu o operador e a mim em
+    /// 2026-08-06. O que decide não é o comprimento, é o PRIMEIRO DÍGITO DO ASSINANTE: um "84 9471-5083"
+    /// tem 12 dígitos e é celular de verdade, enquanto um "11 2140-4487" tem os mesmos 12 e é faixa de
+    /// fixo. Contar dígitos separa mal; olhar a faixa separa certo.
+    /// <para>Chama o <see cref="BrazilPhoneValidator"/> em vez de repetir a regra aqui. Um relatório que
+    /// classifica por conta própria pode discordar do que o envio vai fazer, e aí ele tranquiliza sobre
+    /// um comportamento que não é o real — que é o defeito mais caro que um relatório pode ter.</para>
+    /// </remarks>
+    private void Conferir()
+    {
+        if (_contatos.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[red]sem contatos.[/] use [bold]contatos[/] ou [bold]sistema[/] antes.");
+            return;
+        }
+
+        var t = new Table().Border(TableBorder.Rounded);
+        t.AddColumn("#");
+        t.AddColumn("número");
+        t.AddColumn("díg");
+        t.AddColumn("forma");
+        t.AddColumn("outra forma (2ª chance)");
+
+        var suspeitos = 0;
+        for (var i = 0; i < _contatos.Count; i++)
+        {
+            var numero = _contatos[i].Numero;
+            var forma = BrazilPhoneValidator.ShapeOf(numero);
+            var alternativa = BrazilPhoneValidator.AlternateBrazilianForm(numero);
+            if (forma is BrazilPhoneValidator.BrazilNumberShape.FixoOuSemONono
+                or BrazilPhoneValidator.BrazilNumberShape.NaoBrasileiro)
+            {
+                suspeitos++;
+            }
+            t.AddRow(
+                (i + 1).ToString(CultureInfo.InvariantCulture),
+                numero,
+                numero.Length.ToString(CultureInfo.InvariantCulture),
+                DescreverForma(forma),
+                alternativa is null ? "[grey](nenhuma)[/]" : alternativa);
+        }
+        AnsiConsole.Write(t);
+
+        if (suspeitos > 0)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]{suspeitos} número(s) merecem conferência na origem.[/] [grey]assinante começando "
+                + "em 2-5 é faixa de fixo; se a pessoa tem celular, o que falta é o 9º dígito.[/]");
+        }
+        AnsiConsole.MarkupLine(
+            "[grey]\"outra forma\" é o que a 2ª chance tentaria se o envio falhar. Vazio significa que não "
+            + "existe alternativa plausível, e uma falha ali é definitiva.[/]");
+    }
+
+    private static string DescreverForma(BrazilPhoneValidator.BrazilNumberShape forma) => forma switch
+    {
+        BrazilPhoneValidator.BrazilNumberShape.CelularModerno => "[green]celular (13 díg)[/]",
+        BrazilPhoneValidator.BrazilNumberShape.CelularLegado => "[green]celular legado (12 díg)[/]",
+        BrazilPhoneValidator.BrazilNumberShape.FixoOuSemONono => "[yellow]FIXO ou falta o 9º[/]",
+        _ => "[red]não é brasileiro[/]",
+    };
 
     private void Previa()
     {
@@ -1715,7 +1783,10 @@ internal sealed class PhoneConsoleCommand(
 
         Passo(7, "conferir antes",
             ("6  ver", "contatos, templates e a configuração atual"),
-            ("7  previa", "quem recebe qual texto, sem tocar no aparelho"));
+            ("7  previa", "quem recebe qual texto, sem tocar no aparelho"),
+            ("c", "a forma de cada número: celular, legado ou fixo"),
+            ("atencao", "o que vale nao e o total de digitos"),
+            ("regra", "o digito depois do DDD tem que ser 6 a 9"));
 
         Passo(8, "disparar",
             ("digite", "8   ou   enviar"),
@@ -1747,6 +1818,7 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("textos [grey]| textos +[/]", $"cola os templates (substitui | soma). {TokenNome} vira o nome do contato");
         t.AddRow("ver", "mostra a lista, os templates e os ajustes atuais");
         t.AddRow("previa", "simula quem receberia qual template, sem tocar no aparelho");
+        t.AddRow("conferir [grey]| c[/]", "classifica cada número: celular, legado, fixo ou faltando o 9º dígito");
         t.AddRow("enviar", "pré-voo, plano, confirmação e disparo do lote");
         t.AddRow("status", "reconsulta o aparelho pelo adb");
         t.AddRow("intervalo <min> <max>", "segundos entre um envio e o próximo (default 150 360)");

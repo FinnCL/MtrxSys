@@ -148,6 +148,54 @@ public sealed partial class BrazilPhoneValidator
 
     private const int BrazilCountryCode = 55;
 
+    /// <summary>Que FORMA este número tem, pelo plano de numeração brasileiro.</summary>
+    /// <remarks>
+    /// Serve pra CONFERIR uma lista antes de disparar, e mora aqui de propósito: quem responde tem que
+    /// ser o mesmo código que o envio usa. Uma classificação feita à parte (planilha, script) diverge
+    /// da real sem avisar, e aí o relatório tranquiliza sobre um comportamento que não é o que vai
+    /// acontecer.
+    /// </remarks>
+    public enum BrazilNumberShape
+    {
+        /// <summary>Nem chega a ser um brasileiro plausível: código do país, DDD ou comprimento fora.</summary>
+        NaoBrasileiro,
+
+        /// <summary>11 dígitos nacionais começando com 9: o celular de hoje.</summary>
+        CelularModerno,
+
+        /// <summary>10 dígitos nacionais com assinante em 6-9: celular no formato ANTERIOR à migração
+        /// do 9º dígito. Continua existindo, e muitas contas do WhatsApp seguem registradas assim.</summary>
+        CelularLegado,
+
+        /// <summary>10 dígitos nacionais com assinante em 2-5. Ou é telefone FIXO, ou é um celular a que
+        /// falta o 9º dígito. Os dois casos são indistinguíveis olhando só o número, e nos dois o envio
+        /// tende a falhar — por isso vale conferir na origem antes de disparar.</summary>
+        FixoOuSemONono,
+    }
+
+    /// <summary>A forma deste número, pelas MESMAS regras que <see cref="IsPlausibleBrazilian"/> e
+    /// <see cref="AlternateBrazilianForm"/> aplicam.</summary>
+    public static BrazilNumberShape ShapeOf(string? raw)
+    {
+        var digits = new string([.. (raw ?? string.Empty).Where(char.IsAsciiDigit)]);
+        if (!digits.StartsWith("55", StringComparison.Ordinal))
+        {
+            return BrazilNumberShape.NaoBrasileiro;
+        }
+        var nacional = digits[2..];
+        if (nacional.Length is not (10 or 11) || !ValidAreaCodes.Contains(nacional[..2]))
+        {
+            return BrazilNumberShape.NaoBrasileiro;
+        }
+        if (nacional.Length == 11)
+        {
+            return nacional[2] == '9' ? BrazilNumberShape.CelularModerno : BrazilNumberShape.NaoBrasileiro;
+        }
+        return nacional[2] is >= '6' and <= '9'
+            ? BrazilNumberShape.CelularLegado
+            : BrazilNumberShape.FixoOuSemONono;
+    }
+
     /// <summary>A OUTRA forma do mesmo celular brasileiro: com o 9º dígito se veio sem, sem ele se veio
     /// com. <c>null</c> quando não existe forma alternativa plausível.</summary>
     /// <remarks>
@@ -179,8 +227,20 @@ public sealed partial class BrazilPhoneValidator
 
         var outra = nacional.Length switch
         {
-            11 when nacional[2] == '9' => "55" + nacional[..2] + nacional[3..],
-            10 when nacional[2] is >= '6' and <= '9' => "55" + nacional[..2] + "9" + nacional[2..],
+            // 🔴 CONFERE O QUE SOBRA AO TIRAR O 9, e não só que ele está lá. Tirar o 9 de
+            // "11 9 2140-4487" deixa "11 2140-4487", cujo assinante começa com 2 — faixa de FIXO.
+            // Números assim foram alocados DEPOIS da migração do 9º dígito e nunca tiveram forma de 8
+            // dígitos: a "outra forma" deles não existe, e mandar pra ela é mandar pro telefone de
+            // outra pessoa.
+            //
+            // A direção oposta já se protegia disso desde sempre (ver o caso de 10 logo abaixo). Esta
+            // não, e a assimetria sobreviveu a várias leituras. Só ficou óbvia ao classificar uma lista
+            // REAL em 2026-08-06: 8 de 15 celulares modernos eram "9 2xxx-xxxx" e produziam alternativa
+            // na faixa de fixo.
+            11 when nacional[2] == '9' && nacional[3] is >= '6' and <= '9'
+                => "55" + nacional[..2] + nacional[3..],
+            10 when nacional[2] is >= '6' and <= '9'
+                => "55" + nacional[..2] + "9" + nacional[2..],
             _ => null,
         };
 
