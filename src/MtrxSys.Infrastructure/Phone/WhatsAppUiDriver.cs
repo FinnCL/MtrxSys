@@ -83,12 +83,15 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// <para>Na dúvida devolve a mensagem genérica: afirmar a causa errada é pior que admitir que não
     /// se sabe — foi justamente o que custou as horas acima.</para>
     /// </remarks>
-    private async Task<string> DiagnosticarChatNaoAbertoAsync(CancellationToken ct)
+    private async Task<WhatsAppSendResult> DiagnosticarChatNaoAbertoAsync(CancellationToken ct)
     {
-        const string generico = "botão enviar não apareceu (o chat não abriu ou o texto não preencheu).";
+        var generico = WhatsAppSendResult.Fail(
+            "botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
         var xml = await DumpUiAsync(ct);
         if (string.IsNullOrWhiteSpace(xml))
         {
+            // Sem leitura de tela não dá pra afirmar que a culpa é do número, e o palpite errado aqui
+            // faz o lote seguir em frente contra um aparelho travado. Na dúvida, é falha do aparelho.
             return generico;
         }
 
@@ -106,8 +109,9 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 
         var tela = xml.ToLowerInvariant();
         return pistas.Any(p => tela.Contains(p, StringComparison.Ordinal))
-            ? "o WhatsApp respondeu que ESTE NÚMERO não tem conta. Não é o aparelho nem a conexão: "
-              + "é a forma do número ou o contato mesmo. Se o contato existe, confira o 9º dígito."
+            ? WhatsAppSendResult.NoAccount(
+                "o WhatsApp respondeu que ESTE NÚMERO não tem conta. Não é o aparelho nem a conexão: "
+                + "é a forma do número ou o contato mesmo. Se o contato existe, confira o 9º dígito.")
             : generico;
     }
 
@@ -207,7 +211,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             var send = await PollNodeCenterAsync("com.whatsapp:id/send", _opts.WhatsAppOpenWaitMs, sct);
             if (send is null)
             {
-                return WhatsAppSendResult.Fail(await DiagnosticarChatNaoAbertoAsync(sct));
+                return await DiagnosticarChatNaoAbertoAsync(sct);
             }
 
             // Daqui pra frente NADA é conclusivo. O toque é irreversível e não tem confirmação síncrona:

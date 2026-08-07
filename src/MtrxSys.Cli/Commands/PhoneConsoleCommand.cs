@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using MtrxSys.Cli.Infrastructure;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Safety;
 using MtrxSys.Core.Validation;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -61,16 +62,27 @@ internal sealed class PhoneConsoleCommand(
         public int MinDelay { get; init; } = 150;
         public int MaxDelay { get; init; } = 360;
         public int Teto { get; init; }
+        public int PararEm { get; init; }
         public bool Agenda { get; init; } = true;
         public bool DigitacaoHumana { get; init; } = true;
     }
 
     private const string TokenNome = "{nome}";
 
-    /// <summary>Falhas SEGUIDAS que interrompem o lote. Mesmo valor do
-    /// <c>CircuitBreaker.FailureThreshold</c> do Dispatcher, de propósito: é a mesma ideia, e dois
-    /// números diferentes pra ela só dariam a quem opera mais uma coisa pra lembrar.</summary>
-    private const int LimiteFalhasSeguidas = 3;
+    /// <summary>Falhas SEGUIDAS que interrompem o lote. ZERO = nunca interrompe, que é o padrão.</summary>
+    /// <remarks>
+    /// 🔴 ZERO POR DECISÃO DO OPERADOR, com o caso na mão (2026-08-07): num lote de 30, três números na
+    /// forma errada, seguidos, derrubaram a execução em 22/30 com o aparelho perfeito, e 15 contatos
+    /// bons ficaram sem receber. O argumento que decidiu: se falhou, nada saiu, então mostrar a falha e
+    /// ir para o próximo não custa entrega nenhuma, enquanto travar custa o resto da lista. Quem falha
+    /// continua na lista, então nada se perde ao seguir.
+    ///
+    /// <para>O custo de seguir foi levantado e é real: abrir conversa atrás de conversa para número que
+    /// não existe é o padrão de bot enumerando. As respostas ficaram sendo o RITMO (a espera curta
+    /// pós-falha só vale para falha isolada; virando sequência, volta ao intervalo normal) e o AVISO de
+    /// aparelho suspeito. Ver <see cref="BatchStopPolicy"/>.</para>
+    /// </remarks>
+    private int _pararEm;
 
     /// <summary>Espera depois de uma FALHA, em segundos. Curta porque nada foi enviado, mas não zero
     /// porque abrir conversas em rajada para números inexistentes é o padrão de um bot enumerando.
@@ -247,6 +259,10 @@ internal sealed class PhoneConsoleCommand(
                         break;
                     case "teto":
                         Teto(partes);
+                        Salvar(serial);
+                        break;
+                    case "parar":
+                        Parar(partes);
                         Salvar(serial);
                         break;
                     case "3" or "agenda":
@@ -1182,7 +1198,10 @@ internal sealed class PhoneConsoleCommand(
     {
         var enviados = 0;
         var falhas = 0;
-        var seguidas = 0;
+        // O disjuntor mora no Core, e não em variáveis soltas aqui, porque tem estado e casos de borda
+        // (ver BatchStopPolicy) e este projeto não tem como ser testado. A primeira versão era feita à
+        // mão neste laço e nasceu com um furo na sequência alternada.
+        var disjuntor = new BatchStopPolicy(_pararEm);
         var entregues = new HashSet<string>(StringComparer.Ordinal);
 
         // 🔴 TENTADOS, ao lado de ENTREGUES. O de entregues só registra SUCESSO, então um número morto
@@ -1295,7 +1314,7 @@ internal sealed class PhoneConsoleCommand(
                 if (r.Sent)
                 {
                     enviados++;
-                    seguidas = 0;   // sucesso zera: o disjuntor mede sequência, não total
+                    disjuntor.Delivered();
                     entregues.Add(contato.Numero);
                     // A forma que REALMENTE recebeu também entra, senão o irmão dela (mesma pessoa,
                     // outro formato) passaria pela guarda lá em cima e receberia de novo.
@@ -1309,7 +1328,9 @@ internal sealed class PhoneConsoleCommand(
                     // NÃO conta como enviado nem sai da lista: não há o que afirmar. Mas também não é
                     // uma falha comum, e chamá-la assim faria o operador reenviar achando que nada saiu.
                     falhas++;
-                    seguidas++;
+                    // Conta como falha de APARELHO: "toquei enviar e não consegui confirmar" fala da
+                    // leitura de tela, não do número, e repetido é sinal de aparelho ruim.
+                    disjuntor.DeviceFailure();
                     AnsiConsole.MarkupLine(
                         $"[yellow]({i + 1}/{plano.Count}) NÃO CONFIRMADO[/] {contato.Numero}: "
                         + $"{(r.Error ?? "").EscapeMarkup()}");
@@ -1317,10 +1338,22 @@ internal sealed class PhoneConsoleCommand(
                         "[yellow]  confira esta conversa no aparelho antes de mandar de novo.[/] "
                         + "[grey]fica na lista, e o log guarda como \"incerto\" pra avisar no próximo lote.[/]");
                 }
+                else if (r.NoWhatsAppAccount)
+                {
+                    // 🔴 CONTA À PARTE das falhas de aparelho. O app afirmou que ESTE número não tem
+                    // conta, o que não prevê nada sobre o próximo contato: não pode alimentar o aviso
+                    // que manda conferir a tela do celular. Linha própria também na tela, porque
+                    // "falhou" e "sem conta" mandam o operador para lugares diferentes.
+                    falhas++;
+                    disjuntor.NoAccount();
+                    AnsiConsole.MarkupLine(
+                        $"[red]({i + 1}/{plano.Count}) sem conta[/] {contato.Numero}: "
+                        + $"{(r.Error ?? "").EscapeMarkup()}");
+                }
                 else
                 {
                     falhas++;
-                    seguidas++;
+                    disjuntor.DeviceFailure();
                     AnsiConsole.MarkupLine(
                         $"[red]({i + 1}/{plano.Count}) falhou[/] {contato.Numero}: {(r.Error ?? "").EscapeMarkup()}");
                 }
@@ -1334,20 +1367,29 @@ internal sealed class PhoneConsoleCommand(
                 // são a mesma pessoa; a de fora do lote não ficava sabendo.
                 Registrar(log, serial, contato with { Numero = numeroUsado }, variante, texto, r);
 
-                // 🔴 DISJUNTOR. Falhar N vezes seguidas não é N acidentes, é UM problema estrutural
-                // sendo repetido: tela bloqueada, WhatsApp fechado, cabo solto, alguém mexeu no
-                // aparelho. Sem isto o laço queimava a lista inteira, uma a uma, e só parava no fim —
-                // e cada tentativa a número inexistente pesa contra um chip em aquecimento.
-                // Medido em 2026-08-05: duas falhas seguidas logo na abertura do lote, e o console
-                // seguiria tentando as outras treze.
-                // O mesmo limiar do DispatchEngine (CircuitBreaker.FailureThreshold = 3), pra o
-                // operador não ter que lembrar dois números diferentes pra a mesma ideia.
-                if (seguidas >= LimiteFalhasSeguidas)
+                // 🔴 AVISA, NÃO TRAVA. Antes, três falhas seguidas interrompiam o lote. Medido em
+                // 2026-08-07: três números na forma errada mataram uma execução em 22/30 com o aparelho
+                // perfeito, e 15 contatos bons ficaram sem receber. Se falhou, nada saiu — seguir para
+                // o próximo não custa entrega nenhuma, e quem falhou continua na lista.
+                //
+                // O aviso fica porque falha de APARELHO é a única que prevê o próximo contato: tela
+                // bloqueada continua bloqueada. Sem ele, um celular travado no meio do lote só seria
+                // descoberto no fim, com trinta linhas vermelhas e nenhuma entrega.
+                if (disjuntor.AcabouDeAcusarAparelho)
                 {
                     AnsiConsole.MarkupLine(
-                        $"[red]{seguidas} falhas seguidas: lote interrompido.[/] "
-                        + "[grey]isso quase nunca é o contato — confira a tela do aparelho (desbloqueada? "
-                        + "WhatsApp aberto? cabo firme?) e retome com[/] [bold]enviar[/][grey].[/]");
+                        $"[yellow]atenção: {disjuntor.ConsecutiveDeviceFailures} falhas de APARELHO "
+                        + "seguidas.[/] [grey]isso quase nunca é o contato. confira a tela (desbloqueada? "
+                        + "WhatsApp aberto? cabo firme?). o lote continua, mas se o celular estiver "
+                        + "travado o resto vai falhar igual —[/] Ctrl+C [grey]interrompe.[/]");
+                }
+
+                if (disjuntor.ShouldStop)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]{disjuntor.ConsecutiveFailures} falhas seguidas: lote interrompido.[/] "
+                        + "[grey]este teto é o que VOCÊ pediu em[/] parar[grey]; volte a[/] parar 0 "
+                        + "[grey]para nunca interromper por falha.[/]");
                     break;
                 }
 
@@ -1360,12 +1402,25 @@ internal sealed class PhoneConsoleCommand(
                     // exatamente o padrão de um bot enumerando números, e isso é sinal forte de ban.
                     // 8-21s é o mesmo intervalo que o DispatchEngine já usa para operações que NÃO
                     // enviam (o check-exists); reusado aqui de propósito, em vez de inventar um número.
-                    var (min, max) = r.Sent ? (_min, _max) : (FalhaEsperaMin, FalhaEsperaMax);
+                    //
+                    // 🔴 A RAJADA é o que pesa, não a falha isolada. Enquanto o lote parava em 3 falhas,
+                    // a espera curta valia sempre, porque a sequência nunca passava disso. Agora que
+                    // falha não interrompe mais nada, uma lista com 20 números mortos abriria 20
+                    // conversas de 9 em 9 segundos, que é o desenho de enumeração que essa mesma espera
+                    // dizia evitar. Falha isolada segue rápida; virando SEQUÊNCIA, volta ao ritmo
+                    // normal, que espaça as aberturas. Com a parada fora, o ritmo é a proteção que
+                    // sobrou, e por isso ele deixou de ser opcional.
+                    var emSequencia = disjuntor.InFailureStreak;
+                    var (min, max) = r.Sent || emSequencia ? (_min, _max) : (FalhaEsperaMin, FalhaEsperaMax);
                     var espera = Random.Shared.Next(min, max + 1);
                     AnsiConsole.MarkupLine(
                         r.Sent
                             ? $"[grey]aguardando {espera}s antes do próximo…  (Ctrl+C interrompe)[/]"
-                            : $"[grey]nada foi enviado, então só {espera}s antes do próximo…  (Ctrl+C interrompe)[/]");
+                            : emSequencia
+                                ? $"[grey]{disjuntor.ConsecutiveFailures} falhas seguidas: voltando ao "
+                                  + $"ritmo normal, {espera}s, para não abrir conversas em rajada…  "
+                                  + "(Ctrl+C interrompe)[/]"
+                                : $"[grey]nada foi enviado, então só {espera}s antes do próximo…  (Ctrl+C interrompe)[/]");
                     await Task.Delay(TimeSpan.FromSeconds(espera), ct);
                 }
             }
@@ -1512,6 +1567,36 @@ internal sealed class PhoneConsoleCommand(
         }
         _teto = n;
         AnsiConsole.MarkupLine($"teto por lote: [bold]{_teto}[/].");
+    }
+
+    /// <summary>Ajusta quantos números sem conta em sequência interrompem o lote.</summary>
+    /// <remarks>
+    /// 🔴 NÃO entra no menu principal, e é exceção consciente à regra de que todo comando novo entra
+    /// lá. O menu é a superfície do dia a dia; este ajuste só interessa no minuto em que o lote para
+    /// por esse motivo — e é justamente ali que a mensagem de interrupção o oferece, com o valor
+    /// atual. Descoberta no ponto de uso, que é o que a regra do menu persegue. Continua listado em
+    /// `comandos`, que é a referência completa.
+    ///
+    /// <para>Teto de 30 porque o número existe para limitar: um valor gigante é o mesmo que desligar
+    /// o disjuntor, e aí volta o defeito que ele conserta. Quem tem lista pior que isso não precisa
+    /// de mais tolerância, precisa de outra lista.</para>
+    /// </remarks>
+    private void Parar(string[] partes)
+    {
+        var atual = _pararEm == 0 ? "nunca" : _pararEm.ToString(CultureInfo.InvariantCulture);
+        if (partes.Length < 2 || !int.TryParse(partes[1], out var n) || n < 0 || n > 30)
+        {
+            AnsiConsole.MarkupLine($"[red]uso:[/] parar <0-30>   (atual: {atual})");
+            AnsiConsole.MarkupLine(
+                "[grey]quantas falhas seguidas interrompem o lote.[/] 0 [grey]= nunca interrompe, que é "
+                + "o padrão: se falhou, nada saiu, e o contato que falhou continua na lista.[/]");
+            return;
+        }
+        _pararEm = n;
+        AnsiConsole.MarkupLine(
+            _pararEm == 0
+                ? "falhas seguidas: [bold]nunca interrompem o lote[/]."
+                : $"falhas seguidas que interrompem o lote: [bold]{_pararEm}[/].");
     }
 
     private void Limpar(string[] partes)
@@ -1902,6 +1987,7 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("status", "reconsulta o aparelho pelo adb");
         t.AddRow("intervalo <min> <max>", "segundos entre um envio e o próximo (default 150 360)");
         t.AddRow("teto <n>", "máximo de mensagens por lote (default 30)");
+        t.AddRow("parar <n>", "falhas seguidas que interrompem o lote (default 0 = nunca interrompe)");
         t.AddRow("agenda", "liga/desliga gravar o contato na agenda antes de enviar");
         t.AddRow("x [grey][[contato|texto]] [[n]][/]", "exclui UM item (pergunta se você não disser qual)");
         t.AddRow("limpar [grey][[contatos|textos|tudo]][/]", "esvazia o que você pedir");
@@ -2003,6 +2089,10 @@ internal sealed class PhoneConsoleCommand(
                 // não um teto zerado que recusaria qualquer lista.
                 _teto = e.Teto;
             }
+            // Sem guarda de zero aqui, ao contrário do teto: zero é um valor LEGÍTIMO deste ajuste
+            // ("nunca interrompa") e também o padrão, então sessão antiga e escolha explícita levam ao
+            // mesmo lugar.
+            _pararEm = Math.Clamp(e.PararEm, 0, 30);
             if (_contatos.Count > 0 || _textos.Count > 0)
             {
                 AnsiConsole.MarkupLine(
@@ -2027,6 +2117,7 @@ internal sealed class PhoneConsoleCommand(
                 MinDelay = _min,
                 MaxDelay = _max,
                 Teto = _teto,
+                PararEm = _pararEm,
                 Agenda = _agenda,
                 DigitacaoHumana = _digitacaoHumana,
             };

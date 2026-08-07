@@ -77,6 +77,32 @@ public sealed class EnvioPontaAPontaTests
         envio.Sent.Should().BeFalse();
         envio.Uncertain.Should().BeFalse("o app respondeu; é conclusivo, e tentar a outra forma é seguro");
         envio.Error.Should().Contain("não tem conta");
+        envio.NoWhatsAppAccount.Should().BeTrue(
+            "o console usa esta marca para separar os disjuntores: número sem conta não diz nada sobre "
+            + "o próximo contato, e não pode derrubar o lote como derruba uma falha de aparelho");
+    }
+
+    /// <summary>Tela ilegível é falha do APARELHO, e não pode ser vendida como número sem conta.</summary>
+    /// <remarks>
+    /// 🔴 O CONSOLE DECIDE COM ISTO. Sequência de "sem conta" acusa a LISTA, e o lote continua até um
+    /// limite mais frouxo; falha de aparelho acusa o CELULAR, e o lote para em três. Classificar tela
+    /// ilegível como "sem conta" queimaria a lista inteira contra um aparelho travado, uma conversa
+    /// por vez, que é exatamente o defeito que o disjuntor existe para impedir.
+    /// </remarks>
+    [Fact]
+    public async Task Falha_de_leitura_de_tela_nao_e_classificada_como_numero_sem_conta()
+    {
+        var android = new AndroidFalso { DumpsFalhando = 99 };
+        android.ContasExistentes.Add(Com9);   // a conta EXISTE: o problema é só não conseguir ler a tela
+        var (driver, _) = Montar(android);
+        using var __ = driver;
+
+        var envio = await driver.SendAsync("+" + Com9, Texto, CancellationToken.None);
+
+        android.Entregues.Should().BeEmpty();
+        envio.Sent.Should().BeFalse();
+        envio.NoWhatsAppAccount.Should().BeFalse(
+            "não dá pra culpar o número quando nem a tela foi lida");
     }
 
     // ── O caso que motivou a segunda chance ──────────────────────────────────────────────────────

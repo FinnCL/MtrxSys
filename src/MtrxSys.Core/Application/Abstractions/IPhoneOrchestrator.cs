@@ -301,10 +301,31 @@ public sealed record WhatsAppSendResult(bool Sent, string? DeliveryStatus, strin
     /// </remarks>
     public bool Uncertain { get; init; }
 
+    /// <summary>A falha é DESTE NÚMERO (o WhatsApp disse que não há conta) ou do APARELHO?</summary>
+    /// <remarks>
+    /// 🔴 Mesma razão do <see cref="Uncertain"/>, aplicada a outro par de estados que estava sendo
+    /// engolido: "este número não tem conta" e "o botão enviar não apareceu" chegavam a quem chama
+    /// como a mesma coisa, uma falha.
+    ///
+    /// <para>Só que a diferença decide se vale CONTINUAR o lote. Falha do aparelho (tela bloqueada,
+    /// WhatsApp fechado, cabo solto) se repete no próximo contato e no seguinte, então parar rápido
+    /// economiza a lista inteira. Falha do número não diz nada sobre o próximo contato: o disjuntor
+    /// derrubava o lote por três números ruins seguidos com o aparelho perfeito.</para>
+    ///
+    /// <para>O driver já sabia a diferença desde que passou a ler o diálogo do app; o que faltava era
+    /// carregá-la no tipo. Quem consome não deve ter que reconhecer a causa por substring da mensagem
+    /// de erro, que é texto para humano e muda quando alguém melhora a redação.</para>
+    /// </remarks>
+    public bool NoWhatsAppAccount { get; init; }
+
     public static WhatsAppSendResult Ok(string? deliveryStatus) => new(true, deliveryStatus, null);
 
     /// <summary>Falha CONCLUSIVA: nada saiu, e tentar de novo é seguro.</summary>
     public static WhatsAppSendResult Fail(string error) => new(false, null, error);
+
+    /// <summary>Falha CONCLUSIVA e do NÚMERO: o app afirmou que não existe conta para ele.</summary>
+    public static WhatsAppSendResult NoAccount(string error) =>
+        new(false, null, error) { NoWhatsAppAccount = true };
 
     /// <summary>NÃO DEU PRA CONFIRMAR: a mensagem pode ter saído. Não tentar de novo sozinho.</summary>
     public static WhatsAppSendResult Unconfirmed(string error) => new(false, null, error) { Uncertain = true };
