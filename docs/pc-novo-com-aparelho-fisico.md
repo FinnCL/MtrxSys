@@ -126,6 +126,25 @@ dotnet build MtrxSys.slnx -c Release
 O sintoma de pular esta etapa é o `mtrx.cmd` responder `No .NET SDKs were found`, e o
 `phone-console.cmd` parar em `mtrx.exe nao encontrado`.
 
+> ⚠️ **Não teste com `mtrx --version`.** O CLI tem um comando padrão, e qualquer argumento que ele não
+> reconheça, `--version` inclusive, cai nesse padrão, que exige o WAHA no ar e responde *"conexão
+> recusada (localhost:3000)"*. Parece instalação quebrada e não é. Teste com `mtrx phone --help`.
+
+### Se o projeto veio de outro PC com a pasta `bin\` junto
+
+Compile de novo **nesta** máquina, e apague antes o que veio pronto:
+
+```powershell
+Remove-Item "$env:LOCALAPPDATA\MtrxSys\bin" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item ".\src\MtrxSys.Cli\bin" -Recurse -Force -ErrorAction SilentlyContinue
+dotnet build MtrxSys.slnx -c Release
+```
+
+`bin\` é produto de build, não é fonte: ele não viaja bem, e uma cópia de rede interrompida deixa
+arquivo com zero byte do lado de cá. O `mtrx.runtimeconfig.json` vazio é o caso clássico, e derruba o
+programa antes da primeira linha rodar. Para levar o projeto adiante, use o `empacotar-limpo.ps1`, que
+exclui `bin` e `obj` exatamente por isso.
+
 ---
 
 ## Etapa 4 — Instalar o adb
@@ -250,6 +269,8 @@ variáveis de ambiente são por processo.
 | `pull access denied for mtrxsys-waha-emulator` | 2 | imagem local ainda não construída. Cosmético se o `mtrx-waha` subir |
 | `No .NET SDKs were found` | 3 | falta o SDK 10 |
 | `mtrx.exe nao encontrado` | 3 | SDK instalado, mas faltou o `dotnet build` |
+| `O CONSOLE NAO ABRIU (codigo -2147450733)`, com `Invalid runtimeconfig.json` acima | 3 | build pela metade, quase sempre `bin\` trazido de outro PC. Ver a etapa 3 |
+| `conexão recusada (localhost:3000)` ao rodar `mtrx --version` | 3 | falso alarme: `--version` cai no comando padrão, que fala com o WAHA. Use `mtrx phone --help` |
 | `'$zip' não é reconhecido...` | 4 | PowerShell colado no `cmd` |
 | `adb devices` vazio | 5 | quase sempre cabo de carga. Ver a tabela da etapa 5 |
 | `unauthorized` | 5 | pop-up esperando na tela do celular |

@@ -287,6 +287,7 @@ proposital: o `DirectAdbRunner` sempre passa `-s <serial>`, mesmo com um aparelh
 | `unauthorized` | pop-up não aceito, ou aceito sem marcar "sempre permitir" | revogar autorizações e reconectar, marcando a caixa |
 | Engine diz `unavailable` mas o cabo está bom | `adb` não resolve pelo PATH e `Phone__AdbPath` não foi setado | apontar o caminho completo do `adb.exe` |
 | Todo envio falha com "digitação humana exigida mas indisponível" | texto tem **acento ou emoji** e o IME Unicode não está instalado. O `input text` do Android não digita esses caracteres | instalar o ADB Keyboard **ou** `Phone__HumanTyping=false` (aí o texto vai pronto, sem simular digitação) |
+| `O CONSOLE NAO ABRIU (codigo -2147450733)` logo depois da linha `adb: ...`, com `Invalid runtimeconfig.json` acima | o `mtrx.runtimeconfig.json` está com **zero byte**. Não é o .NET da máquina: é o build que chegou pela metade, ou porque a cópia para `%LOCALAPPDATA%\MtrxSys\bin` morreu no meio, ou porque o projeto veio de outro PC **com a pasta `bin\` junto** (build não viaja) | apagar `%LOCALAPPDATA%\MtrxSys\bin` e `src\MtrxSys.Cli\bin`, e recompilar com `dotnet build MtrxSys.slnx -c Release`. Para levar o projeto a outra máquina, use o `empacotar-limpo.ps1`, que exclui `bin` e `obj` de propósito |
 
 O último aparece no **pré-voo**, antes do lote começar, justamente para não descobrir na mensagem 1
 de 200.

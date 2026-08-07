@@ -47,23 +47,141 @@ function Resolver-Adb {
     return $null
 }
 
+function Build-Utilizavel {
+    param([string] $Pasta, [string] $NomeExe)
+
+    # Ter o `mtrx.exe` na pasta NAO prova que aquele build roda: o host do .NET so levanta se os dois
+    # arquivos de configuracao ao lado dele estiverem inteiros, e uma copia interrompida no meio deixa
+    # arquivo com ZERO byte. O sintoma e "JSON parsing exception: The document is empty" e codigo
+    # -2147450733, que tem cara de .NET quebrado na maquina e nao e: e o nosso arquivo pela metade.
+    # Medido em 2026-08-07.
+    #
+    # Os DOIS json entram na conferencia porque falham igual: o runtimeconfig diz qual runtime carregar
+    # e o deps diz quais assemblies existem. Conferir so um deixava metade do defeito passar.
+    $base = Join-Path $Pasta ([IO.Path]::GetFileNameWithoutExtension($NomeExe))
+    $exe = Join-Path $Pasta $NomeExe
+    if (-not (Test-Path -LiteralPath $exe)) { return $false }
+    if ((Get-Item -LiteralPath $exe).Length -eq 0) { return $false }
+
+    # Sem a dll ao lado, isto e um publish self-contained de arquivo unico: os json moram DENTRO do
+    # exe e cobrar os dois aqui reprovaria um build que funciona. So o layout normal e conferido.
+    if (-not (Test-Path -LiteralPath "$base.dll")) { return $true }
+    if ((Get-Item -LiteralPath "$base.dll").Length -eq 0) { return $false }
+
+    if (-not (Test-Path -LiteralPath "$base.runtimeconfig.json")) { return $false }
+    foreach ($json in @("$base.runtimeconfig.json", "$base.deps.json")) {
+        # O deps.json pode faltar de forma legitima (o host cai no probing da propria pasta). Vazio ou
+        # corrompido, nao: ai o host aborta igual ao runtimeconfig.
+        if (-not (Test-Path -LiteralPath $json)) { continue }
+        if ((Get-Item -LiteralPath $json).Length -eq 0) { return $false }
+        try { Get-Content -LiteralPath $json -Raw | ConvertFrom-Json | Out-Null } catch { return $false }
+    }
+    return $true
+}
+
+function Copia-Valida {
+    param([string] $Pasta, [string] $NomeExe)
+
+    # Marcador gravado por ULTIMO na copia. Ausente = a copia parou no meio do caminho, mesmo que os
+    # arquivos que interessam por acaso tenham chegado inteiros.
+    if (-not (Test-Path -LiteralPath (Join-Path $Pasta '.copia-completa'))) { return $false }
+    return (Build-Utilizavel -Pasta $Pasta -NomeExe $NomeExe)
+}
+
+function Exe-Em-Uso {
+    param([string] $Caminho)
+
+    # Windows tranca o binario enquanto o processo vive, entao "nao consigo abrir para escrita" =
+    # "tem console rodando isto agora". E o mesmo teste do Em-Uso das travas de serial, e e a razao
+    # original de rodarmos de uma copia: com o console aberto, o `dotnet build` esbarrava nessa trava.
+    if (-not (Test-Path -LiteralPath $Caminho)) { return $false }
+    try {
+        $fs = [System.IO.File]::Open($Caminho, 'Open', 'Write', 'None')
+        $fs.Close()
+        return $false
+    }
+    catch { return $true }
+}
+
+function Limpar-Copias {
+    param([string] $Raiz, [string] $Manter, [string] $NomeExe)
+
+    # Cada build ganha uma pasta nova, entao sem faxina o LOCALAPPDATA cresce sem parar. Tambem leva
+    # embora o lixo do formato antigo, quando os arquivos ficavam soltos direto no bin\.
+    #
+    # Pular a pasta EM USO nao e educacao, e obrigacao: uma janela pode estar operando o celular 1 a
+    # partir da pasta antiga enquanto voce recompila e abre a janela do celular 2. O `Remove-Item`
+    # falha no exe travado mas APAGA o resto, e o .NET carrega assembly sob demanda: a janela aberta
+    # so quebraria mais tarde, no comando que precisasse da dll que sumiu debaixo dela. Erro assim
+    # nao tem como ser ligado de volta a causa.
+    if (-not (Test-Path -LiteralPath $Raiz)) { return }
+    $legadoEmUso = Exe-Em-Uso -Caminho (Join-Path $Raiz $NomeExe)
+
+    Get-ChildItem -LiteralPath $Raiz -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $Manter } |
+        ForEach-Object {
+            if ($_.PSIsContainer) {
+                if (Exe-Em-Uso -Caminho (Join-Path $_.FullName $NomeExe)) { return }
+            }
+            elseif ($legadoEmUso) { return }
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+}
+
 function Resolver-Mtrx {
     # Pelo MAIS RECENTE, e não por ordem de preferência de pasta: um `bin\Release\net10.0\win-x64\`
     # de meses atrás ficou parado no repo e era escolhido na frente do build de hoje, respondendo
     # "Unknown command 'phone'" — erro que parece bug do comando e é binário velho. Medido 2026-07-30.
     $bin = Join-Path $raiz 'src\MtrxSys.Cli\bin'
-    if (-not (Test-Path $bin)) { return $null }
-    $exe = Get-ChildItem -Path $bin -Recurse -Filter 'mtrx.exe' -ErrorAction SilentlyContinue |
-           Sort-Object LastWriteTime -Descending |
-           Select-Object -First 1
-    if (-not $exe) { return $null }
+    if (-not (Test-Path -LiteralPath $bin)) { return $null }
+    $candidatos = @(Get-ChildItem -LiteralPath $bin -Recurse -Filter 'mtrx.exe' -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending)
+    if ($candidatos.Count -eq 0) { return $null }
 
-    # Binário mais velho que o código-fonte = você editou e não recompilou.
-    $fonte = Get-ChildItem -Path (Join-Path $raiz 'src') -Recurse -Filter '*.cs' -ErrorAction SilentlyContinue |
+    # O build de ORIGEM tambem pode estar quebrado, e nesse caso copiar so espalha o defeito. Acontece
+    # quando o projeto e trazido de outro PC com o `bin\` junto: o `bin\` e lixo de build, nao viaja
+    # bem, e uma copia de rede que morre no meio deixa arquivo com zero byte do lado de ca. E por isso
+    # que o empacotar-limpo.ps1 exclui `bin` e `obj` da mudanca. Medido em 2026-08-07.
+    $exe = $candidatos | Where-Object { Build-Utilizavel -Pasta $_.DirectoryName -NomeExe $_.Name } |
+           Select-Object -First 1
+    if (-not $exe) {
+        Write-Host 'O mtrx.exe existe, mas o build ao lado dele esta incompleto.' -ForegroundColor Red
+        Write-Host 'Falta o mtrx.runtimeconfig.json, ou ele esta vazio. Sem esse arquivo o .NET nao levanta o programa.'
+        Write-Host ''
+        Write-Host 'Quase sempre e bin\ trazido de outro PC. Recompile nesta maquina:' -ForegroundColor Yellow
+        Write-Host '  dotnet build MtrxSys.slnx -c Release' -ForegroundColor Yellow
+        Write-Host 'Se insistir, apague a pasta src\MtrxSys.Cli\bin antes de compilar.'
+        # Sai daqui em vez de devolver $null: quem chama trata $null como "nao compilou ainda" e
+        # imprimiria por cima um recado diferente do problema real.
+        exit 1
+    }
+
+    # Cair num build mais antigo porque o mais novo esta quebrado nao pode ser silencioso: e assim que
+    # nasce o "Unknown command 'phone'" do comentario la de cima, onde o binario velho responde e o
+    # erro parece do comando. Melhor rodar avisando do que travar tudo, mas avisando alto.
+    if ($exe.FullName -ne $candidatos[0].FullName) {
+        Write-Host "AVISO: o build mais novo ($($candidatos[0].FullName)) esta incompleto e foi ignorado." -ForegroundColor Yellow
+        Write-Host "       Rodando o anterior: $($exe.FullName)" -ForegroundColor Yellow
+        Write-Host '       Recompile com: dotnet build MtrxSys.slnx -c Release' -ForegroundColor Yellow
+    }
+
+    # Identidade do build = arquivo mais novo + soma dos tamanhos da pasta de saida, e nao a data do
+    # mtrx.exe sozinho. O apphost mtrx.exe nao e regravado quando so uma dependencia muda: mexer em
+    # MtrxSys.Core e recompilar troca a Core.dll e deixa o exe com a data velha. Pela data do exe, a
+    # copia de ontem parecia atual e o console rodava a Core antiga, que e a mesma armadilha de
+    # binario velho de 2026-07-30. Pela pasta inteira, qualquer recompilacao muda a chave.
+    $arquivos = @(Get-ChildItem -LiteralPath $exe.DirectoryName -File -Force -ErrorAction SilentlyContinue)
+    $carimbo = ($arquivos | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+    $soma = ($arquivos | Measure-Object -Property Length -Sum).Sum
+
+    # Binário mais velho que o código-fonte = você editou e não recompilou. Compara com o carimbo da
+    # PASTA pelo mesmo motivo: contra a data do exe, editar Core.cs e recompilar disparava o aviso
+    # "recompile" logo depois de voce ter recompilado.
+    $fonte = Get-ChildItem -LiteralPath (Join-Path $raiz 'src') -Recurse -Filter '*.cs' -ErrorAction SilentlyContinue |
              Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
-             Sort-Object LastWriteTime -Descending |
+             Sort-Object LastWriteTimeUtc -Descending |
              Select-Object -First 1
-    if ($fonte -and $fonte.LastWriteTime -gt $exe.LastWriteTime) {
+    if ($fonte -and $fonte.LastWriteTimeUtc -gt $carimbo) {
         Write-Host "AVISO: $($exe.FullName) e mais antigo que o codigo-fonte." -ForegroundColor Yellow
         Write-Host '       rode: dotnet build MtrxSys.slnx -c Release' -ForegroundColor Yellow
     }
@@ -71,20 +189,91 @@ function Resolver-Mtrx {
     # Roda de uma CÓPIA, nunca do bin do projeto. Enquanto o console está aberto o Windows bloqueia o
     # arquivo em uso, e todo `dotnet build` falhava com "used by another process" — o que obrigava a
     # fechar o console a cada compilacao. Copiando, as duas coisas convivem.
-    $copia = Join-Path $env:LOCALAPPDATA 'MtrxSys\bin'
-    $alvo = Join-Path $copia $exe.Name
-    try {
-        if (-not (Test-Path $copia)) { New-Item -ItemType Directory -Force $copia | Out-Null }
-        if (-not (Test-Path $alvo) -or (Get-Item $alvo).LastWriteTime -lt $exe.LastWriteTime) {
-            Copy-Item (Join-Path $exe.DirectoryName '*') $copia -Recurse -Force -ErrorAction Stop
-        }
-        return $alvo
-    }
-    catch {
-        # Copia bloqueada (outro console rodando a mesma copia) e o alvo ja existe: usa o que esta la.
-        if (Test-Path $alvo) { return $alvo }
+    #
+    # A copia vai para uma pasta POR BUILD (carimbo de data + tamanho do exe de origem), e nao para
+    # uma pasta fixa. A pasta fixa se sobrescrevia: se a copia morria no meio — janela fechada, exe
+    # travado por outro console, antivirus segurando um arquivo — sobrava uma mistura de arquivos
+    # novos, velhos e truncados, e o `catch` entregava essa mistura como se estivesse boa. Pasta nova
+    # por build nunca escreve por cima do que ja esta em uso, e o que sobrou de uma tentativa morta
+    # e apagado antes de recomecar em vez de ser herdado. Medido em 2026-08-07.
+    # Sem LOCALAPPDATA nao ha para onde copiar. Acontece em conta de servico e sessao sem perfil, e o
+    # Join-Path com nulo estoura em vermelho antes de qualquer diagnostico util.
+    if (-not $env:LOCALAPPDATA) {
+        Write-Host 'AVISO: LOCALAPPDATA nao esta definido. Rodando direto do bin do projeto.' -ForegroundColor Yellow
         return $exe.FullName
     }
+
+    $raizCopias = Join-Path $env:LOCALAPPDATA 'MtrxSys\bin'
+    $copia = Join-Path $raizCopias ('v-{0}-{1}' -f $carimbo.ToString('yyyyMMdd-HHmmss'), $soma)
+    $alvo = Join-Path $copia $exe.Name
+
+    if (Copia-Valida -Pasta $copia -NomeExe $exe.Name) {
+        Limpar-Copias -Raiz $raizCopias -Manter $copia -NomeExe $exe.Name
+        return $alvo
+    }
+
+    # Duas janelas abertas ao mesmo tempo cairiam na MESMA pasta e copiariam em paralelo, uma
+    # truncando o arquivo que a outra acabou de gravar. Com a trava, a segunda espera e acorda com a
+    # copia ja pronta. Mutex abandonado = a outra janela morreu segurando a trava; a pasta esta
+    # suspeita, e e exatamente o caso que o Copia-Valida abaixo pega.
+    $tranca = New-Object System.Threading.Mutex($false, 'MtrxSys-phone-console-copia')
+    $peguei = $false
+    $motivo = $null
+    try {
+        try { $peguei = $tranca.WaitOne(120000) }
+        catch [System.Threading.AbandonedMutexException] { $peguei = $true }
+
+        # Sem a trava na mao, NAO copia. Copiar assim mesmo apagaria a pasta que a outra janela esta
+        # enchendo neste instante, que e exatamente a corrupcao que este codigo existe para evitar.
+        if (-not $peguei) {
+            $motivo = 'outra janela ficou mais de 2 minutos preparando a copia'
+        }
+        elseif (-not (Copia-Valida -Pasta $copia -NomeExe $exe.Name)) {
+            # Restos de uma tentativa que morreu no meio. Apagar e seguro aqui: pasta invalida nunca
+            # foi entregue para ninguem rodar, e a trava garante que ninguem esta enchendo ela agora.
+            if (Test-Path -LiteralPath $copia) { Remove-Item -LiteralPath $copia -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Force $copia | Out-Null
+            try {
+                # O marcador e ignorado na ORIGEM: se alguem copiar uma copia de volta para dentro do
+                # src, ele viajaria junto no meio dos arquivos e daria "copia completa" antes da hora,
+                # que e justamente a mentira que ele existe para impedir.
+                Get-ChildItem -LiteralPath $exe.DirectoryName -File -Force |
+                    Where-Object { $_.Name -ne '.copia-completa' } |
+                    Copy-Item -Destination $copia -Force -ErrorAction Stop
+
+                # Subpasta com um mtrx.exe dentro e OUTRO build (o win-x64 self-contained mora dentro
+                # do net10.0 e sozinho tem 92 MB). Copiar aquilo triplicaria o tempo de abertura para
+                # levar junto um binario que nunca vai rodar.
+                Get-ChildItem -LiteralPath $exe.DirectoryName -Directory -Force |
+                    Where-Object { -not (Test-Path -LiteralPath (Join-Path $_.FullName $exe.Name)) } |
+                    ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $copia -Recurse -Force -ErrorAction Stop }
+
+                Set-Content -LiteralPath (Join-Path $copia '.copia-completa') -Value $exe.FullName
+            }
+            catch {
+                # Guarda o motivo em vez de engolir: disco cheio, permissao e antivirus dao mensagens
+                # diferentes, e sem elas o aviso final vira adivinhacao.
+                $motivo = $_.Exception.Message
+            }
+        }
+    }
+    finally {
+        if ($peguei) { $tranca.ReleaseMutex() }
+        $tranca.Dispose()
+    }
+
+    if (Copia-Valida -Pasta $copia -NomeExe $exe.Name) {
+        Limpar-Copias -Raiz $raizCopias -Manter $copia -NomeExe $exe.Name
+        return $alvo
+    }
+
+    # Copiar ficou impossivel (disco cheio, permissao, antivirus). Roda direto do bin do projeto: o
+    # preco e o `dotnet build` reclamar de arquivo em uso enquanto este console estiver aberto. Uma
+    # copia quebrada nao tem preco nenhum, so o erro do host do .NET.
+    Write-Host 'AVISO: nao consegui preparar a copia em LOCALAPPDATA. Rodando direto do bin do projeto.' -ForegroundColor Yellow
+    if ($motivo) { Write-Host "       Motivo: $motivo" -ForegroundColor Yellow }
+    Write-Host '       Feche este console antes de rodar dotnet build.' -ForegroundColor Yellow
+    return $exe.FullName
 }
 
 function Em-Uso {
