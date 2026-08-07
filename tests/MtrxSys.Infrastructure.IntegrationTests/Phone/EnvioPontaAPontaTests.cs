@@ -105,6 +105,50 @@ public sealed class EnvioPontaAPontaTests
             "não dá pra culpar o número quando nem a tela foi lida");
     }
 
+    /// <summary>Conversa com MENSAGENS TEMPORÁRIAS abre um aviso por cima; a mensagem tem que sair
+    /// mesmo assim, NESTE contato.</summary>
+    /// <remarks>
+    /// 🔴 Enquanto o aviso está na tela, o campo de mensagem e o botão de enviar não existem na árvore,
+    /// e o envio falhava com "a conversa não abriu" — diagnóstico que acusa o APARELHO quando o
+    /// aparelho está perfeito, e que alimenta o alerta de celular travado. A recuperação já existia,
+    /// mas rodava DEPOIS do resultado: limpava a tela para o próximo contato e perdia o atual.
+    /// </remarks>
+    [Fact]
+    public async Task Aviso_de_mensagem_temporaria_e_dispensado_e_a_mensagem_sai()
+    {
+        var android = new AndroidFalso();
+        android.ContasExistentes.Add(Com9);
+        android.ComAvisoTemporaria.Add(Com9);
+        var (driver, _) = Montar(android);
+        using var __ = driver;
+
+        var envio = await driver.SendAsync("+" + Com9, Texto, CancellationToken.None);
+
+        android.AvisoNaTela.Should().BeFalse("o aviso tinha que sair da frente");
+        android.Entregues.Should().ContainSingle().Which.Should().Be((Com9, Texto),
+            "o contato ATUAL tem que receber, não só o próximo do lote");
+        envio.Sent.Should().BeTrue();
+    }
+
+    /// <summary>Dispensar aviso não pode apagar a prova de que o número não tem conta.</summary>
+    /// <remarks>
+    /// 🔴 O diálogo de "não está no WhatsApp" TAMBÉM tem um botão OK. Dispensar antes de diagnosticar
+    /// apagaria a única evidência da causa, e a falha voltaria a ser classificada como problema de
+    /// aparelho — reintroduzindo, por outro caminho, o defeito que a marca NoWhatsAppAccount corrigiu.
+    /// </remarks>
+    [Fact]
+    public async Task Numero_sem_conta_continua_sendo_diagnosticado_com_a_limpeza_de_tela_ligada()
+    {
+        var android = new AndroidFalso(); // ninguém tem conta: o diálogo aparece
+        var (driver, _) = Montar(android);
+        using var __ = driver;
+
+        var envio = await driver.SendAsync("+" + Com9, Texto, CancellationToken.None);
+
+        envio.NoWhatsAppAccount.Should().BeTrue();
+        envio.Error.Should().Contain("não tem conta");
+    }
+
     // ── O caso que motivou a segunda chance ──────────────────────────────────────────────────────
 
     [Fact]

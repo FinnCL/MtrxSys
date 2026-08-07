@@ -53,6 +53,21 @@ internal sealed class AndroidFalso : IAdbRunner
 
     private string? _conversaAberta;
     private bool _dialogoSemConta;
+
+    /// <summary>Conversas que abrem com o aviso de MENSAGENS TEMPORÁRIAS por cima.</summary>
+    /// <remarks>
+    /// O aviso esconde o campo e o botão de enviar enquanto está na tela, que é o que fazia o envio
+    /// falhar com "a conversa não abriu". Some com o botão OK ou com BACK.
+    /// </remarks>
+    public HashSet<string> ComAvisoTemporaria { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>O aviso está na tela AGORA (foi aberto e ainda não dispensado).</summary>
+    public bool AvisoNaTela { get; private set; }
+
+    private const int AvisoOkX1 = 400;
+    private const int AvisoOkY1 = 1200;
+    private const int AvisoOkX2 = 600;
+    private const int AvisoOkY2 = 1300;
     private readonly Dictionary<string, string> _rascunhos = new(StringComparer.Ordinal);
 
     /// <summary>Quantos deep links seguintes devem devolver 0 SEM navegar.</summary>
@@ -289,6 +304,11 @@ internal sealed class AndroidFalso : IAdbRunner
         }
         _dialogoSemConta = false;
         _conversaAberta = alvo;
+        // O aviso reaparece a cada abertura da conversa até ser dispensado uma vez.
+        if (ComAvisoTemporaria.Contains(alvo))
+        {
+            AvisoNaTela = true;
+        }
         if (m.Groups[2].Success)
         {
             // Com `text=` o campo nasce com o texto do link, substituindo o rascunho.
@@ -302,6 +322,17 @@ internal sealed class AndroidFalso : IAdbRunner
         var m = Regex.Match(cmd, @"input tap (\d+) (\d+)");
         var x = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
         var y = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+        if (AvisoNaTela)
+        {
+            // Com o aviso na tela, o único toque que faz algo é o do botão dele. Qualquer outro cai no
+            // vazio, que é como o Android se comporta com um modal por cima.
+            if (x >= AvisoOkX1 && x <= AvisoOkX2 && y >= AvisoOkY1 && y <= AvisoOkY2)
+            {
+                AvisoNaTela = false;
+                ComAvisoTemporaria.Remove(_conversaAberta ?? "");
+            }
+            return (0, "", "");
+        }
         var noBotao = x >= SendX1 && x <= SendX2 && y >= SendY1 && y <= SendY2;
         if (noBotao && _conversaAberta is { } conversa && _rascunhos.GetValueOrDefault(conversa, "").Length > 0)
         {
@@ -313,7 +344,12 @@ internal sealed class AndroidFalso : IAdbRunner
 
     private (int, string, string) Back()
     {
-        if (_dialogoSemConta)
+        if (AvisoNaTela)
+        {
+            AvisoNaTela = false;
+            ComAvisoTemporaria.Remove(_conversaAberta ?? "");
+        }
+        else if (_dialogoSemConta)
         {
             _dialogoSemConta = false;
         }
@@ -347,6 +383,15 @@ internal sealed class AndroidFalso : IAdbRunner
         if (_dialogoSemConta)
         {
             sb.Append("<node text=\"O número não está no WhatsApp\" bounds=\"[100,700][900,900]\"/>");
+        }
+        if (AvisoNaTela)
+        {
+            // Modal por cima: enquanto ele está lá, o campo e o botão de enviar NÃO existem na árvore.
+            // É exatamente isso que fazia o envio falhar com "a conversa não abriu".
+            sb.Append("<node text=\"Mensagens temporárias\" clickable=\"false\" bounds=\"[100,900][900,1100]\"/>");
+            sb.Append(CultureInfo.InvariantCulture,
+                $"<node text=\"OK\" clickable=\"true\" bounds=\"[{AvisoOkX1},{AvisoOkY1}][{AvisoOkX2},{AvisoOkY2}]\"/>");
+            return sb.Append("</hierarchy>").ToString();
         }
         if (_conversaAberta is { } conversa)
         {

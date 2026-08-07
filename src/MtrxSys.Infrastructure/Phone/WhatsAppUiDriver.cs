@@ -115,6 +115,64 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             : generico;
     }
 
+    /// <summary>Tenta tirar da frente um aviso que está por cima da conversa, para a mensagem poder
+    /// sair NESTE contato em vez de só no próximo.</summary>
+    /// <remarks>
+    /// 🔴 O CASO QUE MOTIVOU: conversa com MENSAGENS TEMPORÁRIAS ligadas abre uma tela informativa por
+    /// cima. Enquanto ela está lá, nem o campo de mensagem nem o botão de enviar existem na árvore, e
+    /// o envio falhava com "a conversa não abriu" — diagnóstico que aponta para o aparelho quando o
+    /// aparelho está perfeito. Pior: o contato ia para o balde de falha de APARELHO, que é o contador
+    /// que dispara o alerta de celular travado.
+    ///
+    /// <para>Já existia recuperação para isso, o <see cref="DispensarDialogoAsync"/>, mas ela roda
+    /// DEPOIS do resultado: limpa a tela para o PRÓXIMO contato e perde o atual. Aqui a limpeza
+    /// acontece antes de desistir, e o envio segue.</para>
+    ///
+    /// <para>Duas saídas, nessa ordem: um botão de rótulo neutro (ver
+    /// <see cref="BotoesQueSoFecham"/>), e, se não houver, um BACK. O BACK é o plano B porque o aviso
+    /// pode ser tela cheia sem botão reconhecível, e porque ele não confirma nada — no pior caso sai
+    /// da conversa, e a conversa é reaberta por deep link no próximo contato de qualquer forma.</para>
+    ///
+    /// <para>⚠️ NÃO MEDIDO EM APARELHO. Os rótulos vieram do que o app usa em avisos desse tipo, não de
+    /// um dump real da tela de mensagens temporárias. Quando alguém reproduzir, vale dumpar a tela
+    /// (<c>uiautomator dump</c> + <c>cat</c>) e escrever aqui a DATA, o APARELHO e o rótulo exato do
+    /// botão — foi a ausência desses três que deixou uma afirmação falsa de pé no
+    /// <c>LookupContactIdAsync</c> por semanas.</para>
+    /// </remarks>
+    private async Task TentarDesbloquearTelaAsync(CancellationToken ct)
+    {
+        if (await DumpUiAsync(ct) is { } xml)
+        {
+            foreach (Match no in NoRx.Matches(xml))
+            {
+                if (!no.Value.Contains("clickable=\"true\"", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                var t = TextoRx.Match(no.Value);
+                if (!t.Success
+                    || !BotoesQueSoFecham.Contains(t.Groups[1].Value.Trim().ToLowerInvariant()))
+                {
+                    continue;
+                }
+                var b = BoundsRx.Match(no.Value);
+                if (b.Success
+                    && int.TryParse(b.Groups[1].Value, out var x1)
+                    && int.TryParse(b.Groups[2].Value, out var y1)
+                    && int.TryParse(b.Groups[3].Value, out var x2)
+                    && int.TryParse(b.Groups[4].Value, out var y2))
+                {
+                    await TapAsync(((x1 + x2) / 2, (y1 + y2) / 2), ct);
+                    await Task.Delay(600, ct);
+                    return;
+                }
+            }
+        }
+
+        await _adb.ShellAsync("input keyevent KEYCODE_BACK", ct);
+        await Task.Delay(600, ct);
+    }
+
     /// <summary>Devolve o aparelho a um estado neutro depois de uma falha, para o próximo contato do
     /// lote não herdar um diálogo aberto na tela.</summary>
     /// <remarks>
@@ -211,7 +269,24 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             var send = await PollNodeCenterAsync("com.whatsapp:id/send", _opts.WhatsAppOpenWaitMs, sct);
             if (send is null)
             {
-                return await DiagnosticarChatNaoAbertoAsync(sct);
+                // 🔴 DIAGNOSTICA ANTES DE LIMPAR. O diálogo de "não está no WhatsApp" também tem um
+                // botão OK, então dispensar primeiro apagaria a única prova de que a causa é o NÚMERO,
+                // e a falha voltaria a ser classificada como problema de aparelho.
+                var diagnostico = await DiagnosticarChatNaoAbertoAsync(sct);
+                if (diagnostico.NoWhatsAppAccount)
+                {
+                    return diagnostico;
+                }
+
+                await TentarDesbloquearTelaAsync(sct);
+                send = await PollNodeCenterAsync(
+                    "com.whatsapp:id/send", Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
+                if (send is null)
+                {
+                    // Devolve o diagnóstico ORIGINAL: depois do BACK a tela mudou, e um segundo
+                    // diagnóstico descreveria a tela que eu mesmo criei, não a que causou a falha.
+                    return diagnostico;
+                }
             }
 
             // Daqui pra frente NADA é conclusivo. O toque é irreversível e não tem confirmação síncrona:
@@ -278,7 +353,24 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             var entry = await PollNodeCenterAsync("com.whatsapp:id/entry", _opts.WhatsAppOpenWaitMs, sct);
             if (entry is null)
             {
-                return WhatsAppSendResult.Fail("campo de mensagem não apareceu (a conversa não abriu).");
+                // 🔴 O MESMO TRATAMENTO DO OUTRO CAMINHO, e não é simetria decorativa: este aqui é o
+                // que roda com digitação humana LIGADA, que é o default. Enquanto só o deep link
+                // diagnosticava, um número sem conta chegava ao console como "a conversa não abriu",
+                // ou seja, entrava no contador de falha de APARELHO e disparava o alerta de celular
+                // travado com o celular perfeito.
+                var diagnostico = await DiagnosticarChatNaoAbertoAsync(sct);
+                if (diagnostico.NoWhatsAppAccount)
+                {
+                    return diagnostico;
+                }
+
+                await TentarDesbloquearTelaAsync(sct);
+                entry = await PollNodeCenterAsync(
+                    "com.whatsapp:id/entry", Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
+                if (entry is null)
+                {
+                    return WhatsAppSendResult.Fail("campo de mensagem não apareceu (a conversa não abriu).");
+                }
             }
             await TapAsync(entry.Value, sct);
 
@@ -407,6 +499,20 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 
     private static readonly Regex BoundsRx =
         new("bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"", RegexOptions.Compiled);
+
+    private static readonly Regex NoRx = new("<node[^>]*>", RegexOptions.Compiled);
+
+    private static readonly Regex TextoRx = new("text=\"([^\"]*)\"", RegexOptions.Compiled);
+
+    /// <summary>Rótulos de botão que apenas FECHAM um aviso, sem confirmar nada.</summary>
+    /// <remarks>
+    /// 🔴 LISTA FECHADA, e só palavra neutra. Tocar em botão pelo texto é tocar às cegas, e a tela pode
+    /// ter "Bloquear", "Denunciar", "Sair do grupo". Um aviso mal dispensado é um aviso que volta; um
+    /// botão errado tocado é irreversível e pode custar o contato ou a conta. Na dúvida, não toca:
+    /// existe o BACK como saída, e ele não confirma nada.
+    /// </remarks>
+    private static readonly string[] BotoesQueSoFecham =
+        ["ok", "continuar", "entendi", "fechar", "agora não", "agora nao", "got it", "continue", "close"];
 
     /// <summary>Centro do nó com este resource-id, com POLL até o timeout. null = não apareceu.</summary>
     /// <remarks>Poll e não sleep fixo: chat lento (cold start, rede ruim) abriria depois da espera e o
