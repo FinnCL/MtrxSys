@@ -132,7 +132,17 @@ O sintoma de pular esta etapa é o `mtrx.cmd` responder `No .NET SDKs were found
 
 ### Se o projeto veio de outro PC com a pasta `bin\` junto
 
-Compile de novo **nesta** máquina, e apague antes o que veio pronto:
+Compile de novo **nesta** máquina, e apague antes o que veio pronto.
+
+**No `cmd`** (prompt `C:\...>`):
+
+```bat
+rmdir /s /q "%LOCALAPPDATA%\MtrxSys\bin" 2>nul
+rmdir /s /q "src\MtrxSys.Cli\bin" 2>nul
+dotnet build MtrxSys.slnx -c Release
+```
+
+**No PowerShell** (prompt `PS C:\...>`):
 
 ```powershell
 Remove-Item "$env:LOCALAPPDATA\MtrxSys\bin" -Recurse -Force -ErrorAction SilentlyContinue
@@ -271,6 +281,6 @@ variáveis de ambiente são por processo.
 | `mtrx.exe nao encontrado` | 3 | SDK instalado, mas faltou o `dotnet build` |
 | `O CONSOLE NAO ABRIU (codigo -2147450733)`, com `Invalid runtimeconfig.json` acima | 3 | build pela metade, quase sempre `bin\` trazido de outro PC. Ver a etapa 3 |
 | `conexão recusada (localhost:3000)` ao rodar `mtrx --version` | 3 | falso alarme: `--version` cai no comando padrão, que fala com o WAHA. Use `mtrx phone --help` |
-| `'$zip' não é reconhecido...` | 4 | PowerShell colado no `cmd` |
+| `'$zip' não é reconhecido...`, `'Remove-Item' não é reconhecido...` | 3 e 4 | PowerShell colado no `cmd`. Cada linha colada vira um erro, o que parece cinco problemas e é um só |
 | `adb devices` vazio | 5 | quase sempre cabo de carga. Ver a tabela da etapa 5 |
 | `unauthorized` | 5 | pop-up esperando na tela do celular |
