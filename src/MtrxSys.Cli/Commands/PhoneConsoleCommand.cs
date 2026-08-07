@@ -1147,6 +1147,7 @@ internal sealed class PhoneConsoleCommand(
 
         MostrarPlano(plano);
         AvisarRepeticao(plano, serial);
+        AvisarFormaSuspeita(plano);
 
         var estimativa = TimeSpan.FromSeconds((plano.Count - 1) * ((_min + _max) / 2.0));
         AnsiConsole.MarkupLine(
@@ -1192,6 +1193,9 @@ internal sealed class PhoneConsoleCommand(
         // Quem falhou CONTINUA na lista pra ser tentado noutro lote; o que este conjunto impede é a
         // repetição dentro da MESMA execução.
         var tentados = new HashSet<string>(StringComparer.Ordinal);
+
+        // Correções que a segunda chance descobrir, para repetir de uma vez no fim do lote.
+        var corrigidos = new List<(string De, string Para)>();
 
         try
         {
@@ -1267,6 +1271,7 @@ internal sealed class PhoneConsoleCommand(
                     {
                         r = r2;
                         numeroUsado = alternativo;
+                        corrigidos.Add((contato.Numero, alternativo));
                         AnsiConsole.MarkupLine(
                             $"[yellow]a lista tem esse contato na forma errada:[/] {contato.Numero} "
                             + $"[yellow]→[/] [bold]{alternativo}[/] [grey](corrija na origem)[/]");
@@ -1379,6 +1384,20 @@ internal sealed class PhoneConsoleCommand(
                     $"[grey]{entregues.Count} contato(s) que receberam saíram da lista. "
                     + $"restam {_contatos.Count} (os que falharam continuam, para tentar de novo).[/]");
             }
+
+            // 🔴 REPETE NO FIM o que já foi dito na hora. Entre uma entrega e a seguinte passam 150-360s
+            // de espera, então a linha "corrija na origem" sai da tela muito antes de o lote acabar — e
+            // ela é justamente a única que gera trabalho FORA daqui. Sem esta lista, a correção depende
+            // de o operador ter visto passar, e a mesma lista volta amanhã com o mesmo número errado,
+            // pagando de novo a tentativa perdida.
+            if (corrigidos.Count > 0)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[yellow]{corrigidos.Count} contato(s) só entregaram na OUTRA forma do número. "
+                    + "corrija na origem:[/]");
+                MostrarAlguns(corrigidos.Count, 10,
+                    i => $"  {corrigidos[i].De} [yellow]→[/] [bold]{corrigidos[i].Para}[/]");
+            }
         }
 
         return (enviados, falhas);
@@ -1410,6 +1429,53 @@ internal sealed class PhoneConsoleCommand(
         MostrarAlguns(repetidos.Count, 5,
             i => $"  [yellow]{repetidos[i].Contato.Numero}[/] {(repetidos[i].Contato.Nome ?? "").EscapeMarkup()}");
         AnsiConsole.MarkupLine("[yellow]tire com[/] x [yellow]se não quiser mandar de novo.[/]");
+    }
+
+    /// <summary>Avisa, ANTES do lote começar, quais números não têm forma de celular.</summary>
+    /// <remarks>
+    /// 🔴 Mira exatamente o que a SEGUNDA CHANCE não alcança. Para 10 dígitos nacionais com assinante
+    /// em 2-5, o <see cref="BrazilPhoneValidator.AlternateBrazilianForm"/> devolve null: não existe
+    /// outra forma plausível, então não há o que tentar depois da falha e ela é definitiva. O caso que
+    /// TEM conserto (celular legado, assinante 6-9) já se resolve sozinho durante o envio, sem avisar
+    /// ninguém — e é por isso que o alarme aqui é sobre o outro.
+    ///
+    /// <para>A tentativa perdida não custa só tempo: abrir conversa para número que não existe é o
+    /// padrão de bot enumerando, e três falhas seguidas derrubam o lote inteiro pelo disjuntor. Uma
+    /// lista com quatro números assim pode parar tudo antes da metade.</para>
+    ///
+    /// <para>O comando `conferir` já sabia disso desde 2026-08-06, mas é opt-in: exige lembrar de
+    /// rodar antes. Aqui a mesma informação passa a estar no caminho de quem vai disparar, ao lado do
+    /// <see cref="AvisarRepeticao"/>, que já segue esse padrão de avisar e deixar decidir.</para>
+    ///
+    /// <para>AVISA, não bloqueia: linha fixa pode ter WhatsApp Business, então assinante em 2-5 é
+    /// suspeita forte e não veredito. Bloquear transformaria um aviso útil num impedimento errado.</para>
+    ///
+    /// <para>Usa o <see cref="DescreverForma"/> do `conferir` de propósito: dois vocabulários para a
+    /// mesma classificação fariam o aviso e a tabela parecerem discordar.</para>
+    /// </remarks>
+    private static void AvisarFormaSuspeita(List<(Contato Contato, int Variante, string Texto)> plano)
+    {
+        var suspeitos = plano
+            .Where(p => BrazilPhoneValidator.ShapeOf(p.Contato.Numero)
+                is BrazilPhoneValidator.BrazilNumberShape.FixoOuSemONono
+                or BrazilPhoneValidator.BrazilNumberShape.NaoBrasileiro)
+            .ToList();
+        if (suspeitos.Count == 0)
+        {
+            return;
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[yellow]atenção: {suspeitos.Count} número(s) desta lista não têm forma de celular, "
+            + "e para eles NÃO existe segunda chance.[/]");
+        MostrarAlguns(suspeitos.Count, 5,
+            i => $"  [yellow]{suspeitos[i].Contato.Numero}[/] "
+                + $"{(suspeitos[i].Contato.Nome ?? "").EscapeMarkup()} "
+                + DescreverForma(BrazilPhoneValidator.ShapeOf(suspeitos[i].Contato.Numero)));
+        AnsiConsole.MarkupLine(
+            "[yellow]assinante começando em 2-5 é faixa de fixo. se a pessoa tem celular, o que falta é "
+            + "o 9º dígito, e ele precisa vir corrigido da ORIGEM.[/] "
+            + "[grey]veja a lista toda com[/] c[grey], tire da lista com[/] x[grey].[/]");
     }
 
     private static string Duracao(TimeSpan t) =>

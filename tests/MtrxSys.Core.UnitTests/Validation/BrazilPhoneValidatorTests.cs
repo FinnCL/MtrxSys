@@ -165,6 +165,44 @@ public sealed class BrazilPhoneValidatorTests
             BrazilPhoneValidator.ShapeOf("551121404487"),
             "84 9471-5083 é celular legado; 11 2140-4487 é faixa de fixo");
 
+    // 🔴 O AVISO DO CONSOLE DEPENDE DISTO. Antes de o lote começar, o `enviar` alerta que os números
+    // de forma suspeita (FixoOuSemONono e NaoBrasileiro) NÃO têm segunda chance, e é o que justifica
+    // pedir correção na ORIGEM em vez de deixar o envio se virar. Se um dia a alternativa passar a
+    // existir para essas formas, o aviso vira mentira nos dois sentidos: o operador tira da lista um
+    // contato que o envio resgataria sozinho, ou confia num resgate que não vai acontecer.
+    //
+    // Varredura em vez de casos soltos porque a afirmação é sobre a FORMA, não sobre seis números:
+    // qualquer combinação de DDD real e faixa de assinante tem que respeitar a mesma regra.
+    [Fact]
+    public void Formas_suspeitas_nunca_tem_segunda_chance()
+    {
+        string[] ddds = ["11", "21", "31", "47", "61", "71", "84", "91"];
+        var conferidos = 0;
+
+        foreach (var ddd in ddds)
+        {
+            for (var primeiro = '0'; primeiro <= '9'; primeiro++)
+            {
+                // 10 dígitos nacionais (o legado) e 11 (o moderno), variando o primeiro dígito do
+                // assinante, que é o que decide a forma.
+                foreach (var numero in new[] { $"55{ddd}{primeiro}1234567", $"55{ddd}{primeiro}12345678" })
+                {
+                    var forma = BrazilPhoneValidator.ShapeOf(numero);
+                    if (forma is not (BrazilPhoneValidator.BrazilNumberShape.FixoOuSemONono
+                        or BrazilPhoneValidator.BrazilNumberShape.NaoBrasileiro))
+                    {
+                        continue;
+                    }
+                    BrazilPhoneValidator.AlternateBrazilianForm(numero).Should().BeNull(
+                        "{0} é {1}, e o console avisa que forma assim não tem segunda chance", numero, forma);
+                    conferidos++;
+                }
+            }
+        }
+
+        conferidos.Should().BeGreaterThan(0, "senão a varredura passou sem provar nada");
+    }
+
     [Fact]
     public void AlternateBrazilianForm_e_reversivel() =>
         BrazilPhoneValidator.AlternateBrazilianForm(
