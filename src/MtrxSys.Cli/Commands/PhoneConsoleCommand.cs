@@ -45,8 +45,8 @@ internal sealed class PhoneConsoleCommand(
     internal sealed class Settings : CommandSettings
     {
         [CommandOption("--teto <N>")]
-        [Description("Máximo de mensagens por lote (default 30). Ajustável dentro do console.")]
-        public int Teto { get; init; } = 30;
+        [Description("Cota por execução. 0 (default) = sem teto: manda a lista inteira.")]
+        public int Teto { get; init; }
     }
 
     /// <param name="Numero">Só dígitos, já validado em 12 ou 13 (55 + DDD + número).</param>
@@ -61,8 +61,19 @@ internal sealed class PhoneConsoleCommand(
         public List<string> Textos { get; init; } = [];
         public int MinDelay { get; init; } = 150;
         public int MaxDelay { get; init; } = 360;
-        public int Teto { get; init; }
+        // Anulável desde que zero virou "sem teto": como valor legítimo, ele não pode mais servir de
+        // "não gravado". Sessão anterior a esta mudança tem o número que o operador escolheu e segue
+        // valendo; sessão anterior ao campo tem null e cai no default.
+        public int? Teto { get; init; }
         public int PararEm { get; init; }
+
+        // Anuláveis de propósito: zero é valor LEGÍTIMO ("sem blocos"), então não dá pra usá-lo como
+        // "não gravado". Sessão anterior a este ajuste tem null e cai no default; quem escolheu zero
+        // continua com zero.
+        public int? Bloco { get; init; }
+        public int? PausaMin { get; init; }
+        public int? HoraInicio { get; init; }
+        public int? HoraFim { get; init; }
         public bool Agenda { get; init; } = true;
         public bool DigitacaoHumana { get; init; } = true;
     }
@@ -100,7 +111,69 @@ internal sealed class PhoneConsoleCommand(
     private readonly List<string> _textos = [];
     private int _min = 150;
     private int _max = 360;
-    private int _teto = 30;
+    /// <summary>Cota desta execução. ZERO = sem teto, manda a lista inteira.</summary>
+    /// <remarks>
+    /// 🔴 SEM TETO POR PADRÃO, decisão do operador em 2026-08-07: "o teto pode ser 20, 50, 100, 1000, o
+    /// usuário que vai decidir". Antes era 30 e RECUSAVA lista maior, o que empurrava para as duas
+    /// saídas ruins: subir o teto para o tamanho da lista, que é a rajada que ele existia para impedir,
+    /// ou recortar a lista à mão a cada execução.
+    ///
+    /// <para>O freio deixou de ser o teto e passou a ser o RITMO: blocos com pausa sorteada entre eles
+    /// (ver <see cref="_bloco"/>), que é o que de fato desmancha o padrão de máquina. Teto continua
+    /// disponível para quem quiser fatiar por dia, e o Ctrl+C interrompe a qualquer momento com o que
+    /// já saiu registrado no CSV.</para>
+    /// </remarks>
+    private int _teto;
+
+    /// <summary>Mensagens por BLOCO antes de uma pausa longa. Zero = sem blocos.</summary>
+    /// <remarks>
+    /// 🔴 O que pesa contra o chip é PADRÃO, não volume. O comentário da curva do <c>WarmupManager</c>
+    /// registra quatro chips perdidos em quatro dias, dois deles com DUAS mensagens e um com ZERO: o
+    /// que restringiu foi a assinatura de máquina, não a quantidade. Fluxo contínuo, hora após hora,
+    /// no mesmo intervalo, é assinatura de máquina; gente manda um punhado, some, volta depois.
+    ///
+    /// <para>15 e 30 min não são chute: com o intervalo padrão de 150-360s, um bloco de 15 leva ~1h, e
+    /// 1h + 30min = 1h30 por bloco. Num dia útil de 12h isso dá 8 blocos, ou seja 120 mensagens, que é
+    /// exatamente o PLATÔ da curva de aquecimento do motor. Os dois caminhos, o automático e o manual,
+    /// chegam ao mesmo teto diário sem que ninguém precise decorar dois números.</para>
+    /// </remarks>
+    private int _bloco = 15;
+
+    /// <summary>Minutos de pausa entre um bloco e o próximo.</summary>
+    private int _pausaMin = 30;
+
+    /// <summary>Folga sorteada em torno do bloco e da pausa configurados.</summary>
+    /// <remarks>
+    /// 🔴 O CENTRO É O QUE VOCÊ CONFIGURA; O QUE SAI É SORTEADO EM VOLTA. Um loop de exatamente 15
+    /// mensagens e exatamente 30 minutos é um carimbo perfeito no eixo do tempo: os intervalos entre
+    /// mensagens já eram sorteados (150-360s), e a pausa cravada seria a ÚNICA regularidade da série,
+    /// ou seja, exatamente a assinatura que o bloco existe para desmanchar. Com a folga, "15 e 30" na
+    /// prática são 12 a 18 mensagens e 22 a 38 minutos.
+    /// </remarks>
+    private const double JitterBloco = 0.20;
+
+    private const double JitterPausa = 0.25;
+
+    /// <summary>Janela em que é permitido enviar (hora local). Fora dela a execução encerra.</summary>
+    /// <remarks>
+    /// 🔴 ABERTA (0h-24h) POR DECISÃO DO OPERADOR, 2026-08-07: o console tem que poder rodar em
+    /// qualquer horário. A janela nasceu fechada em 8h-22h, copiando o <c>WarmupEngineOptions</c> e o
+    /// <c>HumanPhaseOptions</c>, que usam esse par com o comentário "mandar mensagem de madrugada é
+    /// sinal de robô". A diferença que justifica o padrão diferente aqui: aqueles dois são motores
+    /// AUTOMÁTICOS, que decidem sozinhos a hora de escrever; este console só roda quando alguém abre e
+    /// confirma, então quem escolhe o horário é uma pessoa, e a escolha é dela.
+    ///
+    /// <para>O mecanismo fica, desligado, em vez de ser removido: quem quiser a proteção liga com
+    /// <c>janela 8 22</c>, e a razão dela continua registrada aqui em vez de virar conhecimento
+    /// perdido. Ressalva que não muda com configuração: disparo às 4h destoa de comportamento humano
+    /// mesmo com o ritmo e as pausas certas.</para>
+    ///
+    /// <para>Hora LOCAL, e não Brasília convertida de UTC como no servidor: aqui o console roda na
+    /// máquina do operador, ao lado do celular, então o relógio da parede é o relógio certo.</para>
+    /// </remarks>
+    private int _horaInicio;
+
+    private int _horaFim = 24;
 
     /// <summary>Grava o contato na agenda do aparelho antes de enviar. LIGADO por padrão por decisão
     /// do operador (2026-07-30). Sessão salva com o valor desligado continua desligada: escolha
@@ -119,7 +192,7 @@ internal sealed class PhoneConsoleCommand(
     public override async Task<int> ExecuteAsync(CommandContext context, Settings s)
     {
         var ct = cancellation.Token;
-        _teto = Math.Max(1, s.Teto);
+        _teto = Math.Max(0, s.Teto);
 
         var opts = options.Value;
         var serial = string.IsNullOrWhiteSpace(opts.AdbSerial) ? "(sem serial)" : opts.AdbSerial;
@@ -263,6 +336,13 @@ internal sealed class PhoneConsoleCommand(
                         break;
                     case "parar":
                         Parar(partes);
+                        Salvar(serial);
+                        break;
+                    case "b" or "blocos":
+                        BlocosOuInterativo(partes, serial);
+                        break;
+                    case "janela":
+                        Janela(partes);
                         Salvar(serial);
                         break;
                     case "3" or "agenda":
@@ -686,7 +766,9 @@ internal sealed class PhoneConsoleCommand(
         }
 
         AnsiConsole.MarkupLine(
-            $"[grey]intervalo {_min}-{_max}s · teto {_teto} por lote · agenda {(_agenda ? "ligada" : "desligada")}[/]");
+            $"[grey]intervalo {_min}-{_max}s · teto {TetoDescrito()} · "
+            + (_bloco > 0 ? $"blocos ~{_bloco}/pausa ~{_pausaMin}min · " : "sem blocos · ")
+            + $"{JanelaDescrita()} · agenda {(_agenda ? "ligada" : "desligada")}[/]");
     }
 
     /// <summary>Os templates INTEIROS, numerados. É o que permite escolher um deles: o resumo do menu
@@ -1126,14 +1208,6 @@ internal sealed class PhoneConsoleCommand(
         {
             return;
         }
-        if (_contatos.Count > _teto)
-        {
-            AnsiConsole.MarkupLine(
-                $"[red]{_contatos.Count} contatos passam do teto de {_teto} por lote.[/] "
-                + $"suba com [bold]teto {_contatos.Count}[/] se for consciente, ou reduza a lista.");
-            return;
-        }
-
         if (ProblemaDeNome() is { } problema)
         {
             AnsiConsole.MarkupLine($"[red]{problema}[/]");
@@ -1146,6 +1220,20 @@ internal sealed class PhoneConsoleCommand(
         }
 
         var plano = Sortear();
+
+        // 🔴 O TETO CORTA, e não recusa mais. Antes, lista maior que o teto era um NÃO seco: "1000
+        // contatos passam do teto de 30, suba o teto ou reduza a lista". Isso empurrava o operador
+        // para as duas saídas ruins — subir o teto para 1000, que é o disparo em rajada que o teto
+        // existe para impedir, ou recortar a lista à mão a cada execução. Com blocos e pausas o lote
+        // se auto-regula, então o teto passa a ser a COTA da execução: manda os primeiros, e o resto
+        // fica na lista, que é justamente o que faz o ciclo de vários dias funcionar sozinho.
+        if (_teto > 0 && plano.Count > _teto)
+        {
+            AnsiConsole.MarkupLine(
+                $"[grey]lista com[/] [bold]{plano.Count}[/][grey] contato(s); esta execução manda os "
+                + $"primeiros[/] [bold]{_teto}[/] [grey](teto). o resto fica na lista para a próxima.[/]");
+            plano = [.. plano.Take(_teto)];
+        }
 
         // Pré-voo da DIGITAÇÃO com o texto JÁ resolvido: o nome do contato pode trazer o acento que a
         // variante não tinha. Uma sonda com tudo concatenado dá o veredito do engine numa chamada só.
@@ -1165,10 +1253,22 @@ internal sealed class PhoneConsoleCommand(
         AvisarRepeticao(plano, serial);
         AvisarFormaSuspeita(plano);
 
-        var estimativa = TimeSpan.FromSeconds((plano.Count - 1) * ((_min + _max) / 2.0));
+        // Quantas pausas cabem: uma a cada bloco fechado, e nenhuma depois da última mensagem. Com 30
+        // mensagens em blocos de 15 são 2 blocos e UMA pausa, não duas.
+        var blocos = _bloco > 0 ? (plano.Count + _bloco - 1) / _bloco : 1;
+        var pausas = _bloco > 0 ? Math.Max(0, blocos - 1) : 0;
+        var esperaEntreMsg = (plano.Count - 1 - pausas) * ((_min + _max) / 2.0);
+        var estimativa = TimeSpan.FromSeconds(esperaEntreMsg + (pausas * _pausaMin * 60.0));
+
         AnsiConsole.MarkupLine(
-            $"[bold]{plano.Count}[/] mensagem(ns), intervalo {_min}-{_max}s, "
-            + $"~[bold]{Duracao(estimativa)}[/] só de espera (o envio em si soma mais).");
+            $"[bold]{plano.Count}[/] mensagem(ns), intervalo {_min}-{_max}s"
+            + (_bloco > 0
+                ? $", em ~[bold]{blocos}[/] bloco(s) de ~{_bloco} com pausa de ~{_pausaMin} min "
+                  + $"({JanelaDescrita()})."
+                : $", sem pausa entre blocos ({JanelaDescrita()})."));
+        AnsiConsole.MarkupLine(
+            $"[grey]~[/][bold]{Duracao(estimativa)}[/][grey] só de espera (o envio em si soma mais). "
+            + $"término por volta das[/] [bold]{DateTime.Now.Add(estimativa):HH:mm}[/][grey].[/]");
         AnsiConsole.Markup("[bold]confirmar? digite[/] sim [bold]:[/] ");
 
         if (!string.Equals(Console.ReadLine()?.Trim(), "sim", StringComparison.OrdinalIgnoreCase))
@@ -1216,11 +1316,30 @@ internal sealed class PhoneConsoleCommand(
         // Correções que a segunda chance descobrir, para repetir de uma vez no fim do lote.
         var corrigidos = new List<(string De, string Para)>();
 
+        // Tentativas desde a última pausa longa, e o tamanho SORTEADO deste bloco.
+        var noBloco = 0;
+        var alvoBloco = ComJitter(_bloco, JitterBloco);
+
         try
         {
             for (var i = 0; i < plano.Count; i++)
             {
                 var (contato, variante, texto) = plano[i];
+
+                // 🔴 JANELA ATIVA, conferida antes de CADA mensagem e não só na virada do bloco: um
+                // bloco leva ~1h, então quem checasse só na entrada começaria às 21h50 e terminaria
+                // depois das 23h. Encerra em vez de esperar amanhecer: console aberto de madrugada
+                // depende da tela do celular acesa a noite toda, o que não se sustenta, e ninguém
+                // estaria por perto para ver dar errado. O resto fica na lista.
+                if (!DentroDaJanela())
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[blue]fora da janela de envio ({_horaInicio}h-{_horaFim}h): execução "
+                        + $"encerrada.[/] [grey]{plano.Count - i} contato(s) ficam na lista para o "
+                        + "próximo dia. abra com[/] janela 0 24 [grey]se quiser rodar em qualquer "
+                        + "horário.[/]");
+                    break;
+                }
 
                 // 🔴 A MESMA PESSOA NAS DUAS FORMAS. Uma lista de fontes misturadas traz o mesmo
                 // contato com e sem o 9º dígito, e a dedup da colagem compara dígitos exatos, então os
@@ -1257,6 +1376,10 @@ internal sealed class PhoneConsoleCommand(
                 }
 
                 tentados.Add(contato.Numero);
+                // Conta TENTATIVA, não entrega: o que desenha padrão para o WhatsApp é a conversa
+                // aberta, e ela é aberta mesmo quando o envio falha. Contato pulado por duplicata não
+                // chega aqui, e é certo que não conte: nada foi aberto por ele.
+                noBloco++;
                 var r = await phone.SendWhatsAppMessageAsync(contato.Numero, texto, ct);
 
                 // 🔴 SEGUNDA CHANCE COM A OUTRA FORMA DO NÚMERO. O WhatsApp guarda a conta ora com o
@@ -1393,7 +1516,16 @@ internal sealed class PhoneConsoleCommand(
                     break;
                 }
 
-                if (i < plano.Count - 1)
+                // 🔴 PAUSA LONGA ENTRE BLOCOS, e ela SUBSTITUI a espera normal, não soma. O que pesa
+                // contra o chip é padrão: fluxo contínuo, hora após hora, no mesmo intervalo, é
+                // assinatura de máquina. Gente manda um punhado, some, volta depois.
+                if (_bloco > 0 && noBloco >= alvoBloco && i < plano.Count - 1)
+                {
+                    await PausarAsync(ComJitter(_pausaMin, JitterPausa), noBloco, plano.Count - (i + 1), ct);
+                    noBloco = 0;
+                    alvoBloco = ComJitter(_bloco, JitterBloco);
+                }
+                else if (i < plano.Count - 1)
                 {
                     // 🔴 FALHA NÃO É ENVIO. Nada saiu, então esperar os 150-360s do ritmo normal é
                     // pagar o preço do anti-ban por uma mensagem que não existiu: um lote com cinco
@@ -1486,6 +1618,57 @@ internal sealed class PhoneConsoleCommand(
         AnsiConsole.MarkupLine("[yellow]tire com[/] x [yellow]se não quiser mandar de novo.[/]");
     }
 
+    /// <summary>Sorteia em torno de um centro, com a folga percentual dada. Nunca devolve menos de 1.</summary>
+    private static int ComJitter(int centro, double folga) =>
+        centro <= 0
+            ? centro
+            : Math.Max(1, Random.Shared.Next(
+                (int)Math.Floor(centro * (1 - folga)),
+                (int)Math.Ceiling(centro * (1 + folga)) + 1));
+
+    /// <summary>Agora está dentro da janela em que é permitido mandar mensagem?</summary>
+    private bool DentroDaJanela()
+    {
+        var h = DateTime.Now.Hour;
+        return h >= _horaInicio && h < _horaFim;
+    }
+
+    /// <summary>A janela em uma linha, para o menu e o pré-voo. 0h-24h não é horário, é "sem
+    /// restrição", e mostrar "0h-24h" faria o operador procurar uma limitação que não existe.</summary>
+    private string TetoDescrito() =>
+        _teto == 0 ? "sem teto" : _teto.ToString(CultureInfo.InvariantCulture);
+
+    private string JanelaDescrita() =>
+        _horaInicio == 0 && _horaFim == 24 ? "qualquer horário" : $"{_horaInicio}h-{_horaFim}h";
+
+    /// <summary>Pausa entre blocos, com o horário de volta e um cronômetro na tela.</summary>
+    /// <remarks>
+    /// 🔴 O CRONÔMETRO NÃO É ENFEITE. Uma pausa de 30 minutos sem nada na tela é indistinguível de um
+    /// console travado, e a reação natural é fechar a janela — que é justamente o que faz perder o
+    /// lote. O horário de volta serve para quem sai de perto: dá para conferir o relógio da parede em
+    /// vez de ficar olhando o terminal.
+    ///
+    /// <para>Contagem sem markup e reescrita na MESMA linha com <c>\r</c>: uma tag do Spectre aberta
+    /// numa linha parcial embaralha a saída seguinte. E a linha é limpa com espaços no fim, senão o
+    /// resto do texto anterior fica pendurado quando o contador encurta.</para>
+    /// </remarks>
+    private static async Task PausarAsync(int minutos, int noBloco, int restantes, CancellationToken ct)
+    {
+        var volta = DateTime.Now.AddMinutes(minutos);
+        AnsiConsole.MarkupLine(
+            $"[blue]bloco de {noBloco} concluído.[/] [grey]pausa de {minutos} min. volta às[/] "
+            + $"[bold]{volta:HH:mm}[/][grey], com {restantes} contato(s) pela frente.[/]");
+
+        var fim = DateTime.UtcNow.AddMinutes(minutos);
+        for (var falta = fim - DateTime.UtcNow; falta > TimeSpan.Zero; falta = fim - DateTime.UtcNow)
+        {
+            Console.Write($"\r   retomando em {falta:hh\\:mm\\:ss}  (Ctrl+C interrompe)   ");
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+        }
+        Console.Write("\r" + new string(' ', 48) + "\r");
+        AnsiConsole.MarkupLine("[blue]voltando.[/]");
+    }
+
     /// <summary>Avisa, ANTES do lote começar, quais números não têm forma de celular.</summary>
     /// <remarks>
     /// 🔴 Mira exatamente o que a SEGUNDA CHANCE não alcança. Para 10 dígitos nacionais com assinante
@@ -1560,26 +1743,110 @@ internal sealed class PhoneConsoleCommand(
 
     private void Teto(string[] partes)
     {
-        if (partes.Length < 2 || !int.TryParse(partes[1], out var n) || n < 1)
+        if (partes.Length < 2 || !int.TryParse(partes[1], out var n) || n < 0)
         {
-            AnsiConsole.MarkupLine($"[red]uso:[/] teto <n>   (atual: {_teto})");
+            AnsiConsole.MarkupLine(
+                $"[red]uso:[/] teto <n>   (atual: {(_teto == 0 ? "sem teto" : _teto.ToString(CultureInfo.InvariantCulture))})");
+            AnsiConsole.MarkupLine(
+                "[grey]quantas mandar NESTA execução; o resto fica na lista.[/] 0 [grey]= sem teto, "
+                + "manda a lista inteira.[/]");
             return;
         }
         _teto = n;
-        AnsiConsole.MarkupLine($"teto por lote: [bold]{_teto}[/].");
+        AnsiConsole.MarkupLine(
+            _teto == 0
+                ? "teto: [bold]sem teto[/] [grey](manda a lista inteira)[/]."
+                : $"cota por execução: [bold]{_teto}[/] [grey](o resto fica na lista)[/].");
     }
 
-    /// <summary>Ajusta quantos números sem conta em sequência interrompem o lote.</summary>
+    /// <summary>Tamanho do bloco e duração da pausa, num comando só.</summary>
+    /// <remarks>
+    /// Os dois juntos porque um sem o outro não quer dizer nada: bloco sem pausa é o fluxo contínuo de
+    /// antes, e pausa sem bloco não tem quando acontecer. Separar em dois comandos deixaria o console
+    /// passar por estados que não fazem sentido entre um ajuste e o outro.
+    /// </remarks>
+    /// <summary>Digitado com argumentos, aplica; digitado sozinho (ou pelo menu), pergunta.</summary>
+    private void BlocosOuInterativo(string[] partes, string serial)
+    {
+        if (partes.Length >= 3)
+        {
+            Blocos(partes);
+            Salvar(serial);
+            return;
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[grey]hoje: {(_bloco == 0 ? "sem blocos" : $"{_bloco} mensagens e pausa de {_pausaMin} min")}."
+            + " 0 mensagens desliga a pausa.[/]");
+        AnsiConsole.Markup("[grey]mensagens por bloco (Enter mantém):[/] ");
+        var qtd = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(qtd))
+        {
+            AnsiConsole.MarkupLine("[grey]mantido.[/]");
+            return;
+        }
+        AnsiConsole.Markup("[grey]minutos de pausa entre blocos:[/] ");
+        var min = Console.ReadLine();
+        Blocos(["blocos", qtd.Trim(), (min ?? "").Trim()]);
+        Salvar(serial);
+    }
+
+    private void Blocos(string[] partes)
+    {
+        var atual = _bloco == 0
+            ? "sem blocos (fluxo contínuo)"
+            : $"{_bloco} mensagens, pausa de {_pausaMin} min";
+        if (partes.Length < 3
+            || !int.TryParse(partes[1], out var n) || n < 0 || n > 200
+            || !int.TryParse(partes[2], out var min) || min < 1 || min > 720)
+        {
+            AnsiConsole.MarkupLine($"[red]uso:[/] blocos <mensagens> <minutos de pausa>   (atual: {atual})");
+            AnsiConsole.MarkupLine(
+                "[grey]exemplo:[/] blocos 15 30 [grey]manda um punhado de ~15, para ~30 min, e repete.[/] "
+                + "blocos 0 30 [grey]desliga a pausa e volta ao fluxo contínuo.[/]");
+            AnsiConsole.MarkupLine(
+                "[grey]os dois números são o CENTRO, não o valor exato: cada bloco sorteia em volta "
+                + "(12-18 mensagens, 22-38 min). repetir 15 e 30 cravados seria o único trecho "
+                + "regular da série, que é a assinatura que a pausa existe para desmanchar.[/]");
+            return;
+        }
+        (_bloco, _pausaMin) = (n, min);
+        AnsiConsole.MarkupLine(
+            _bloco == 0
+                ? "blocos: [bold]desligados[/] [grey](fluxo contínuo)[/]."
+                : $"blocos de [bold]{_bloco}[/] mensagem(ns), pausa de [bold]{_pausaMin}[/] min entre eles.");
+    }
+
+    private void Janela(string[] partes)
+    {
+        if (partes.Length < 3
+            || !int.TryParse(partes[1], out var ini) || !int.TryParse(partes[2], out var fim)
+            || ini < 0 || fim > 24 || ini >= fim)
+        {
+            AnsiConsole.MarkupLine(
+                $"[red]uso:[/] janela <hora inicial> <hora final>   (atual: {_horaInicio}h-{_horaFim}h)");
+            // A janela que cruza a meia-noite é recusada de propósito, e não "corrigida" no chute: o
+            // HumanPhaseAutoSender já registra que uma janela invertida deixa o robô mudo em silêncio,
+            // sem nenhuma pista de por quê. Aqui ela deixaria o lote encerrando na primeira mensagem.
+            AnsiConsole.MarkupLine(
+                "[grey]o início tem que ser ANTES do fim: a janela não atravessa a meia-noite. "
+                + "exemplo:[/] janela 8 22[grey].[/]");
+            return;
+        }
+        (_horaInicio, _horaFim) = (ini, fim);
+        AnsiConsole.MarkupLine($"janela de envio: [bold]{JanelaDescrita()}[/].");
+    }
+
+    /// <summary>Quantas falhas seguidas interrompem o lote. Zero (padrão) = nunca interrompe.</summary>
     /// <remarks>
     /// 🔴 NÃO entra no menu principal, e é exceção consciente à regra de que todo comando novo entra
     /// lá. O menu é a superfície do dia a dia; este ajuste só interessa no minuto em que o lote para
-    /// por esse motivo — e é justamente ali que a mensagem de interrupção o oferece, com o valor
-    /// atual. Descoberta no ponto de uso, que é o que a regra do menu persegue. Continua listado em
-    /// `comandos`, que é a referência completa.
+    /// por esse motivo, e é justamente ali que a mensagem de interrupção o oferece, com o valor atual.
+    /// Descoberta no ponto de uso, que é o que a regra do menu persegue. Continua listado em
+    /// <c>comandos</c>, que é a referência completa.
     ///
-    /// <para>Teto de 30 porque o número existe para limitar: um valor gigante é o mesmo que desligar
-    /// o disjuntor, e aí volta o defeito que ele conserta. Quem tem lista pior que isso não precisa
-    /// de mais tolerância, precisa de outra lista.</para>
+    /// <para>Aceita no máximo 30 porque o número existe para limitar: um valor gigante é o mesmo que
+    /// deixar em zero, só que com aparência de proteção ligada.</para>
     /// </remarks>
     private void Parar(string[] partes)
     {
@@ -1632,7 +1899,12 @@ internal sealed class PhoneConsoleCommand(
         t.AddColumn(new TableColumn("agora"));
 
         t.AddRow("[bold]1[/]", "ritmo entre mensagens", $"[bold]{_min}-{_max}s[/]");
-        t.AddRow("[bold]2[/]", "teto por lote", $"[bold]{_teto}[/]");
+        t.AddRow("[bold]2[/]", "cota por execução", $"[bold]{TetoDescrito()}[/]");
+        t.AddRow("[bold]b[/]", "blocos, pausa e janela",
+            (_bloco == 0
+                ? "[grey]fluxo contínuo[/]"
+                : $"~[bold]{_bloco}[/] por vez, pausa ~[bold]{_pausaMin}[/] min")
+            + $" [grey]· {JanelaDescrita()}[/]");
         t.AddRow("[bold]3[/]", "gravar na agenda", _agenda ? "[bold]ligado[/]" : "[grey]desligado[/]");
         t.AddRow("[bold]d[/]", "digitação humana",
             _digitacaoHumana
@@ -1786,7 +2058,9 @@ internal sealed class PhoneConsoleCommand(
 
     private void TetoInterativo()
     {
-        AnsiConsole.Markup($"[grey]teto atual {_teto}. novo teto (Enter mantém):[/] ");
+        AnsiConsole.Markup(
+            $"[grey]cota atual: {TetoDescrito()}. quantas mandar por execução, 0 = a lista toda "
+            + "(Enter mantém):[/] ");
         var l = Console.ReadLine();
         if (string.IsNullOrWhiteSpace(l))
         {
@@ -1986,7 +2260,9 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("enviar", "pré-voo, plano, confirmação e disparo do lote");
         t.AddRow("status", "reconsulta o aparelho pelo adb");
         t.AddRow("intervalo <min> <max>", "segundos entre um envio e o próximo (default 150 360)");
-        t.AddRow("teto <n>", "máximo de mensagens por lote (default 30)");
+        t.AddRow("blocos <n> <min> [grey]| b[/]", "manda ~n, pausa ~min minutos, repete (default 15 e 30; n=0 desliga)");
+        t.AddRow("janela <ini> <fim>", "horas em que é permitido enviar (default 8 22)");
+        t.AddRow("teto <n>", "cota desta execução: manda os n primeiros e deixa o resto na lista");
         t.AddRow("parar <n>", "falhas seguidas que interrompem o lote (default 0 = nunca interrompe)");
         t.AddRow("agenda", "liga/desliga gravar o contato na agenda antes de enviar");
         t.AddRow("x [grey][[contato|texto]] [[n]][/]", "exclui UM item (pergunta se você não disser qual)");
@@ -2083,16 +2359,28 @@ internal sealed class PhoneConsoleCommand(
             }
             _textos.AddRange(e.Textos);
             (_min, _max, _agenda, _digitacaoHumana) = (e.MinDelay, e.MaxDelay, e.Agenda, e.DigitacaoHumana);
-            if (e.Teto > 0)
+            if (e.Teto is { } teto)
             {
-                // Zero = sessão gravada antes do teto existir. Nesse caso vale o default do --teto,
-                // não um teto zerado que recusaria qualquer lista.
-                _teto = e.Teto;
+                _teto = Math.Max(0, teto);
             }
             // Sem guarda de zero aqui, ao contrário do teto: zero é um valor LEGÍTIMO deste ajuste
             // ("nunca interrompa") e também o padrão, então sessão antiga e escolha explícita levam ao
             // mesmo lugar.
             _pararEm = Math.Clamp(e.PararEm, 0, 30);
+            if (e.Bloco is { } b)
+            {
+                _bloco = Math.Clamp(b, 0, 200);
+            }
+            if (e.PausaMin is { } p)
+            {
+                _pausaMin = Math.Clamp(p, 1, 720);
+            }
+            // Só aceita o par se ele for coerente. Janela invertida gravada por um bug antigo deixaria
+            // o console MUDO para sempre, e é o defeito que o HumanPhaseAutoSender já documenta.
+            if (e.HoraInicio is { } hi && e.HoraFim is { } hf && hi >= 0 && hf <= 24 && hi < hf)
+            {
+                (_horaInicio, _horaFim) = (hi, hf);
+            }
             if (_contatos.Count > 0 || _textos.Count > 0)
             {
                 AnsiConsole.MarkupLine(
@@ -2118,6 +2406,10 @@ internal sealed class PhoneConsoleCommand(
                 MaxDelay = _max,
                 Teto = _teto,
                 PararEm = _pararEm,
+                Bloco = _bloco,
+                PausaMin = _pausaMin,
+                HoraInicio = _horaInicio,
+                HoraFim = _horaFim,
                 Agenda = _agenda,
                 DigitacaoHumana = _digitacaoHumana,
             };
