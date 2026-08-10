@@ -45,14 +45,14 @@ public sealed class WhatsAppUiDriverConfirmacaoTests
 
             if (command.Contains("uiautomator dump", StringComparison.Ordinal))
             {
-                // Dump falho devolve código != 0, que é como o driver descobre que não deu pra ler.
-                return Task.FromResult(TelaAtual is null ? (1, "", "ERROR: could not get idle state.") : (0, "ok", ""));
-            }
-            if (command.StartsWith("cat ", StringComparison.Ordinal))
-            {
+                // `rm -f`, dump e `cat` chegam NUMA LINHA SÓ (ver DumpUiAsync), então UMA chamada
+                // consome uma tela da sequência. Dump falho não deixa arquivo para o `cat` da mesma
+                // linha, e a saída vazia é como o driver descobre que não deu pra ler.
                 var tela = TelaAtual;
-                _leitura++; // cada dump+cat completo consome uma tela da sequência
-                return Task.FromResult(tela is null ? (1, "", "No such file") : (0, $"<hierarchy>{tela}</hierarchy>", ""));
+                _leitura++;
+                return Task.FromResult(tela is null
+                    ? (1, "", "ERROR: could not get idle state.")
+                    : (0, $"<hierarchy>{tela}</hierarchy>", ""));
             }
             return Task.FromResult((0, "", ""));
         }

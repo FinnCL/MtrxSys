@@ -3,8 +3,9 @@ rem ============================================================================
 rem  Prepara um celular Android novo para o console do aparelho fisico.
 rem
 rem  Faz, nesta ordem: acha o adb (e INSTALA o platform-tools se faltar), confere
-rem  que o celular esta conectado e autorizado, baixa o ADB Keyboard, instala e
-rem  habilita. Uma vez por APARELHO, em cada PC.
+rem  que o celular esta conectado e autorizado, baixa o ADB Keyboard, instala,
+rem  habilita, e deixa a tela acesa enquanto carregando. Uma vez por APARELHO,
+rem  em cada PC.
 rem
 rem  Por que o teclado: com digitacao humana ligada o sistema escreve pelo
 rem  `input text` do Android, que so aceita ASCII. Mensagem com emoji OU ACENTO
@@ -40,7 +41,7 @@ echo.
 rem ---------------------------------------------------------------------------
 rem  1) adb. Instala o platform-tools se nao achar em nenhum lugar conhecido.
 rem ---------------------------------------------------------------------------
-echo [1/5] Procurando o adb...
+echo [1/6] Procurando o adb...
 
 set "ADB="
 if defined Phone__AdbPath if exist "%Phone__AdbPath%" set "ADB=%Phone__AdbPath%"
@@ -73,7 +74,7 @@ rem  2) O celular precisa aparecer como "device". "unauthorized" e o caso mais
 rem     comum e tem conserto proprio, entao vale distinguir dos outros.
 rem ---------------------------------------------------------------------------
 echo.
-echo [2/5] Procurando o aparelho...
+echo [2/6] Procurando o aparelho...
 
 "!ADB!" devices > "%LISTA%" 2>nul
 set "ACHOU="
@@ -119,7 +120,7 @@ rem     graficos. Um limite de 100 KB rejeitava o arquivo CERTO. O criterio que
 rem     vale e o conteudo: pagina de erro tem "<html" dentro, APK nao.
 rem ---------------------------------------------------------------------------
 echo.
-echo [3/5] Baixando o ADB Keyboard...
+echo [3/6] Baixando o ADB Keyboard...
 
 set "APK=%TEMP%\ADBKeyboard.apk"
 curl -L -o "%APK%" "%APK_URL%"
@@ -149,7 +150,7 @@ rem ---------------------------------------------------------------------------
 rem  4) Instalar. -r reinstala por cima, entao rodar de novo e seguro.
 rem ---------------------------------------------------------------------------
 echo.
-echo [4/5] Instalando no aparelho...
+echo [4/6] Instalando no aparelho...
 
 %ADBS% install -r "%APK%"
 if errorlevel 1 (
@@ -164,7 +165,7 @@ rem     do celular e quem for usar o aparelho a mao fica sem digitar. O sistema
 rem     seleciona ele apenas em volta da digitacao e restaura o anterior depois.
 rem ---------------------------------------------------------------------------
 echo.
-echo [5/5] Habilitando o teclado...
+echo [5/6] Habilitando o teclado...
 
 %ADBS% shell ime enable %IME%
 %ADBS% shell ime list -s > "%LISTA%" 2>nul
@@ -174,6 +175,30 @@ if errorlevel 1 (
     goto :fim
 )
 
+rem ---------------------------------------------------------------------------
+rem  6) Tela sempre acesa enquanto carregando.
+rem
+rem     MEDIDO 2026-08-10: a tela apaga sozinha em 10 min e a pausa entre blocos
+rem     do lote e de ~30 min. Resultado: TODO primeiro envio depois de uma pausa
+rem     achava o aparelho dormindo. O `am start` despacha a intent, mas a tela da
+rem     conversa nasce atras do cadeado, o botao de enviar nunca aparece, e o erro
+rem     dizia "a conversa nao abriu" - que manda conferir o NUMERO, quando o
+rem     problema era o CELULAR.
+rem
+rem     O driver ja acorda o aparelho antes de cada envio, entao isto e a segunda
+rem     camada: com a tela acesa o cadeado nunca chega a engatar.
+rem
+rem     `stayon true` vale para USB, AC e wireless, e persiste no reboot. O
+rem     screen_off_timeout e a rede de baixo, para quando o cabo sair.
+rem ---------------------------------------------------------------------------
+echo.
+echo [6/6] Mantendo a tela acesa enquanto carregando...
+
+%ADBS% shell svc power stayon true
+%ADBS% shell settings put system screen_off_timeout 1800000
+
+echo       tela nao apaga mais com o cabo plugado.
+
 echo.
 echo ============================================================
 echo   PRONTO
@@ -182,6 +207,15 @@ echo   O aparelho !SERIAL! ja digita emoji e acento.
 echo.
 echo   O console detecta sozinho: nao precisa mudar nada nele.
 echo   Deixe a digitacao humana LIGADA - agora ela aguenta o texto inteiro.
+echo.
+echo   FALTA UMA COISA, E SO VOCE PODE FAZER: tire o BLOQUEIO DE TELA
+echo   do celular em Configuracoes, Seguranca, Bloqueio de tela, Nenhum.
+echo   PIN, padrao e biometria nao tem como ser removidos pelo adb, e com
+echo   eles o lote para na primeira pausa longa. Aparelho de disparo deve
+echo   ficar sem bloqueio.
+echo.
+echo   Dica: brilho no minimo. A tela fica acesa horas seguidas, e isso
+echo   poupa bateria e evita marca na tela.
 echo.
 echo   AVISO: nao defina este teclado como padrao nas Configuracoes do
 echo   celular. Ele nao desenha teclas, entao o teclado sumiria da tela.

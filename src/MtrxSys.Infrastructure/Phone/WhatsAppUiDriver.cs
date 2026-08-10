@@ -1,4 +1,6 @@
 ﻿using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
@@ -83,7 +85,11 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// <para>Na dúvida devolve a mensagem genérica: afirmar a causa errada é pior que admitir que não
     /// se sabe — foi justamente o que custou as horas acima.</para>
     /// </remarks>
-    private async Task<WhatsAppSendResult> DiagnosticarChatNaoAbertoAsync(CancellationToken ct)
+    /// <returns>O veredito e o XML que o produziu. O XML sai junto porque quem chama precisa da MESMA
+    /// tela para tentar desbloqueá-la: dumpar de novo custaria outro processo `adb` e, pior, poderia
+    /// ler uma tela DIFERENTE — o diagnóstico falaria de um aviso e a evidência guardada, de outro.</returns>
+    private async Task<(WhatsAppSendResult Veredito, string? Xml)> DiagnosticarChatNaoAbertoAsync(
+        CancellationToken ct)
     {
         var generico = WhatsAppSendResult.Fail(
             "botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
@@ -92,7 +98,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         {
             // Sem leitura de tela não dá pra afirmar que a culpa é do número, e o palpite errado aqui
             // faz o lote seguir em frente contra um aparelho travado. Na dúvida, é falha do aparelho.
-            return generico;
+            return (generico, null);
         }
 
         // Trechos estáveis do aviso, sem acento e em minúsculas, pra sobreviver a variação de texto.
@@ -107,12 +113,24 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             "isn't on whatsapp", "is not on whatsapp", "not on whatsapp",
         ];
 
+        // Aparelho DORMINDO é a causa mais provável num lote sem ninguém por perto: a tela apaga em
+        // ~10 min e a pausa entre blocos é maior que isso. O driver acorda antes de cada envio, então
+        // chegar aqui bloqueado significa cadeado COM SENHA, que nenhum comando resolve.
+        if (TelaBloqueada(xml))
+        {
+            return (WhatsAppSendResult.Fail(
+                "o aparelho está com a TELA BLOQUEADA e o desbloqueio automático não deu conta, o que "
+                + "indica PIN, padrão ou biometria. Não é o número nem a conversa. No aparelho: tire o "
+                + "bloqueio de tela e ligue \"Permanecer ativo\" nas Opções do desenvolvedor (ou rode "
+                + "tools\\preparar-aparelho.cmd, que já faz isso)."), xml);
+        }
+
         var tela = xml.ToLowerInvariant();
-        return pistas.Any(p => tela.Contains(p, StringComparison.Ordinal))
+        return (pistas.Any(p => tela.Contains(p, StringComparison.Ordinal))
             ? WhatsAppSendResult.NoAccount(
                 "o WhatsApp respondeu que ESTE NÚMERO não tem conta. Não é o aparelho nem a conexão: "
                 + "é a forma do número ou o contato mesmo. Se o contato existe, confira o 9º dígito.")
-            : generico;
+            : generico, xml);
     }
 
     /// <summary>Tenta tirar da frente um aviso que está por cima da conversa, para a mensagem poder
@@ -129,48 +147,167 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// acontece antes de desistir, e o envio segue.</para>
     ///
     /// <para>Duas saídas, nessa ordem: um botão de rótulo neutro (ver
-    /// <see cref="BotoesQueSoFecham"/>), e, se não houver, um BACK. O BACK é o plano B porque o aviso
+    /// <see cref="BotoesQueSoFecham"/>) e, se não houver, um BACK. O BACK é o plano B porque o aviso
     /// pode ser tela cheia sem botão reconhecível, e porque ele não confirma nada — no pior caso sai
     /// da conversa, e a conversa é reaberta por deep link no próximo contato de qualquer forma.</para>
     ///
-    /// <para>⚠️ NÃO MEDIDO EM APARELHO. Os rótulos vieram do que o app usa em avisos desse tipo, não de
-    /// um dump real da tela de mensagens temporárias. Quando alguém reproduzir, vale dumpar a tela
-    /// (<c>uiautomator dump</c> + <c>cat</c>) e escrever aqui a DATA, o APARELHO e o rótulo exato do
-    /// botão — foi a ausência desses três que deixou uma afirmação falsa de pé no
-    /// <c>LookupContactIdAsync</c> por semanas.</para>
+    /// <para>⚠️ OS RÓTULOS NÃO FORAM MEDIDOS EM APARELHO. Vieram do que o app usa em avisos desse tipo,
+    /// não de um dump real da tela de mensagens temporárias. É por isso que o caminho de desistência
+    /// GUARDA A TELA (ver <see cref="DescreverTelaDesconhecidaAsync"/>) em vez de só devolver falha:
+    /// esperar alguém estar presente no momento certo pra rodar o dump é esperar por uma coincidência,
+    /// e o disparo roda justamente sem ninguém por perto.</para>
     /// </remarks>
-    private async Task TentarDesbloquearTelaAsync(CancellationToken ct)
+    /// <param name="xml">A tela JÁ LIDA por quem chama. Não dumpa de novo: seria outro processo `adb` no
+    /// caminho de falha e, pior, poderia ler uma tela diferente da que foi diagnosticada.</param>
+    /// <returns>null quando reconheceu e fechou o aviso; caso contrário, o que dava pra apurar da tela,
+    /// pra quem chama anexar à falha.</returns>
+    private async Task<string?> TentarDesbloquearTelaAsync(string? xml, CancellationToken ct)
     {
-        if (await DumpUiAsync(ct) is { } xml)
+        if (xml is not null)
         {
-            foreach (Match no in NoRx.Matches(xml))
+            foreach (var (rotulo, centro) in Clicaveis(xml))
             {
-                if (!no.Value.Contains("clickable=\"true\"", StringComparison.Ordinal))
+                if (centro is { } ponto && BotoesQueSoFecham.Contains(rotulo.ToLowerInvariant()))
                 {
-                    continue;
-                }
-                var t = TextoRx.Match(no.Value);
-                if (!t.Success
-                    || !BotoesQueSoFecham.Contains(t.Groups[1].Value.Trim().ToLowerInvariant()))
-                {
-                    continue;
-                }
-                var b = BoundsRx.Match(no.Value);
-                if (b.Success
-                    && int.TryParse(b.Groups[1].Value, out var x1)
-                    && int.TryParse(b.Groups[2].Value, out var y1)
-                    && int.TryParse(b.Groups[3].Value, out var x2)
-                    && int.TryParse(b.Groups[4].Value, out var y2))
-                {
-                    await TapAsync(((x1 + x2) / 2, (y1 + y2) / 2), ct);
+                    await TapAsync(ponto, ct);
                     await Task.Delay(600, ct);
-                    return;
+                    return null;
                 }
             }
         }
 
+        // Nenhum rótulo conhecido: registra a tela ANTES do BACK, que é o que a faz sumir.
+        var evidencia = xml is null ? null : DescreverTelaDesconhecida(xml);
         await _adb.ShellAsync("input keyevent KEYCODE_BACK", ct);
         await Task.Delay(600, ct);
+        return evidencia;
+    }
+
+    /// <summary>Os nós CLICÁVEIS da tela: o rótulo e, quando dá pra ler, o centro para tocar.</summary>
+    /// <remarks>
+    /// Uma varredura só, e não duas. Achar o botão que fecha um aviso e listar os candidatos quando
+    /// nenhum serve são a MESMA pergunta feita para fins diferentes, e estavam escritas duas vezes:
+    /// dois laços sobre <see cref="NoRx"/>, duas leituras de <c>clickable</c>, duas extrações de texto.
+    /// Duplicar isso não custava só linhas — o caminho de falha varria a árvore inteira duas vezes, e as
+    /// duas cópias podiam divergir na definição de "rótulo" no primeiro ajuste.
+    /// <para>Lê <c>text</c> e, na falta dele, <c>content-desc</c>: botão só com ícone não tem texto, e é
+    /// justamente o caso em que ninguém adivinha o rótulo olhando a tela de longe.</para>
+    /// </remarks>
+    private static IEnumerable<(string Rotulo, (int X, int Y)? Centro)> Clicaveis(string xml)
+    {
+        foreach (Match no in NoRx.Matches(xml))
+        {
+            if (!no.Value.Contains("clickable=\"true\"", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var texto = TextoRx.Match(no.Value) is { Success: true } t && t.Groups[1].Value.Trim().Length > 0
+                ? t.Groups[1].Value.Trim()
+                : DescRx.Match(no.Value) is { Success: true } d ? d.Groups[1].Value.Trim() : "";
+            if (texto.Length == 0)
+            {
+                continue;
+            }
+            yield return (texto, CentroDe(no.Value));
+        }
+    }
+
+    /// <summary>Centro do nó a partir do atributo <c>bounds</c>. null = não deu pra ler.</summary>
+    private static (int X, int Y)? CentroDe(string no)
+    {
+        var b = BoundsRx.Match(no);
+        return b.Success
+            && int.TryParse(b.Groups[1].Value, out var x1)
+            && int.TryParse(b.Groups[2].Value, out var y1)
+            && int.TryParse(b.Groups[3].Value, out var x2)
+            && int.TryParse(b.Groups[4].Value, out var y2)
+                ? ((x1 + x2) / 2, (y1 + y2) / 2)
+                : null;
+    }
+
+    /// <summary>Apura o que dava pra saber de uma tela que bloqueou o envio e não foi reconhecida:
+    /// os rótulos clicáveis dela, e o XML inteiro guardado em disco.</summary>
+    /// <remarks>
+    /// 🔴 A PERGUNTA QUE ISTO RESPONDE é "qual botão fecha esse aviso?", e ela só tem resposta enquanto
+    /// o aviso está na tela. O envio não pode parar e esperar: o lote continua, o contato seguinte abre
+    /// outra conversa, e a tela que interessa é substituída em segundos. Ou se captura no instante, ou
+    /// se perde.
+    ///
+    /// <para>Os rótulos vão na MENSAGEM DE ERRO de propósito, e não só no arquivo. O erro já é gravado
+    /// no CSV do console (coluna `erro`) e no log do dispatcher, sem nada novo pra configurar — então a
+    /// resposta chega a quem lê o resultado do lote de manhã, mesmo que a pasta de telas esteja num
+    /// container que já morreu.</para>
+    ///
+    /// <para>⚠️ CAPTURA, NÃO APRENDE. O sistema NÃO passa a tocar no botão que descobriu: a lista de
+    /// <see cref="BotoesQueSoFecham"/> continua fechada e editada à mão. Tocar em texto desconhecido é
+    /// tocar às cegas numa tela que pode ter "Bloquear" ou "Denunciar", e o custo de errar é a conta.
+    /// Automatizar o DIAGNÓSTICO é seguro; automatizar a DECISÃO não é.</para>
+    /// </remarks>
+    private string DescreverTelaDesconhecida(string xml)
+    {
+        var rotulos = RotulosClicaveis(xml);
+        var arquivo = GuardarTela(xml);
+        var lista = rotulos.Count == 0
+            ? "nenhum com texto legível"
+            : string.Join(" | ", rotulos.Take(12));
+        return " Uma tela NÃO RECONHECIDA estava na frente da conversa e o aviso não pôde ser fechado "
+            + $"pelo botão (só por BACK, que sai do chat). Botões visíveis: {lista}."
+            + (arquivo is null ? "" : $" Tela salva em {arquivo}.");
+    }
+
+    /// <summary>Os rótulos clicáveis da tela, sem repetir e sem parágrafo. É a lista de candidatos a
+    /// "botão que fecha isto" — o dado que falta pra decidir o que entra em
+    /// <see cref="BotoesQueSoFecham"/>.</summary>
+    /// <remarks>Corta texto longo porque um aviso inteiro às vezes é clicável, e o parágrafo dele não
+    /// cabe numa coluna de CSV nem ajuda a escolher rótulo de botão.</remarks>
+    private static List<string> RotulosClicaveis(string xml) =>
+        [.. Clicaveis(xml)
+            .Select(c => c.Rotulo.Length <= 40 ? c.Rotulo : c.Rotulo[..40] + "…")
+            .Distinct(StringComparer.Ordinal)];
+
+    /// <summary>Grava a tela em disco. Devolve o caminho, ou null se não deu pra gravar.</summary>
+    /// <remarks>
+    /// Deduplica pelo CONTEÚDO: o mesmo aviso aparecendo em trinta contatos do lote grava um arquivo
+    /// só. Sem isso a pasta enche de cópias idênticas e a tela NOVA, que é a que interessa, fica
+    /// enterrada. E rotaciona, porque diagnóstico que enche o disco do operador vira outro problema.
+    /// <para>Best-effort: pasta sem permissão ou disco cheio NÃO derruba o envio. Os rótulos já foram
+    /// para a mensagem de erro, que é a parte que responde a pergunta.</para>
+    /// </remarks>
+    private string? GuardarTela(string xml)
+    {
+        try
+        {
+            var pasta = string.IsNullOrWhiteSpace(_opts.UiDumpDir)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MtrxSys", "telas")
+                : _opts.UiDumpDir;
+            Directory.CreateDirectory(pasta);
+
+            var assinatura = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(xml)))[..8]
+                .ToLowerInvariant();
+            if (Directory.EnumerateFiles(pasta, $"*-{assinatura}.xml").FirstOrDefault() is { } jaTem)
+            {
+                return jaTem;
+            }
+
+            var caminho = Path.Combine(
+                pasta,
+                $"tela-{DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}-{assinatura}.xml");
+            File.WriteAllText(caminho, xml, Encoding.UTF8);
+
+            foreach (var velho in Directory.EnumerateFiles(pasta, "tela-*.xml")
+                         .OrderByDescending(f => f, StringComparer.Ordinal)
+                         .Skip(Math.Max(1, _opts.UiDumpKeep)))
+            {
+                File.Delete(velho);
+            }
+            return caminho;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                      or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Devolve o aparelho a um estado neutro depois de uma falha, para o próximo contato do
@@ -256,6 +393,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             sendCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(15, _opts.WhatsAppSendTimeoutSeconds)));
             var sct = sendCts.Token;
 
+            // ANTES da leitura de tela, não depois: a pré-condição abaixo lê a árvore, e a árvore de um
+            // aparelho dormindo é a do keyguard. Sem acordar primeiro, ela julgaria a tela errada.
+            await AcordarAparelhoAsync(sct);
+
             if (await GarantirTelaSemRascunhoAsync(sct) is { } sujeira)
             {
                 return WhatsAppSendResult.Fail(sujeira);
@@ -266,26 +407,30 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             {
                 return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
             }
-            var send = await PollNodeCenterAsync("com.whatsapp:id/send", _opts.WhatsAppOpenWaitMs, sct);
+            var send = await PollNodeCenterAsync(SendNodeRx, _opts.WhatsAppOpenWaitMs, sct);
             if (send is null)
             {
                 // 🔴 DIAGNOSTICA ANTES DE LIMPAR. O diálogo de "não está no WhatsApp" também tem um
                 // botão OK, então dispensar primeiro apagaria a única prova de que a causa é o NÚMERO,
                 // e a falha voltaria a ser classificada como problema de aparelho.
-                var diagnostico = await DiagnosticarChatNaoAbertoAsync(sct);
+                var (diagnostico, tela) = await DiagnosticarChatNaoAbertoAsync(sct);
                 if (diagnostico.NoWhatsAppAccount)
                 {
                     return diagnostico;
                 }
 
-                await TentarDesbloquearTelaAsync(sct);
+                var evidencia = await TentarDesbloquearTelaAsync(tela, sct);
                 send = await PollNodeCenterAsync(
-                    "com.whatsapp:id/send", Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
+                    SendNodeRx, Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
                 if (send is null)
                 {
                     // Devolve o diagnóstico ORIGINAL: depois do BACK a tela mudou, e um segundo
                     // diagnóstico descreveria a tela que eu mesmo criei, não a que causou a falha.
-                    return diagnostico;
+                    // A evidência da tela desconhecida vem ANEXADA, não no lugar: ela descreve o que
+                    // bloqueou, enquanto o diagnóstico diz o que o envio concluiu.
+                    return evidencia is null
+                        ? diagnostico
+                        : diagnostico with { Error = diagnostico.Error + evidencia };
                 }
             }
 
@@ -344,13 +489,17 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 TimeSpan.FromSeconds(Math.Max(60, _opts.WhatsAppSendTimeoutSeconds)) + typingBudget);
             var sct = sendCts.Token;
 
+            // Mesmo motivo do caminho do deep link: sem isto, o primeiro envio de cada bloco encontra o
+            // aparelho dormindo e falha como se a conversa não tivesse aberto.
+            await AcordarAparelhoAsync(sct);
+
             var (rc, outp, err) = await OpenChatAsync(WhatsAppUi.DeepLinkEmpty(digits), sct);
             if (rc != 0)
             {
                 return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
             }
 
-            var entry = await PollNodeCenterAsync("com.whatsapp:id/entry", _opts.WhatsAppOpenWaitMs, sct);
+            var entry = await PollNodeCenterAsync(EntryNodeRx, _opts.WhatsAppOpenWaitMs, sct);
             if (entry is null)
             {
                 // 🔴 O MESMO TRATAMENTO DO OUTRO CAMINHO, e não é simetria decorativa: este aqui é o
@@ -358,18 +507,19 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 // diagnosticava, um número sem conta chegava ao console como "a conversa não abriu",
                 // ou seja, entrava no contador de falha de APARELHO e disparava o alerta de celular
                 // travado com o celular perfeito.
-                var diagnostico = await DiagnosticarChatNaoAbertoAsync(sct);
+                var (diagnostico, tela) = await DiagnosticarChatNaoAbertoAsync(sct);
                 if (diagnostico.NoWhatsAppAccount)
                 {
                     return diagnostico;
                 }
 
-                await TentarDesbloquearTelaAsync(sct);
+                var evidencia = await TentarDesbloquearTelaAsync(tela, sct);
                 entry = await PollNodeCenterAsync(
-                    "com.whatsapp:id/entry", Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
+                    EntryNodeRx, Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
                 if (entry is null)
                 {
-                    return WhatsAppSendResult.Fail("campo de mensagem não apareceu (a conversa não abriu).");
+                    return WhatsAppSendResult.Fail(
+                        "campo de mensagem não apareceu (a conversa não abriu)." + evidencia);
                 }
             }
             await TapAsync(entry.Value, sct);
@@ -417,7 +567,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             }
 
             await Task.Delay(Random.Shared.Next(700, 2200), sct);
-            var send = await PollNodeCenterAsync("com.whatsapp:id/send", _opts.WhatsAppSendWaitMs, sct);
+            var send = await PollNodeCenterAsync(SendNodeRx, _opts.WhatsAppSendWaitMs, sct);
             if (send is null)
             {
                 await ClearEntryAsync(typing, sct);
@@ -475,6 +625,62 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         // Aspas simples: '&' e '#' da URL não podem ser interpretados pelo shell do aparelho.
         _adb.ShellAsync($"am start -a android.intent.action.VIEW -d '{url}'", ct);
 
+    /// <summary>Acorda a tela e tira o cadeado simples da frente, antes de abrir a conversa.</summary>
+    /// <remarks>
+    /// 🔴 O CASO QUE MOTIVOU (2026-08-10): a tela do aparelho apaga sozinha em 10 min e a pausa entre
+    /// blocos é de ~30. Ou seja, TODO primeiro envio depois de uma pausa encontrava o aparelho dormindo.
+    /// O `am start` despacha a intent, mas a Activity nasce ATRÁS do keyguard: nem `id/entry` nem
+    /// `id/send` entram na árvore, e o envio falhava como "a conversa não abriu" — o diagnóstico que
+    /// culpa o número. Como a falha era do APARELHO, ela ainda alimentava o contador do disjuntor e o
+    /// aviso de celular travado, com o celular perfeito.
+    ///
+    /// <para>A tentação era encurtar a pausa pra caber nos 10 min da tela. Seria consertar o sintoma
+    /// pelo lado errado: a pausa é o que desmancha o padrão de máquina E o que segura o volume diário
+    /// no platô de 120 (ver <c>PhoneConsoleCommand._bloco</c>). Acordar o aparelho custa um comando.</para>
+    ///
+    /// <para><c>KEYCODE_WAKEUP</c> e não <c>KEYCODE_POWER</c>: power é uma CHAVE (liga e desliga), então
+    /// numa tela já acesa ele APAGARIA a tela — o caminho mais direto de transformar uma proteção em
+    /// defeito. WAKEUP é idempotente: acende, e não faz nada se já estiver acesa.</para>
+    ///
+    /// <para><c>wm dismiss-keyguard</c> resolve o cadeado SEM senha (deslize). Com PIN ou biometria ele
+    /// só traz o pedido de senha pra frente, e aí não há o que este driver possa fazer: o aparelho de
+    /// disparo tem que estar sem bloqueio de tela. É por isso que a falha continua sendo diagnosticada
+    /// (ver <see cref="TelaBloqueada"/>) em vez de silenciosamente tentada de novo.</para>
+    ///
+    /// <para>Best-effort: aparelho que não conhece um destes comandos segue o fluxo normal. Se ainda
+    /// estiver dormindo, o poll falha e a captura de tela guarda a prova.</para>
+    /// </remarks>
+    private async Task AcordarAparelhoAsync(CancellationToken ct)
+    {
+        await _adb.ShellAsync("input keyevent KEYCODE_WAKEUP", ct);
+        await _adb.ShellAsync("wm dismiss-keyguard", ct);
+        // A animação de destravar leva um instante, e um dump tirado no meio dela lê a tela antiga.
+        await Task.Delay(500, ct);
+    }
+
+    /// <summary>A tela lida é a de bloqueio?</summary>
+    /// <remarks>
+    /// ⚠️ HEURÍSTICA, e os marcadores NÃO foram medidos neste aparelho. São os resource-ids que o
+    /// systemui usa no keyguard. Se errar, erra pro lado seguro: o envio já falhou de qualquer forma, e
+    /// o que muda é só a frase do erro.
+    /// <para>Vale a pena mesmo assim porque separa dois consertos opostos. "A conversa não abriu" manda
+    /// conferir número e WhatsApp; "o aparelho está bloqueado" manda tirar o PIN e ligar o "manter tela
+    /// ativa". Sem a distinção, o segundo se disfarça de primeiro por semanas.</para>
+    /// <para>A tela capturada (ver <see cref="GuardarTela"/>) é o que permite confirmar ou corrigir
+    /// estes marcadores sem precisar de alguém na frente do celular.</para>
+    ///
+    /// <para>🔴 EXIGE O PACOTE <c>com.android.systemui</c>, e isso não é zelo: casar a palavra
+    /// "keyguard" ou "lock" solta no XML pega o PRÓPRIO WhatsApp, que tem cadeado de conversa e aviso
+    /// de criptografia na tela de conversa. O falso positivo aqui não erra uma ação (o envio já falhou
+    /// de qualquer forma), erra a INSTRUÇÃO: mandaria o operador tirar um bloqueio de tela que não
+    /// existe enquanto a causa real seguisse intocada. Errar para o lado do diagnóstico genérico é
+    /// barato, porque a tela capturada continua lá para ser lida.</para>
+    /// </remarks>
+    private static bool TelaBloqueada(string xml) =>
+        xml.Contains("com.android.systemui:id/keyguard", StringComparison.OrdinalIgnoreCase)
+        || xml.Contains("com.android.systemui:id/lock_icon", StringComparison.OrdinalIgnoreCase)
+        || xml.Contains("com.android.systemui:id/lockscreen", StringComparison.OrdinalIgnoreCase);
+
     // ── Leitura de tela ──────────────────────────────────────────────────────────────────────────
 
     /// <summary>Árvore de acessibilidade da tela atual. null = não deu pra ler.</summary>
@@ -488,13 +694,19 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         // antes torna a pergunta irrelevante, porque leitura obsoleta vira arquivo ausente, o `cat`
         // falha, e isto devolve null. Null aqui significa "não sei", que é tratado como incerteza em
         // todo mundo que lê a tela.
-        var (rc, _, _) = await _adb.ShellAsync($"rm -f {DumpPath}; uiautomator dump {DumpPath}", ct);
-        if (rc != 0)
-        {
-            return null;
-        }
-        var (cc, xml, _) = await _adb.ShellAsync($"cat {DumpPath}", ct);
-        return cc == 0 && !string.IsNullOrWhiteSpace(xml) ? xml : null;
+        // UM comando, não dois. Cada ShellAsync é um processo `adb` novo no PC, e ler a tela é a
+        // operação mais repetida deste driver: os polls dumpam a cada 500ms, então um envio faz dezenas
+        // de leituras. Juntar `dump` e `cat` numa linha corta METADE dos processos no caminho quente.
+        //
+        // O `rc` do dump deixa de ser consultado, e isso NÃO afrouxa a checagem de tela obsoleta que o
+        // `rm -f` protege: sem o arquivo, um dump que falha faz o `cat` falhar, a saída vem vazia e este
+        // método devolve null. É o mesmo desfecho de antes, por um caminho a menos.
+        //
+        // A saída do dump vai pro lixo porque ele imprime "UI hierchary dumped to: ..." em algumas
+        // versões, e isso entraria concatenado ANTES do XML.
+        var (_, xml, _) = await _adb.ShellAsync(
+            $"rm -f {DumpPath}; uiautomator dump {DumpPath} >/dev/null 2>&1; cat {DumpPath}", ct);
+        return string.IsNullOrWhiteSpace(xml) ? null : xml;
     }
 
     private static readonly Regex BoundsRx =
@@ -503,6 +715,9 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     private static readonly Regex NoRx = new("<node[^>]*>", RegexOptions.Compiled);
 
     private static readonly Regex TextoRx = new("text=\"([^\"]*)\"", RegexOptions.Compiled);
+
+    /// <summary>content-desc do nó: o rótulo de acessibilidade, único texto de botão só com ícone.</summary>
+    private static readonly Regex DescRx = new("content-desc=\"([^\"]*)\"", RegexOptions.Compiled);
 
     /// <summary>Rótulos de botão que apenas FECHAM um aviso, sem confirmar nada.</summary>
     /// <remarks>
@@ -514,30 +729,37 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     private static readonly string[] BotoesQueSoFecham =
         ["ok", "continuar", "entendi", "fechar", "agora não", "agora nao", "got it", "continue", "close"];
 
-    /// <summary>Centro do nó com este resource-id, com POLL até o timeout. null = não apareceu.</summary>
+    /// <summary>Nó do botão "enviar" e nó do campo de texto, os dois únicos que o driver procura.</summary>
+    /// <remarks>
+    /// Compilados e estáticos porque o poll roda a cada 500ms: montar o padrão por interpolação a cada
+    /// volta reconstruía a expressão no caminho mais repetido do driver. Como são dois alvos fixos, não
+    /// há por que aceitar resource-id em texto — e passar o padrão pronto tira de vez o risco de alguém
+    /// montar um com caractere não escapado.
+    /// <para>Casa o NÓ INTEIRO, e não o atributo isolado, porque o `text` vem ANTES do `resource-id` no
+    /// dump: assim a ordem dos atributos deixa de importar e o texto sai de dentro do nó já encontrado.
+    /// A aspa no fim do id não é enfeite — sem ela, <c>id/entry</c> casaria também um eventual
+    /// <c>id/entry_qualquer_coisa</c>.</para>
+    /// </remarks>
+    private static readonly Regex SendNodeRx =
+        new("<node[^>]*com\\.whatsapp:id/send\"[^>]*>", RegexOptions.Compiled);
+
+    /// <inheritdoc cref="SendNodeRx"/>
+    private static readonly Regex EntryNodeRx =
+        new("<node[^>]*com\\.whatsapp:id/entry\"[^>]*>", RegexOptions.Compiled);
+
+    /// <summary>Centro do nó procurado, com POLL até o timeout. null = não apareceu.</summary>
     /// <remarks>Poll e não sleep fixo: chat lento (cold start, rede ruim) abriria depois da espera e o
     /// envio seria abortado à toa.</remarks>
-    private async Task<(int X, int Y)?> PollNodeCenterAsync(string resourceId, int timeoutMs, CancellationToken ct)
+    private async Task<(int X, int Y)?> PollNodeCenterAsync(Regex no, int timeoutMs, CancellationToken ct)
     {
         var attempts = Math.Max(1, timeoutMs / 500);
         for (var i = 0; i <= attempts; i++)
         {
-            var xml = await DumpUiAsync(ct);
-            if (xml is not null)
+            if (await DumpUiAsync(ct) is { } xml
+                && no.Match(xml) is { Success: true } achado
+                && CentroDe(achado.Value) is { } centro)
             {
-                var node = Regex.Match(xml, $"<node[^>]*{Regex.Escape(resourceId)}\"[^>]*>");
-                if (node.Success)
-                {
-                    var b = BoundsRx.Match(node.Value);
-                    if (b.Success
-                        && int.TryParse(b.Groups[1].Value, out var x1)
-                        && int.TryParse(b.Groups[2].Value, out var y1)
-                        && int.TryParse(b.Groups[3].Value, out var x2)
-                        && int.TryParse(b.Groups[4].Value, out var y2))
-                    {
-                        return ((x1 + x2) / 2, (y1 + y2) / 2);
-                    }
-                }
+                return centro;
             }
             if (i < attempts)
             {
@@ -620,13 +842,6 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         return conclusao;
     }
 
-    // O `text` do nó vem ANTES do `resource-id` no dump. Por isso a busca é pelo NÓ inteiro e o
-    // atributo sai de dentro dele — assim a ordem dos atributos deixa de importar.
-    private static readonly Regex EntryNodeRx =
-        new("<node[^>]*com\\.whatsapp:id/entry[^>]*>", RegexOptions.Compiled);
-
-    private static readonly Regex TextAttrRx = new("text=\"([^\"]*)\"", RegexOptions.Compiled);
-
     private static string? EntryTextFrom(string? xml)
     {
         var node = xml is null ? null : EntryNodeRx.Match(xml);
@@ -634,7 +849,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         {
             return null;
         }
-        var t = TextAttrRx.Match(node.Value);
+        var t = TextoRx.Match(node.Value);
         // O dump escapa XML (&#10; etc). Desescapa pra o COMPRIMENTO bater com o texto original.
         return t.Success ? System.Net.WebUtility.HtmlDecode(t.Groups[1].Value) : "";
     }

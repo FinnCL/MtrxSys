@@ -178,6 +178,25 @@ public sealed class PhoneOptions
     /// <summary>Timeout (ms) do poll de CONFIRMAÇÃO do envio (o campo de texto esvaziar) após tocar enviar.</summary>
     public int WhatsAppSendWaitMs { get; set; } = 3000;
 
+    /// <summary>Pasta onde guardar a tela (XML do uiautomator) quando um aviso desconhecido bloqueia o
+    /// envio. Vazio = LocalApplicationData/MtrxSys/telas.</summary>
+    /// <remarks>
+    /// 🔴 EXISTE PORQUE NINGUÉM ESTÁ OLHANDO. O disparo roda sozinho, de madrugada, com o celular numa
+    /// mesa. Quando um modal novo aparece na frente da conversa, a única forma de descobrir qual botão
+    /// fecha ele era alguém estar presente pra rodar o `uiautomator dump` na hora — e a tela some no
+    /// contato seguinte, porque o envio segue em frente. Sem captura automática, o defeito só é
+    /// reproduzível por sorte.
+    /// <para>Em container, aponte pra um volume montado: o default cai em $HOME/.local/share, que morre
+    /// junto com o container. Os rótulos dos botões vão TAMBÉM na mensagem de erro (ou seja, no CSV do
+    /// console e no log do dispatcher), então o arquivo é o detalhe, não a única cópia.</para>
+    /// </remarks>
+    public string UiDumpDir { get; set; } = "";
+
+    /// <summary>Quantas telas capturadas manter na pasta. As mais antigas são apagadas.</summary>
+    /// <remarks>Telas repetidas não contam: a gravação é deduplicada pelo conteúdo, então um modal que
+    /// aparece em trinta contatos do lote vira um arquivo só.</remarks>
+    public int UiDumpKeep { get; set; } = 20;
+
     /// <summary>Timeout TOTAL (s) de um envio pela UI. Cada chamada adb já tem seu teto (60s), mas um
     /// envio faz várias (intent + polls + tap); sem um teto total, um emulador travado seguraria o lock
     /// de UI por minutos e travaria a fila. Aborta o envio (retorna falha) e libera o lock passado isto.

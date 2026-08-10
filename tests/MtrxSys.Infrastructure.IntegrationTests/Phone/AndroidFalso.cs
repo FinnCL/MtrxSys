@@ -153,13 +153,24 @@ internal sealed class AndroidFalso : IAdbRunner
         }
         if (cmd.Contains("uiautomator dump", StringComparison.Ordinal))
         {
+            // O driver manda `rm -f`, `dump` e `cat` NUMA LINHA SÓ (ver DumpUiAsync: cada ShellAsync é
+            // um processo adb novo, e ler a tela é a operação mais repetida do envio). O fake modela os
+            // três passos na ordem, inclusive o apagar — que antes não era modelado e é justamente o
+            // que impede o `cat` de devolver a tela ANTERIOR quando o dump falha.
+            if (cmd.Contains("rm -f", StringComparison.Ordinal))
+            {
+                _dumpGravado = null;
+            }
             if (DumpsFalhando > 0 && (!FalharDumpApenasAposEnvio || Entregues.Count > 0))
             {
                 DumpsFalhando--;
+                // Dump falhou: o arquivo continua ausente, então o `cat` da mesma linha não devolve nada.
                 return (1, "", "ERROR: could not get idle state.");
             }
             _dumpGravado = RenderizarTela();
-            return (0, "UI hierchary dumped to: /sdcard/mtrx_ui.xml", "");
+            return cmd.Contains("cat ", StringComparison.Ordinal)
+                ? (0, _dumpGravado, "")
+                : (0, "UI hierchary dumped to: /sdcard/mtrx_ui.xml", "");
         }
         if (cmd.StartsWith("cat ", StringComparison.Ordinal))
         {
