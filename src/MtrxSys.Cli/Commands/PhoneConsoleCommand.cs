@@ -1032,6 +1032,13 @@ internal sealed class PhoneConsoleCommand(
         }
 
         AnsiConsole.MarkupLine("[grey]Ctrl+C interrompe. gravar é idempotente, então rodar de novo continua de onde parou.[/]");
+
+        // Mesma proteção do lote, e pelo mesmo motivo: a estimativa logo acima fala em DEZENAS DE
+        // MINUTOS sem teclado nem mouse. Só o `enviar` estava coberto, e o gravar é justamente o que se
+        // manda rodar e sai de perto (o fluxo recomendado é gravar o lote, esperar o sync e disparar
+        // depois). Proteção que cobre um caminho e não o gêmeo dele é proteção que engana.
+        using var acordado = PcAcordado.Ligar();
+
         var (criados, jaTinha, falhas) = await GravarPassadaAsync(_contatos, ct);
 
         // 🔴 SEGUNDA PASSADA SÓ NOS QUE FALHARAM. A gravação recusa quando outro escritor mexe na agenda
@@ -1183,6 +1190,21 @@ internal sealed class PhoneConsoleCommand(
         }
 
         var log = AbrirLog(serial);
+
+        // 🔴 SEGURA O PC ACORDADO PELO LOTE INTEIRO. A pausa entre blocos passa ~30 min sem teclado nem
+        // mouse, que é o gatilho do standby do Windows: o mesmo defeito do celular dormindo, do outro
+        // lado do cabo. Ver PcAcordado — inclusive por que a TELA continua livre pra apagar.
+        using var acordado = PcAcordado.Ligar();
+        if (acordado.Ativo)
+        {
+            // Dito em voz alta porque a proteção é PARCIAL: fechar a tampa é política de energia do
+            // Windows e nenhuma API de processo a sobrepõe. Deixar isso implícito faria a mensagem
+            // parecer "pode fechar o notebook", que é justamente o que mata o lote.
+            AnsiConsole.MarkupLine(
+                "[grey]o PC não vai suspender enquanto o lote roda (a tela pode apagar, não atrapalha). "
+                + "só não FECHE A TAMPA: isso suspende por política do Windows e nenhum programa impede.[/]");
+        }
+
         var (enviados, falhas) = await DispararAsync(plano, log, serial, ct);
 
         AnsiConsole.MarkupLine(
@@ -1225,6 +1247,26 @@ internal sealed class PhoneConsoleCommand(
         var noBloco = 0;
         var alvoBloco = ComJitter(_bloco, JitterBloco);
 
+        // 🔴 TIRA DA LISTA E GRAVA EM DISCO A CADA ENTREGA, e não só no `finally`.
+        //
+        // O `finally` cobre exceção e Ctrl+C, que passam por ele. NÃO cobre queda de energia, reboot
+        // forçado nem suspensão mal resolvida — e é justamente quando o lote roda a noite toda, sem
+        // ninguém por perto, que esses são os desfechos prováveis. Nesses casos a lista voltava com os
+        // já entregues DENTRO dela, prontos para receber de novo.
+        //
+        // O CSV é a rede de segurança e continua sendo, mas ele AVISA e deixa decidir (ver
+        // AvisarRepeticao): quem não ler o aviso e não tirar com `x` manda a mesma campanha duas vezes
+        // pra mesma pessoa, que é o pior desfecho possível com contato frio. Gravar na hora fecha a
+        // janela em vez de depender de alguém ler.
+        //
+        // Custo: uma escrita de JSON por mensagem, ou seja uma a cada 150-360s. Irrelevante perto do
+        // que ela evita. O `Salvar` já engole erro de disco, então isto não introduz caminho de falha.
+        void Persistir()
+        {
+            _contatos.RemoveAll(c => entregues.Contains(c.Numero));
+            Salvar(serial);
+        }
+
         try
         {
             for (var i = 0; i < plano.Count; i++)
@@ -1261,6 +1303,7 @@ internal sealed class PhoneConsoleCommand(
                         $"[grey]({i + 1}/{plano.Count}) pulado[/] {contato.Numero} "
                         + "[grey]— a mesma pessoa já recebeu neste lote, na outra forma do número.[/]");
                     entregues.Add(contato.Numero);   // sai da lista junto: é duplicata, não pendência
+                    Persistir();
                     continue;
                 }
 
@@ -1347,6 +1390,8 @@ internal sealed class PhoneConsoleCommand(
                     // A forma que REALMENTE recebeu também entra, senão o irmão dela (mesma pessoa,
                     // outro formato) passaria pela guarda lá em cima e receberia de novo.
                     entregues.Add(numeroUsado);
+                    // Em disco AGORA: daqui até o fim do lote podem passar horas, e a mensagem já saiu.
+                    Persistir();
                     AnsiConsole.MarkupLine(
                         $"[green]({i + 1}/{plano.Count}) enviado[/] {numeroUsado} tpl {variante} "
                         + $"(entrega: {r.DeliveryStatus ?? "?"})");
@@ -1478,8 +1523,10 @@ internal sealed class PhoneConsoleCommand(
             // a limpeza, e os já entregues voltavam na próxima abertura prontos pra receber de novo —
             // justamente a proteção que este trecho existe pra dar. Quem FALHOU fica, porque falha é
             // o que se quer tentar de novo.
-            _contatos.RemoveAll(c => entregues.Contains(c.Numero));
-            Salvar(serial);
+            // Hoje o `Persistir` já gravou a cada entrega, então isto virou REDE DE SEGURANÇA e não o
+            // caminho principal. Fica: é barato, e cobre qualquer saída que não passe por uma entrega
+            // (lista que acabou, janela de envio fechada, teto atingido).
+            Persistir();
             if (entregues.Count > 0)
             {
                 AnsiConsole.MarkupLine(
@@ -2390,7 +2437,23 @@ internal sealed class PhoneConsoleCommand(
                 DigitacaoHumana = _digitacaoHumana,
                 Bip = _bip,
             };
-            File.WriteAllText(Path.Combine(Pasta, $"{Higienizar(serial)}.json"), JsonSerializer.Serialize(e));
+            // 🔴 ESCREVE NUM TEMPORÁRIO E TROCA, em vez de sobrescrever direto.
+            //
+            // Um `WriteAllText` TRUNCA o arquivo antes de escrever, então morrer no meio deixa um JSON
+            // pela metade — e o `Carregar` trata JSON quebrado começando VAZIO ("Estado é conveniência,
+            // não dado de verdade"). Ou seja, o modo de falha é PERDER A LISTA INTEIRA.
+            //
+            // Isso era improvável enquanto se gravava uma vez por lote. Passou a ser provável quando a
+            // gravação virou uma por ENTREGA (ver Persistir): a janela de corrupção ficou dezenas de
+            // vezes maior, e ela abre exatamente no cenário que motivou gravar mais — queda de energia
+            // no meio da madrugada. Consertar um risco criando outro não é conserto.
+            //
+            // `File.Move` com overwrite é atômico no mesmo volume: ou o arquivo antigo continua
+            // inteiro, ou o novo aparece inteiro. Nunca um meio-termo.
+            var destino = Path.Combine(Pasta, $"{Higienizar(serial)}.json");
+            var temporario = destino + ".tmp";
+            File.WriteAllText(temporario, JsonSerializer.Serialize(e));
+            File.Move(temporario, destino, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
