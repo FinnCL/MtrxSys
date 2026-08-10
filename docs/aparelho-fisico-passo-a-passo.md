@@ -238,9 +238,60 @@ O que ele protege, e o `phone send` não:
   "já aberto em outro console" e nem oferece, e um segundo console apontado na mão para o mesmo serial
   recusa a subir
 
-> ⚠️ Continua sendo **bancada**. O console tem teto por lote, pré-voo e log — mas não tem fila, curva
-> de aquecimento, opt-out nem dedup **entre execuções**. Rodar duas vezes a mesma lista manda duas
-> vezes. Campanha de verdade é o `DispatchEngine`, ainda não ligado ao físico.
+> ⚠️ Continua sendo **bancada**. O console tem teto por lote, pré-voo e log, mas não tem fila, curva
+> de aquecimento nem opt-out. Campanha de verdade é o `DispatchEngine`, ainda não ligado ao físico.
+>
+> Sobre **repetir envio**, o que existe hoje: quem recebe **sai da lista na hora** (gravado em disco a
+> cada entrega, então queda de energia não devolve ninguém), e recolar a mesma lista dispara o aviso
+> "já receberam mensagem deste aparelho antes", conferindo as duas formas do número. Mas o aviso
+> **avisa e deixa decidir**, não remove. E ele é **por aparelho**: quem recebeu pelo celular A não
+> deixa rastro no celular B. Um disparo feito aqui também **não aparece no painel**, então uma
+> campanha montada depois pelo CRM incluiria essas pessoas.
+
+---
+
+## E. Quando o app responde "sem conta"
+
+O erro `sem conta` significa que **o WhatsApp mostrou na tela** que aquele número não tem conta. Não é
+o aparelho, não é o cabo, não é a conexão. O driver leu a tela e encontrou a frase lá.
+
+Isso **não quer dizer que o veredito esteja certo**. Há três causas possíveis e elas pedem consertos
+opostos:
+
+1. **A lista tem número morto mesmo.** É rotina, acontece.
+2. **Cache envenenado do app.** Um número gravado na agenda um dia em forma que o WhatsApp não resolve
+   faz ele marcar como "sem conta" **de forma persistente**, porque a resposta fica em cache. Depois
+   disso ele nega aquele número para sempre, mesmo para quem existe e está ativo. Medido em
+   2026-08-05, e é por isso que o `SaveContactAsync` hoje grava em E.164 com o `+`.
+3. **Falso positivo daqui.** A frase pode aparecer na tela noutro contexto.
+
+### Como descobrir qual é
+
+**Abra o WhatsApp no celular e procure o contato.** Se ele existe lá com conversa disponível, o
+problema não é a lista. Leva 30 segundos e elimina as três dúvidas.
+
+**Olhe a tela salva.** Todo veredito de "sem conta" grava o XML da tela em
+`%LOCALAPPDATA%\MtrxSys\telas\`, e o caminho vem na própria mensagem de erro (e no CSV). É o que
+permite conferir depois o que o app mostrou de verdade, sem ninguém ter estado na frente do aparelho.
+
+- Guarda as **20 mais recentes** e apaga as antigas, então não enche disco.
+- Telas idênticas viram um arquivo só. Se o diálogo mostrar o número, cada contato gera um arquivo
+  diferente e o teto de 20 vale.
+- Configurável em `Phone__UiDumpDir` e `Phone__UiDumpKeep`.
+
+> 🔴 **Esses arquivos não são anônimos.** O XML é a árvore da tela: pode conter número, nome do
+> contato e trechos de conversa visíveis. Olhe antes de mandar para alguém.
+
+### Vários seguidos é outro problema
+
+Um número negado não diz nada sobre o próximo. **Três seguidos dizem**: a chance de três acasos em
+sequência é pequena perto da chance de haver causa comum. Ao cruzar esse limiar o console avisa uma
+vez, com o roteiro acima.
+
+O lote **continua** (a decisão de 2026-08-07 é avisar, não travar), mas vale saber o custo de seguir:
+cada recusa abre uma conversa, e conversa atrás de conversa para número que não existe é o padrão de
+bot enumerando. Numa lista de 87 são até 174 aberturas sem uma entrega. `Ctrl+C` interrompe, e
+`parar 5` faz o lote parar sozinho na próxima vez.
 
 ---
 

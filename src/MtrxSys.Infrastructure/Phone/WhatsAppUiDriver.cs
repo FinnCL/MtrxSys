@@ -126,11 +126,29 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         }
 
         var tela = xml.ToLowerInvariant();
-        return (pistas.Any(p => tela.Contains(p, StringComparison.Ordinal))
-            ? WhatsAppSendResult.NoAccount(
-                "o WhatsApp respondeu que ESTE NÚMERO não tem conta. Não é o aparelho nem a conexão: "
-                + "é a forma do número ou o contato mesmo. Se o contato existe, confira o 9º dígito.")
-            : generico, xml);
+        if (!pistas.Any(p => tela.Contains(p, StringComparison.Ordinal)))
+        {
+            return (generico, xml);
+        }
+
+        // 🔴 GUARDA A TELA TAMBÉM AQUI, e não só no caminho da tela desconhecida.
+        //
+        // Este veredito é o mais FORTE que o driver emite: ele encerra o contato, culpa o número e
+        // manda o operador conferir a lista. E ele nasce de uma BUSCA POR TEXTO — o mesmo comentário
+        // logo acima já registra que uma pista mal escolhida afirma a causa errada com confiança.
+        //
+        // Descartar a tela deixava a afirmação INAUDITÁVEL: um lote inteiro podia sair marcando gente
+        // boa como inexistente e não haveria com que discordar. MEDIDO operando em 2026-08-10: dois
+        // contatos seguidos, ambos JÁ NA AGENDA do aparelho, negados nas DUAS formas do número. Pode
+        // ser lista ruim, pode ser cache envenenado do app, pode ser falso positivo daqui. Sem a tela
+        // não dá pra saber qual, e as três pedem consertos diferentes.
+        //
+        // A dedup por conteúdo faz 87 diálogos iguais virarem UM arquivo, então isto não enche disco.
+        var arquivo = GuardarTela(xml);
+        return (WhatsAppSendResult.NoAccount(
+            "o WhatsApp respondeu que ESTE NÚMERO não tem conta. Não é o aparelho nem a conexão: "
+            + "é a forma do número ou o contato mesmo. Se o contato existe, confira o 9º dígito."
+            + (arquivo is null ? "" : $" Tela salva em {arquivo}.")), xml);
     }
 
     /// <summary>Tenta tirar da frente um aviso que está por cima da conversa, para a mensagem poder

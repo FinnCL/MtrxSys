@@ -179,6 +179,25 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
     }
 
     [Fact]
+    public async Task Veredito_de_numero_sem_conta_tambem_guarda_a_tela()
+    {
+        // 🔴 É o veredito mais FORTE do driver: encerra o contato, culpa o número e manda conferir a
+        // lista. E nasce de uma busca por texto. Sem a tela guardada, um lote inteiro pode marcar gente
+        // boa como inexistente e não sobra com que discordar. Motivado por operação em 2026-08-10.
+        const string TelaSemConta =
+            """<node text="O número não está no WhatsApp" clickable="false" bounds="[0,0][1080,600]"/>""";
+        var adb = new AdbDeUmaTela(TelaSemConta);
+        using var driver = new WhatsAppUiDriver(adb, Opts);
+
+        var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
+
+        r.NoWhatsAppAccount.Should().BeTrue();
+        var arquivos = Directory.GetFiles(_pasta, "tela-*.xml");
+        arquivos.Should().HaveCount(1, "o veredito precisa ser conferível depois");
+        r.Error.Should().Contain(arquivos[0]);
+    }
+
+    [Fact]
     public async Task Captura_acontece_ANTES_do_BACK_que_apaga_a_evidencia()
     {
         // O BACK é o que fecha o aviso e devolve o aparelho ao estado neutro. Capturar depois dele
