@@ -20,6 +20,15 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
     private static string DigitsOf(string? phoneE164) =>
         new([.. (phoneE164 ?? string.Empty).Where(char.IsDigit)]);
 
+    /// <summary>contact_id na saída do `content query`. Compilado e estático, como os do driver.</summary>
+    /// <remarks>
+    /// Roda por CONTATO: o `enviar` consulta a agenda antes de cada mensagem. O ganho de tempo é
+    /// pequeno (a saída é curta), mas o padrão montado inline convivia com os compilados estáticos do
+    /// <c>WhatsAppUiDriver</c> na mesma pasta, e duas convenções para a mesma coisa é a porta de
+    /// entrada de "cada um faz de um jeito".
+    /// </remarks>
+    private static readonly Regex ContactIdRx = new(@"contact_id=(\d+)", RegexOptions.Compiled);
+
     /// <summary>contact_id do primeiro resultado do phone_lookup, ou null.</summary>
     /// <remarks>
     /// 🔴 O comentário antigo dizia, como fato medido, que o phone_lookup casa STRING e que "+55…" NÃO é
@@ -51,7 +60,7 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         {
             return null;
         }
-        var m = Regex.Match(outp ?? "", @"contact_id=(\d+)");
+        var m = ContactIdRx.Match(outp ?? "");
         return m.Success ? m.Groups[1].Value : null;
     }
 
