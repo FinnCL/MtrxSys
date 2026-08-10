@@ -88,6 +88,8 @@ internal sealed class PhoneConsoleCommand(
         // Anulável pelo mesmo motivo do Bloco: false é escolha legítima. Sessão anterior ao campo tem
         // null e cai no default LIGADO; quem desligou continua desligado.
         public bool? Bip { get; init; }
+
+        public bool? SegurarNaoConfirmados { get; init; }
     }
 
     private const string TokenNome = "{nome}";
@@ -191,6 +193,26 @@ internal sealed class PhoneConsoleCommand(
     /// do operador (2026-07-30). Sessão salva com o valor desligado continua desligada: escolha
     /// explícita ganha do default.</summary>
     private bool _agenda = true;
+
+    /// <summary>SEGURAR o contato quando a agenda não confirma que ele tem WhatsApp. DESLIGADO por
+    /// padrão: a consulta sempre roda e é reportada, mas não muda o que sai.</summary>
+    /// <remarks>
+    /// 🔴 O PEDIDO QUE ORIGINOU foi "não quero gastar disparos para que falhe", e o espelho da agenda
+    /// responde de graça o que a conversa responderia caro. Eu implementei segurando por padrão, e o
+    /// operador barrou com dado de operação: EXISTEM MUITOS NÚMEROS COM WHATSAPP QUE O ESPELHO NÃO
+    /// CONFIRMA. Com o padrão errado, o lote seguraria contato bom em massa — pior que o desperdício
+    /// que ele tentava evitar.
+    ///
+    /// <para>Então a consulta entra em MODO OBSERVAÇÃO: roda em todo contato, é contada e reportada no
+    /// fim, e NÃO segura ninguém. Depois de alguns lotes o operador compara "quantos o espelho
+    /// confirmou" com "quantos de fato entregaram". Se os dois números andarem juntos, a agenda é
+    /// confiável naquele aparelho e vale ligar o `segurar`. Se não andarem, o espelho é fraco demais
+    /// pra decidir e a economia de disparo tem que vir de outro lugar.</para>
+    ///
+    /// <para>Mesma disciplina do detector de contradição: sinal novo não ganha o volante antes de
+    /// mostrar que acerta.</para>
+    /// </remarks>
+    private bool _segurarNaoConfirmados;
 
     /// <summary>Bip a cada mensagem, para acompanhar o lote de ouvido.</summary>
     /// <remarks>
@@ -375,6 +397,16 @@ internal sealed class PhoneConsoleCommand(
                     case "3" or "agenda":
                         _agenda = !_agenda;
                         AnsiConsole.MarkupLine($"gravar na agenda antes de enviar: [bold]{(_agenda ? "ligado" : "desligado")}[/]");
+                        Salvar(serial);
+                        break;
+                    case "segurar":
+                        _segurarNaoConfirmados = !_segurarNaoConfirmados;
+                        AnsiConsole.MarkupLine(_segurarNaoConfirmados
+                            ? "checagem prévia: [bold]ligada[/] [grey]— pergunta à agenda se o número tem "
+                              + "WhatsApp antes de gastar o disparo. quem a agenda não confirmar é "
+                              + "segurado e fica na lista.[/]"
+                            : "checagem prévia: [grey]desligada — tenta todo mundo e descobre abrindo a "
+                              + "conversa (gasta tentativa em número morto).[/]");
                         Salvar(serial);
                         break;
                     case "bip" or "som":
@@ -1272,6 +1304,11 @@ internal sealed class PhoneConsoleCommand(
         // Correções que a segunda chance descobrir, para repetir de uma vez no fim do lote.
         var corrigidos = new List<(string De, string Para)>();
 
+        // A agenda NÃO confirmou que têm WhatsApp. Só são segurados com `segurar` ligado; por padrão a
+        // lista existe pra medir o quanto o espelho erra, comparando com quem de fato entregou.
+        var naoConfirmados = new List<string>();
+        var confirmados = 0;
+
         // Tentativas desde a última pausa longa, e o tamanho SORTEADO deste bloco.
         var noBloco = 0;
         var alvoBloco = ComJitter(_bloco, JitterBloco);
@@ -1346,6 +1383,39 @@ internal sealed class PhoneConsoleCommand(
                     continue;
                 }
 
+                // 🔴 PERGUNTA À AGENDA ANTES DE GASTAR O DISPARO. O espelho `vnd.com.whatsapp.profile`
+                // que o próprio WhatsApp publica na agenda do Android responde "este número é usuário?"
+                // sem abrir conversa, sem consumir tentativa e sem tocar no destinatário. O
+                // DispatchEngine já faz exatamente isto antes de enviar; o console descobria do jeito
+                // caro, abrindo a conversa e lendo o diálogo de recusa.
+                //
+                // `IsOnWhatsAppAsync` NUNCA devolve false, só true ou null — doutrina do projeto ("quando
+                // errar é caro, 'não sei' precisa caber no tipo"). Então null NÃO é veredito de número
+                // morto: é "não sei", e pode ser só o sync que ainda não rodou. Por isso o contato é
+                // SEGURADO e continua na lista, jamais descartado. O motor resolve o mesmo dilema
+                // adiando, pela mesma razão.
+                //
+                // NÃO grava na agenda quem não passou: gravar 87 contatos em rajada é escrita que sobe
+                // pro Google e é justamente o que o comentário da espera do motor manda evitar. Quem
+                // precisa entrar na agenda entra pelo `gravar`, que existe pra isso, avisa e confirma.
+                var confirmadoPelaAgenda = await phone.IsOnWhatsAppAsync(contato.Numero, ct) is true;
+                if (confirmadoPelaAgenda)
+                {
+                    confirmados++;
+                }
+                else
+                {
+                    naoConfirmados.Add(contato.Numero);
+                    if (_segurarNaoConfirmados)
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"[grey]({i + 1}/{plano.Count}) segurado[/] {contato.Numero} "
+                            + "[grey]— a agenda não confirma que este número tem WhatsApp. nada foi "
+                            + "aberto e nenhuma tentativa foi gasta.[/]");
+                        continue;
+                    }
+                }
+
                 if (_agenda)
                 {
                     var saved = await phone.SaveContactAsync(contato.Numero, contato.Nome, ct);
@@ -1411,6 +1481,20 @@ internal sealed class PhoneConsoleCommand(
                     }
                 }
 
+                // 🔴 EM MODO OBSERVAÇÃO. A contradição (app recusa um número que o espelho dele mesmo
+                // marca como usuário) vai pro CSV e NÃO muda comportamento nenhum. O detector tem zero
+                // lotes de histórico, e o operador relatou casos reais de várias falhas seguidas em chip
+                // SAUDÁVEL, com o envio voltando ao normal depois. Ligar ação a um sinal não validado,
+                // numa operação onde o falso positivo é comprovadamente comum, é o erro que a parada
+                // dura já cometeu uma vez aqui.
+                //
+                // A coluna é o que permite responder por DADO, depois de alguns lotes: se a contradição
+                // só aparece nos lotes de fato restritos, o sinal serve e aí ele ganha o volante; se
+                // aparece nos saudáveis também, ele é insuficiente sozinho. É a mesma disciplina que o
+                // DispatchEngine aplica ao guard de entrega no caminho de UI, mantido desligado até
+                // haver distribuição observada.
+                var contradito = false;
+
                 if (r.Sent)
                 {
                     enviados++;
@@ -1469,7 +1553,7 @@ internal sealed class PhoneConsoleCommand(
                     // nunca devolve false (só true ou null), então isto só produz evidência A FAVOR de
                     // restrição, nunca um "está tudo bem" falso.
                     var espelho = await phone.IsOnWhatsAppAsync(contato.Numero, ct);
-                    var contradito = espelho == true;
+                    contradito = espelho == true;
                     disjuntor.NoAccount(contradito);
                     AnsiConsole.MarkupLine(
                         $"[red]({i + 1}/{plano.Count}) sem conta[/] {contato.Numero}: "
@@ -1496,7 +1580,7 @@ internal sealed class PhoneConsoleCommand(
                 // NumerosJaEnviados), então a pessoa colada amanhã na forma certa passava sem aviso e
                 // podia receber a campanha de novo. A dedup DENTRO do lote já sabia que as duas formas
                 // são a mesma pessoa; a de fora do lote não ficava sabendo.
-                Registrar(log, serial, contato with { Numero = numeroUsado }, variante, texto, r);
+                Registrar(log, serial, contato with { Numero = numeroUsado }, variante, texto, r, contradito);
 
                 // DEPOIS do registro em disco, de propósito: o CSV é o que sobrevive a tudo, o bip é
                 // conforto. Se a máquina morrer entre os dois, o que se perde é o som.
@@ -1670,6 +1754,26 @@ internal sealed class PhoneConsoleCommand(
             // ela é justamente a única que gera trabalho FORA daqui. Sem esta lista, a correção depende
             // de o operador ter visto passar, e a mesma lista volta amanhã com o mesmo número errado,
             // pagando de novo a tentativa perdida.
+            // 🔴 SEGURADO NÃO É DESCARTADO, e a diferença precisa aparecer. Estes continuam na lista, e
+            // a causa mais comum é sync: contato gravado há pouco leva minutos até o WhatsApp publicar o
+            // espelho. Sem esta linha, o operador veria o lote "pular" contatos e concluiria que perdeu.
+            // 🔴 O NÚMERO QUE INTERESSA MEDIR. Compare com quantos de fato entregaram: se o espelho
+            // confirma quase todo mundo que entrega, ele é confiável NESTE aparelho e vale ligar o
+            // `segurar` pra parar de gastar disparo em número morto. Se ele deixa de confirmar gente que
+            // entrega, é fraco demais pra decidir — e foi por isso que ele NÃO segura por padrão.
+            if (naoConfirmados.Count > 0)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[grey]agenda confirmou WhatsApp em {confirmados} de "
+                    + $"{confirmados + naoConfirmados.Count}."
+                    + (_segurarNaoConfirmados
+                        ? $" os {naoConfirmados.Count} não confirmados foram SEGURADOS e continuam na lista."
+                        : $" os {naoConfirmados.Count} não confirmados foram tentados assim mesmo "
+                          + "(ligue com[/] segurar [grey]pra não gastar disparo com eles).")
+                    + "[/]");
+                MostrarAlguns(naoConfirmados.Count, 10, i => $"  [grey]{naoConfirmados[i]}[/]", " não confirmado(s)");
+            }
+
             if (corrigidos.Count > 0)
             {
                 AnsiConsole.MarkupLine(
@@ -2059,6 +2163,10 @@ internal sealed class PhoneConsoleCommand(
             _digitacaoHumana
                 ? "[bold]ligada[/] [grey](só ASCII)[/]"
                 : "[grey]desligada[/] [green](aceita acento)[/]");
+        t.AddRow("[bold]segurar[/]", "não enviar sem a agenda confirmar",
+            _segurarNaoConfirmados
+                ? "[bold]ligado[/] [grey](não gasta em número morto)[/]"
+                : "[grey]desligado[/] [grey](só mede)[/]");
         t.AddRow("[bold]bip[/]", "aviso sonoro por mensagem",
             _bip ? "[bold]ligado[/] [grey](acompanha de ouvido)[/]" : "[grey]desligado[/]");
         t.AddRow("[bold]4[/]", "contatos",
@@ -2415,6 +2523,7 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("parar <n>", "falhas seguidas que interrompem o lote (default 0 = nunca interrompe)");
         t.AddRow("agenda", "liga/desliga gravar o contato na agenda antes de enviar");
         t.AddRow("bip [grey]| som[/]", "liga/desliga o aviso sonoro (agudo = saiu, dois graves = não saiu)");
+        t.AddRow("segurar", "liga/desliga NÃO enviar quando a agenda não confirma que o número tem WhatsApp");
         t.AddRow("x [grey][[contato|texto]] [[n]][/]", "exclui UM item (pergunta se você não disser qual)");
         t.AddRow("limpar [grey][[contatos|textos|tudo]][/]", "esvazia o que você pedir");
         t.AddRow("ajuda", "o passo a passo explicado, o mesmo que aparece ao abrir");
@@ -2521,6 +2630,10 @@ internal sealed class PhoneConsoleCommand(
             {
                 _bip = bip;
             }
+            if (e.SegurarNaoConfirmados is { } segurar)
+            {
+                _segurarNaoConfirmados = segurar;
+            }
             if (e.Bloco is { } b)
             {
                 _bloco = Math.Clamp(b, 0, 200);
@@ -2567,6 +2680,7 @@ internal sealed class PhoneConsoleCommand(
                 Agenda = _agenda,
                 DigitacaoHumana = _digitacaoHumana,
                 Bip = _bip,
+                SegurarNaoConfirmados = _segurarNaoConfirmados,
             };
             // 🔴 ESCREVE NUM TEMPORÁRIO E TROCA, em vez de sobrescrever direto.
             //
@@ -2597,15 +2711,31 @@ internal sealed class PhoneConsoleCommand(
         var caminho = Path.Combine(Pasta, $"envios-{Higienizar(serial)}.csv");
         if (!File.Exists(caminho))
         {
-            File.WriteAllText(caminho, "quando;serial;numero;nome;variante;enviado;entrega;erro;texto\n", Encoding.UTF8);
+            File.WriteAllText(
+                caminho,
+                "quando;serial;numero;nome;variante;enviado;entrega;erro;texto;contradito;abertura\n",
+                Encoding.UTF8);
         }
         return caminho;
     }
 
     /// <summary>Grava linha a linha, não no fim: se a janela morrer no meio do lote, o que já saiu
     /// continua registrado. Sem isto não há como saber quem já recebeu.</summary>
+    /// <param name="contradito">A recusa foi desmentida pelo espelho da agenda: o app disse "sem conta"
+    /// para um número que ele mesmo marca como usuário do WhatsApp.</param>
+    /// <remarks>
+    /// 🔴 A COLUNA NOVA ENTRA NO FIM, e isso não é preguiça. O <see cref="NumerosJaEnviados"/> lê por
+    /// ÍNDICE (número em [2], enviado em [5]), e é ele que impede mandar duas vezes pra mesma pessoa
+    /// entre execuções. Acrescentar no fim deixa todos os índices anteriores intactos, então CSV antigo
+    /// continua sendo lido igual.
+    /// <para>O cabeçalho de um arquivo que já existe NÃO é reescrito: este log é append-only de
+    /// propósito (é o que faz ele sobreviver a queda de energia no meio do lote), e voltar pra
+    /// reescrever a primeira linha trocaria essa propriedade por cosmética. Consequência aceita: em CSV
+    /// criado antes desta mudança, a última coluna aparece sem nome no Excel.</para>
+    /// </remarks>
     private static void Registrar(
-        string caminho, string serial, Contato c, int variante, string texto, WhatsAppSendResult r)
+        string caminho, string serial, Contato c, int variante, string texto, WhatsAppSendResult r,
+        bool contradito)
     {
         try
         {
@@ -2617,7 +2747,9 @@ internal sealed class PhoneConsoleCommand(
             var linha = string.Join(';',
                 DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture),
                 Csv(serial), Csv(c.Numero), Csv(c.Nome ?? ""), variante.ToString(CultureInfo.InvariantCulture),
-                enviado, Csv(r.DeliveryStatus ?? ""), Csv(r.Error ?? ""), Csv(texto));
+                enviado, Csv(r.DeliveryStatus ?? ""), Csv(r.Error ?? ""), Csv(texto),
+                contradito ? "sim" : "",
+                r.AbertoPeloRegistro ? "registro" : "numero");
             File.AppendAllText(caminho, linha + "\n", Encoding.UTF8);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

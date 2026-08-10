@@ -158,8 +158,14 @@ internal sealed class PhysicalPhoneOrchestrator : IPhoneOrchestrator, IDisposabl
     /// </remarks>
     public Task<bool> IsEgressProxyUpAsync(CancellationToken ct) => Task.FromResult(true);
 
-    public Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
-        _ui.SendAsync(phoneE164, text, ct);
+    /// <remarks>
+    /// Resolve AQUI a URI do registro do contato, e não dentro do driver, porque quem fala com a agenda
+    /// é o leitor de contatos: o driver só sabe dirigir tela. null quando o contato não está na agenda
+    /// ou o app ainda não publicou o perfil dele — e aí a cascata de abertura cai nos níveis seguintes.
+    /// </remarks>
+    public async Task<WhatsAppSendResult> SendWhatsAppMessageAsync(
+        string phoneE164, string text, CancellationToken ct) =>
+        await _ui.SendAsync(phoneE164, text, ct, await _contacts.WhatsAppChatUriAsync(phoneE164, ct));
 
     public Task<string?> CheckTypingCapabilityAsync(string sampleText, CancellationToken ct) =>
         _ui.CheckTypingCapabilityAsync(sampleText, ct);

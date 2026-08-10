@@ -318,6 +318,16 @@ public sealed record WhatsAppSendResult(bool Sent, string? DeliveryStatus, strin
     /// </remarks>
     public bool NoWhatsAppAccount { get; init; }
 
+    /// <summary>A conversa foi aberta pelo REGISTRO do contato na agenda, e não pelo número.</summary>
+    /// <remarks>
+    /// Existe pra medir, não pra decidir. Abrir pelo registro não passa pela resolução de número, que é
+    /// onde o app nega gente que tem WhatsApp — mas se esse caminho de fato funciona neste aparelho e
+    /// nesta versão do app é hipótese até rodar. Carregar o dado no resultado faz o PRIMEIRO lote real
+    /// responder isso, sem teste separado: basta cruzar, no CSV, quem abriu por registro com quem
+    /// entregou.
+    /// </remarks>
+    public bool AbertoPeloRegistro { get; init; }
+
     public static WhatsAppSendResult Ok(string? deliveryStatus) => new(true, deliveryStatus, null);
 
     /// <summary>Falha CONCLUSIVA: nada saiu, e tentar de novo é seguro.</summary>

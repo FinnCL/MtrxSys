@@ -29,6 +29,39 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
     /// </remarks>
     private static readonly Regex ContactIdRx = new(@"contact_id=(\d+)", RegexOptions.Compiled);
 
+    /// <summary>As linhas de dados do contato deste número, com cache MUITO curto.</summary>
+    /// <remarks>
+    /// 🔴 A MESMA CONSULTA ERA PAGA DUAS VEZES POR CONTATO. O console pergunta "tem WhatsApp?"
+    /// (<see cref="IsOnWhatsAppAsync"/>) e o orquestrador pergunta "qual a URI da conversa?"
+    /// (<see cref="WhatsAppChatUriAsync"/>) — perguntas diferentes, MESMA leitura: achar o contact_id e
+    /// ler as linhas de dados. São 3 a 4 processos `adb` cobrados em dobro, sempre para o mesmo número
+    /// e com segundos de diferença.
+    ///
+    /// <para>Janela curta de propósito. O <c>SaveContactAsync</c> ESCREVE nessas mesmas linhas, e um
+    /// cache generoso responderia "não está na agenda" logo depois de gravar. Alguns segundos cobrem as
+    /// duas perguntas do mesmo envio e vencem muito antes do contato seguinte, que vem depois de um
+    /// intervalo de 150-360s.</para>
+    /// </remarks>
+    private async Task<(string? ContactId, string? Dados)> ContatoAsync(string digits, CancellationToken ct)
+    {
+        if (_cacheDigits == digits && Environment.TickCount64 - _cacheEmTicks < CacheMs)
+        {
+            return _cache;
+        }
+        var contactId = await LookupContactIdAsync(digits, ct)
+            ?? await LookupContactIdAsync("%2B" + digits, ct);
+        var resultado = contactId is null
+            ? ((string?)null, (string?)null)
+            : (contactId, await ContactDataAsync(contactId, ct));
+        (_cacheDigits, _cache, _cacheEmTicks) = (digits, resultado, Environment.TickCount64);
+        return resultado;
+    }
+
+    private const int CacheMs = 5_000;
+    private string? _cacheDigits;
+    private (string? ContactId, string? Dados) _cache;
+    private long _cacheEmTicks;
+
     /// <summary>contact_id do primeiro resultado do phone_lookup, ou null.</summary>
     /// <remarks>
     /// 🔴 O comentário antigo dizia, como fato medido, que o phone_lookup casa STRING e que "+55…" NÃO é
@@ -94,6 +127,54 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
             ? dados.Contains("+" + digits, StringComparison.Ordinal)
             : null;
 
+    /// <summary>URI da linha de perfil do WhatsApp deste contato na agenda, pra abrir a conversa SEM
+    /// passar pela resolução de número. null = não achei.</summary>
+    /// <remarks>
+    /// 🔴 POR QUE ISTO EXISTE. Todo envio hoje abre a conversa por `whatsapp://send?phone=…`, que exige
+    /// o app RESOLVER o número no servidor. Esse caminho falha em dois casos medidos: quando a conta
+    /// guarda o número na outra forma do 9º dígito, e quando a conta está restringida. Nos dois o app
+    /// responde "este número não tem WhatsApp" para gente que tem.
+    ///
+    /// <para>A linha `vnd.com.whatsapp.profile` é o registro que o PRÓPRIO app publica na agenda para
+    /// quem ele já reconheceu como usuário — é o que a lista do botão "+" mostra. Abrir por ela usa um
+    /// contato JÁ RESOLVIDO, então não há o que resolver e não há como o app negar.</para>
+    ///
+    /// <para>É o mesmo que uma pessoa faz à mão: abrir o WhatsApp, tocar no "+", achar o contato e
+    /// abrir. Só que num comando, sem navegar por telas que mudam de layout a cada versão.</para>
+    /// </remarks>
+    public async Task<string?> WhatsAppChatUriAsync(string phoneE164, CancellationToken ct)
+    {
+        var digits = DigitsOf(phoneE164);
+        if (digits.Length < 8)
+        {
+            return null;
+        }
+        if (await ContatoAsync(digits, ct) is not { Dados: { } dados })
+        {
+            return null;
+        }
+        foreach (var linha in dados.Split('\n'))
+        {
+            if (!linha.Contains("vnd.com.whatsapp.profile", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            // 🔴 A ÂNCORA ANTES DO `_id` NÃO É ENFEITE: a mesma linha traz `raw_contact_id=45`, e um
+            // padrão solto casaria o "_id=45" DE DENTRO dele. O id do raw contact não é o da linha de
+            // dados, e abrir pelo errado abre outra coisa (ou nada).
+            var m = DataRowIdRx.Match(linha);
+            if (m.Success)
+            {
+                return $"content://com.android.contacts/data/{m.Groups[1].Value}";
+            }
+        }
+        return null;
+    }
+
+    /// <summary><c>_id</c> da linha de dados, ancorado pra não casar o de <c>raw_contact_id</c>.</summary>
+    private static readonly Regex DataRowIdRx =
+        new(@"(?:^|[,\s])_id=(\d+)", RegexOptions.Compiled);
+
     /// <summary>O número tem WhatsApp, segundo o próprio aparelho?</summary>
     /// <returns>true = o app publicou o espelho (é usuário). null = NÃO SEI. NUNCA devolve false.</returns>
     /// <remarks>
@@ -109,14 +190,9 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         {
             return null;
         }
-        var contactId = await LookupContactIdAsync(digits, ct)
-            ?? await LookupContactIdAsync("%2B" + digits, ct);
-        if (contactId is null)
-        {
-            return null; // nem está na agenda: quem chama salva e re-pergunta depois do sync
-        }
+        // nem está na agenda: quem chama salva e re-pergunta depois do sync.
         // A marca que o WhatsApp cria para quem é usuário da plataforma. Só o SIM sai daqui.
-        return await ContactDataAsync(contactId, ct) is { } data
+        return await ContatoAsync(digits, ct) is { Dados: { } data }
             && data.Contains("vnd.com.whatsapp.profile", StringComparison.Ordinal)
                 ? true
                 : null;

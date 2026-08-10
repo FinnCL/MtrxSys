@@ -35,7 +35,8 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 
     // ── Envio ────────────────────────────────────────────────────────────────────────────────────
 
-    public async Task<WhatsAppSendResult> SendAsync(string phoneE164, string text, CancellationToken ct)
+    public async Task<WhatsAppSendResult> SendAsync(
+        string phoneE164, string text, CancellationToken ct, string? chatUri = null)
     {
         var digits = new string([.. (phoneE164 ?? string.Empty).Where(char.IsDigit)]);
         if (digits.Length < 8)
@@ -54,7 +55,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         // Sem digitação humana: o deep link entrega a mensagem pronta no campo e só resta tocar enviar.
         var resultado = !_opts.HumanTyping
             ? await SendByDeepLinkAsync(digits, text, ct)
-            : await SendByTypingAsync(digits, text, ct);
+            : await SendByTypingAsync(digits, text, chatUri, ct);
 
         // 🔴 FALHA DEIXA A TELA COMO ESTAVA, e "como estava" costuma ser um DIÁLOGO do WhatsApp — o
         // "o número não está no WhatsApp" que aparece quando o deep link aponta pra quem não tem conta.
@@ -483,7 +484,8 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         }
     }
 
-    private async Task<WhatsAppSendResult> SendByTypingAsync(string digits, string text, CancellationToken ct)
+    private async Task<WhatsAppSendResult> SendByTypingAsync(
+        string digits, string text, string? chatUri, CancellationToken ct)
     {
         if (await ResolveTypingChannelAsync(text, ct) is not { } typing)
         {
@@ -511,13 +513,35 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             // aparelho dormindo e falha como se a conversa não tivesse aberto.
             await AcordarAparelhoAsync(sct);
 
-            var (rc, outp, err) = await OpenChatAsync(WhatsAppUi.DeepLinkEmpty(digits), sct);
-            if (rc != 0)
+            // 🔴 CASCATA DE ABERTURA. O deep link por número exige que o app RESOLVA o número no
+            // servidor, e é exatamente aí que ele nega gente que TEM WhatsApp: quando a conta guarda o
+            // número na outra forma do 9º dígito, e quando a conta está restringida. Os dois primeiros
+            // níveis não passam por resolução nenhuma — usam um contato que o app JÁ reconheceu.
+            //
+            // Cada nível só custa quando o anterior falha, e o último é o comportamento de sempre. Ou
+            // seja: no pior caso isto gasta duas tentativas de abertura a mais e faz o que já fazia.
+            var abertoPeloRegistro = false;
+            var entry = chatUri is null ? null : await AbrirPeloRegistroAsync(chatUri, sct);
+            if (entry is not null)
             {
-                return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
+                abertoPeloRegistro = true;
+            }
+            else
+            {
+                entry ??= await AbrirPelaListaAsync(digits, sct);
+                abertoPeloRegistro = entry is not null;
             }
 
-            var entry = await PollNodeCenterAsync(EntryNodeRx, _opts.WhatsAppOpenWaitMs, sct);
+            if (entry is null)
+            {
+                var (rc, outp, err) = await OpenChatAsync(WhatsAppUi.DeepLinkEmpty(digits), sct);
+                if (rc != 0)
+                {
+                    return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
+                }
+                entry = await PollNodeCenterAsync(EntryNodeRx, _opts.WhatsAppOpenWaitMs, sct);
+            }
+
             if (entry is null)
             {
                 // 🔴 O MESMO TRATAMENTO DO OUTRO CAMINHO, e não é simetria decorativa: este aqui é o
@@ -599,7 +623,8 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 
             return await PollEntryClearedAsync(_opts.WhatsAppSendWaitMs, sct) switch
             {
-                EstadoDoCampo.Vazio => WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct)),
+                EstadoDoCampo.Vazio => WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct))
+                    with { AbertoPeloRegistro = abertoPeloRegistro },
                 EstadoDoCampo.ComTexto => WhatsAppSendResult.Fail(
                     "toquei enviar e o texto CONTINUA no campo: a mensagem não saiu."),
                 _ => WhatsAppSendResult.Unconfirmed(
@@ -642,6 +667,159 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     private Task<(int Code, string Out, string Err)> OpenChatAsync(string url, CancellationToken ct) =>
         // Aspas simples: '&' e '#' da URL não podem ser interpretados pelo shell do aparelho.
         _adb.ShellAsync($"am start -a android.intent.action.VIEW -d '{url}'", ct);
+
+    /// <summary>NÍVEL 1: abre a conversa pelo REGISTRO do contato na agenda. null = não abriu.</summary>
+    /// <remarks>
+    /// Um comando. A URI aponta pra linha `vnd.com.whatsapp.profile` que o próprio app publicou pra
+    /// quem ele já reconheceu como usuário — a mesma que a lista do "+" usa. Não há número pra resolver,
+    /// então não há o que o app negar.
+    /// <para>Poll curto de propósito: se não abriu rápido, o nível seguinte é melhor do que insistir.</para>
+    /// </remarks>
+    private async Task<(int X, int Y)?> AbrirPeloRegistroAsync(string chatUri, CancellationToken ct)
+    {
+        var (rc, _, _) = await _adb.ShellAsync(
+            $"am start -a android.intent.action.VIEW -d '{chatUri}'", ct);
+        return rc != 0 ? null : await PollNodeCenterAsync(EntryNodeRx, AberturaAlternativaMs, ct);
+    }
+
+    /// <summary>NÍVEL 2: abre pelo botão "+" do WhatsApp, procurando o número na lista. null = não abriu.</summary>
+    /// <remarks>
+    /// 🔴 É O FLUXO QUE UMA PESSOA FAZ: abre o app, toca no "+", busca o número, toca no contato. A
+    /// lista do "+" vem do banco INTERNO do WhatsApp, que é mais rico do que o que ele publica de volta
+    /// na agenda do Android — por isso este nível alcança contato que o nível 1 não enxerga, que é
+    /// justamente o caso relatado de "tem WhatsApp e o disparo não identifica".
+    ///
+    /// <para>E se o contato aparece nessa lista, ele TEM conta: a lista só mostra usuários. Achar ali é
+    /// prova, não inferência.</para>
+    ///
+    /// <para>⚠️ OS RESOURCE-IDS NÃO FORAM MEDIDOS neste aparelho. Vieram do que o app usa há várias
+    /// versões, e podem estar errados. É por isso que este nível é intermediário e time-boxed: se
+    /// qualquer passo não responder, ele desiste e o deep link assume, ou seja, o comportamento volta a
+    /// ser o de hoje. E a tela é GUARDADA na desistência, então o primeiro lote real entrega os ids
+    /// certos sem ninguém precisar estar na frente do celular.</para>
+    /// </remarks>
+    private async Task<(int X, int Y)?> AbrirPelaListaAsync(string digits, CancellationToken ct)
+    {
+        // 🔴 DESISTE DO NÍVEL DEPOIS DE FALHAR SEGUIDO. Este caminho custa ~4s e 7 processos adb, e
+        // NAVEGA o app (dois BACK, launcher, mais dois BACK na saída) antes de entregar os pontos. Se os
+        // resource-ids não baterem neste aparelho — e eles não foram medidos —, ele falharia assim em
+        // TODOS os contatos do lote, cobrando o pedágio 87 vezes e sacudindo a tela à toa antes de cada
+        // deep link.
+        //
+        // Três tentativas bastam pra concluir: ou a tela do seletor é a esperada, ou não é, e isso não
+        // muda no meio do lote. Quem descobre que mudou é o próximo processo, porque o contador vive
+        // nesta instância. E a tela já foi guardada nas primeiras desistências, que é o que interessa.
+        if (_listaFalhouSeguidas >= MaxFalhasDaLista)
+        {
+            return null;
+        }
+        // 🔴 SAIR DA CONVERSA ANTERIOR ANTES DE TUDO. No sucesso o driver DEIXA a conversa aberta de
+        // propósito, então o app já está em primeiro plano numa conversa — e o launcher traz a tarefa
+        // existente de volta EXATAMENTE COMO ESTAVA, não na lista de conversas. Sem estes BACK, o botão
+        // "+" nunca estaria na tela e este nível desistiria em todo envio a partir do segundo, sem
+        // ninguém entender por quê.
+        await _adb.ShellAsync("input keyevent KEYCODE_BACK; input keyevent KEYCODE_BACK", ct);
+        await Task.Delay(400, ct);
+
+        // Launcher em vez de activity nomeada: nome de activity muda entre versões, categoria não.
+        await _adb.ShellAsync(
+            $"monkey -p {WhatsAppPackage} -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1", ct);
+        await Task.Delay(800, ct);
+
+        if (await PollNodeCenterAsync(FabRx, AberturaAlternativaMs, ct) is not { } fab)
+        {
+            return await DesistirDaListaAsync(ct);
+        }
+        await TapAsync(fab, ct);
+        await Task.Delay(600, ct);
+
+        if (await PollNodeCenterAsync(BuscaRx, AberturaAlternativaMs, ct) is not { } busca)
+        {
+            return await DesistirDaListaAsync(ct);
+        }
+        await TapAsync(busca, ct);
+        // Dígitos são ASCII, então o `input text` do Android dá conta e não precisa do IME.
+        await _adb.ShellAsync($"input text {digits}", ct);
+        await Task.Delay(900, ct);
+
+        // 🔴 NÃO TOCA SE A TELA OFERECE CONVITE. Quando o número NÃO é usuário, o seletor mostra a linha
+        // dele numa seção de "Convidar", e tocar ali dispara um CONVITE POR SMS — irreversível, para um
+        // estranho, e cobrado. É a mesma doutrina da lista fechada de botões: tocar por posição é tocar
+        // às cegas, e aqui o custo de errar sai do bolso e da reputação do número.
+        //
+        // Na dúvida, desiste: o deep link do nível 3 resolve o caso legítimo, e um contato a menos por
+        // este caminho custa muito menos que um convite disparado sem querer.
+        var telaDaBusca = await DumpUiAsync(ct);
+        if (telaDaBusca is null || OfereceConvite(telaDaBusca))
+        {
+            return await DesistirDaListaAsync(ct);
+        }
+
+        // A linha do contato no resultado. Tocar no PRIMEIRO resultado só é seguro porque a busca foi
+        // pelo número inteiro: não há dois contatos distintos casando os mesmos 12-13 dígitos.
+        if (await PollNodeCenterAsync(LinhaContatoRx, AberturaAlternativaMs, ct) is not { } linha)
+        {
+            return await DesistirDaListaAsync(ct);
+        }
+        await TapAsync(linha, ct);
+        var aberta = await PollNodeCenterAsync(EntryNodeRx, AberturaAlternativaMs, ct);
+        if (aberta is not null)
+        {
+            _listaFalhouSeguidas = 0;
+        }
+        return aberta;
+    }
+
+    /// <summary>Falhas seguidas do nível da lista. Zera quando ele funciona.</summary>
+    private int _listaFalhouSeguidas;
+
+    private const int MaxFalhasDaLista = 3;
+
+    /// <summary>A tela de resultado está oferecendo CONVIDAR em vez de abrir conversa?</summary>
+    /// <remarks>
+    /// Trechos sem acento e em minúsculas, pra sobreviver a variação de texto e de idioma. Diferente
+    /// das pistas de "não tem conta", aqui um falso positivo é BARATO (só desiste deste nível) e um
+    /// falso negativo é CARO (convite por SMS disparado). Por isso a lista aqui é generosa, ao
+    /// contrário da outra, que é restrita de propósito.
+    /// </remarks>
+    private static bool OfereceConvite(string xml)
+    {
+        var tela = xml.ToLowerInvariant();
+        string[] pistas = ["convidar", "convite", "invite", "nao esta no whatsapp", "não está no whatsapp"];
+        return pistas.Any(p => tela.Contains(p, StringComparison.Ordinal));
+    }
+
+    /// <summary>Sai da navegação e guarda a tela, que é o que ensina os resource-ids certos.</summary>
+    /// <remarks>A tela é a única saída deste método que serve pra alguma coisa: os ids do seletor não
+    /// foram medidos neste aparelho, e é o primeiro lote real que os entrega.</remarks>
+    private async Task<(int X, int Y)?> DesistirDaListaAsync(CancellationToken ct)
+    {
+        _listaFalhouSeguidas++;
+        if (await DumpUiAsync(ct) is { } xml)
+        {
+            GuardarTela(xml);
+        }
+        // Volta pra um estado neutro: o deep link do nível 3 abre a conversa de qualquer tela.
+        await _adb.ShellAsync("input keyevent KEYCODE_BACK; input keyevent KEYCODE_BACK", ct);
+        await Task.Delay(400, ct);
+        return null;
+    }
+
+    /// <summary>Teto de espera dos níveis alternativos. Curto: falhar rápido aqui é melhor que insistir,
+    /// porque existe um caminho conhecido logo abaixo e o orçamento do envio é compartilhado.</summary>
+    private const int AberturaAlternativaMs = 2500;
+
+    private static readonly Regex FabRx =
+        new("<node[^>]*com\\.whatsapp:id/fab\"[^>]*>", RegexOptions.Compiled);
+
+    private static readonly Regex BuscaRx =
+        new("<node[^>]*com\\.whatsapp:id/(menuitem_search|search_src_text)\"[^>]*>", RegexOptions.Compiled);
+
+    private static readonly Regex LinhaContatoRx =
+        new("<node[^>]*com\\.whatsapp:id/contactpicker_row_name\"[^>]*>", RegexOptions.Compiled);
+
+    private string WhatsAppPackage =>
+        string.IsNullOrWhiteSpace(_opts.WhatsAppPackage) ? "com.whatsapp" : _opts.WhatsAppPackage;
 
     /// <summary>Acorda a tela e tira o cadeado simples da frente, antes de abrir a conversa.</summary>
     /// <remarks>
