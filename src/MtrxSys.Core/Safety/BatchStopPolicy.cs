@@ -85,8 +85,11 @@ public sealed class BatchStopPolicy(int failureLimit)
     /// </remarks>
     public bool AcabouDeAcusarAparelho => ConsecutiveDeviceFailures == LimiarSequencia;
 
-    /// <summary>Cruzou AGORA o limiar de números NEGADOS seguidos: a suspeita deixou de ser da lista e
-    /// passou a ser do conjunto. Grita uma vez só, pela mesma razão do alerta de aparelho.</summary>
+    /// <summary>De quantas em quantas recusas o alerta se repete depois de disparar a primeira vez.</summary>
+    private const int RepeteAviso = 10;
+
+    /// <summary>Hora de alertar sobre números NEGADOS em sequência. Dispara no limiar e volta a cada
+    /// <see cref="RepeteAviso"/> recusas, enquanto a sequência durar.</summary>
     /// <remarks>
     /// 🔴 O CONTADOR EXISTIA E NINGUÉM LIA. <see cref="ConsecutiveNoAccount"/> era incrementado, tinha
     /// teste, e nenhum consumidor em produção: uma lista inteira sendo recusada rodava até o fim sem
@@ -96,18 +99,28 @@ public sealed class BatchStopPolicy(int failureLimit)
     /// <para>Por que 3 negados seguidos merecem alarme, se um negado é rotina: um número morto não
     /// prevê nada sobre o próximo (é por isso que ele NÃO alimenta o alerta de aparelho). Três seguidos
     /// preveem — a chance de três números independentes estarem mortos em sequência é baixa perto da
-    /// chance de haver uma causa comum: lista de origem ruim, ou o cache do WhatsApp envenenado por
-    /// contato que um dia foi gravado na agenda em forma que o app não resolve (ver
-    /// <c>WhatsAppContactsReader.SaveContactAsync</c>, medido em 2026-08-05).</para>
+    /// chance de haver causa comum: lista de origem ruim, cache do WhatsApp envenenado (ver
+    /// <c>WhatsAppContactsReader.SaveContactAsync</c>, medido em 2026-08-05), ou a CONTA restringida,
+    /// que deixa de resolver número e faz TODO contato voltar como "sem conta".
     ///
-    /// <para>E o custo de seguir sem saber é o padrão que este arquivo inteiro tenta evitar: cada
-    /// contato negado abre conversa, e conversa atrás de conversa para número que não existe é
-    /// enumeração. Numa lista de 87 são até 174 aberturas sem uma entrega.</para>
+    /// <para>AVISA, NÃO TRAVA. Cheguei a fazer isto PARAR o lote, e recuei: o operador tem muitos
+    /// lotes com três recusas seguidas sem restrição nenhuma, e travar interrompia o fluxo justamente
+    /// no caso comum. Some-se que o dano de seguir é menor do que eu supus — o
+    /// <see cref="InFailureStreak"/> já devolve o ritmo normal depois de 3 falhas, então o lote não
+    /// metralha, ele espalha. Quem quiser parada automática tem o <c>parar N</c>.</para>
     ///
-    /// <para>AVISA, não trava — mesma doutrina do alerta de aparelho e mesma decisão do operador em
-    /// 2026-08-07. Quem quiser parada automática já tem o <c>parar N</c>.</para>
+    /// <para>🔴 REPETE, ao contrário do <see cref="AcabouDeAcusarAparelho"/>, e a diferença é
+    /// deliberada. Lá "gritar uma vez" evita ruído. Aqui, com a conta restrita, um único aviso no 3º
+    /// contato deixaria os 84 seguintes em SILÊNCIO: quem chegasse na frente da tela no meio do lote
+    /// não veria nada e concluiria que está tudo bem. Espaçar em {RepeteAviso} é o meio-termo entre
+    /// virar ruído e sumir.</para>
+    ///
+    /// <para>Com a parada fora, um alarme falso passa a custar três linhas na tela em vez de um lote
+    /// interrompido — e é isso que permite manter o limiar sensível em 3.</para>
     /// </remarks>
-    public bool AcabouDeAcusarLista => ConsecutiveNoAccount == LimiarSequencia;
+    public bool DeveAlertarRecusas =>
+        ConsecutiveNoAccount >= LimiarSequencia
+        && (ConsecutiveNoAccount - LimiarSequencia) % RepeteAviso == 0;
 
     /// <summary>Parar agora? Só quando o operador pediu um teto explícito.</summary>
     public bool ShouldStop => _teto > 0 && ConsecutiveFailures >= _teto;

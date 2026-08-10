@@ -126,20 +126,71 @@ public sealed class BatchStopPolicyTests
     // 🔴 O contador de recusados EXISTIA e ninguém o lia: uma lista inteira sendo negada rodava até o
     // fim sem alarme. Aconteceu operando em 2026-08-10, e só a desconfiança do operador parou o lote.
     [Fact]
-    public void Tres_numeros_negados_seguidos_acusam_a_LISTA()
+    public void Tres_numeros_negados_seguidos_alertam()
     {
         var d = Padrao();
         d.NoAccount();
         d.NoAccount();
-        d.AcabouDeAcusarLista.Should().BeFalse("dois pode ser coincidência de lista fria");
+        d.DeveAlertarRecusas.Should().BeFalse("dois pode ser coincidência de lista fria");
 
         d.NoAccount();
-        d.AcabouDeAcusarLista.Should().BeTrue("três seguidos preveem uma causa comum, não três acasos");
+        d.DeveAlertarRecusas.Should().BeTrue("três seguidos preveem uma causa comum, não três acasos");
+    }
+
+    // 🔴 REPETE, ao contrário do alerta de aparelho, e a diferença é deliberada. Com a conta
+    // restringida, um único aviso no 3º contato deixaria os 84 seguintes em SILÊNCIO: quem chegasse na
+    // frente da tela no meio do lote não veria nada e concluiria que estava tudo bem.
+    [Fact]
+    public void O_alerta_volta_espacado_enquanto_a_sequencia_durar()
+    {
+        var d = Padrao();
+        for (var i = 0; i < 3; i++)
+        {
+            d.NoAccount();
+        }
+        d.DeveAlertarRecusas.Should().BeTrue("primeiro alerta no limiar");
+
+        for (var i = 4; i <= 12; i++)
+        {
+            d.NoAccount();
+            d.DeveAlertarRecusas.Should().BeFalse(
+                $"na {i}ª recusa ainda é cedo: alerta a cada contato vira ruído que a pessoa aprende "
+                + "a pular, e junto com ele ela pula o resto da tela");
+        }
 
         d.NoAccount();
-        d.AcabouDeAcusarLista.Should().BeFalse(
-            "grita UMA vez: repetir a cada contato vira ruído que a pessoa aprende a pular, e junto "
-            + "com ele ela pula o resto da tela");
+        d.DeveAlertarRecusas.Should().BeTrue("na 13ª volta a avisar, pra o lote longo não emudecer");
+    }
+
+    // A decisão de parar depende de informação que o programa NÃO tem: só o WhatsApp Web mostra
+    // restrição, e o aparelho não. Então a sequência de recusas nunca para o lote sozinha — quem
+    // decide é o operador, com o `parar N` disponível pra quem quiser automatizar sem o dado.
+    [Fact]
+    public void Sequencia_de_recusas_NAO_para_o_lote_por_conta_propria()
+    {
+        var d = new BatchStopPolicy(0); // 0 = operador pediu "nunca pare"
+        for (var i = 0; i < 20; i++)
+        {
+            d.NoAccount();
+        }
+
+        d.ShouldStop.Should().BeFalse(
+            "recusa em sequência é ambígua no aparelho (lista ruim ou conta restrita), e travar no "
+            + "caso comum interrompia o fluxo à toa");
+    }
+
+    [Fact]
+    public void Com_teto_configurado_a_sequencia_de_recusas_para()
+    {
+        // O `parar N` continua valendo pra QUALQUER falha, inclusive recusa: é a forma de quem quer
+        // parada automática pedir por ela.
+        var d = new BatchStopPolicy(5);
+        for (var i = 0; i < 5; i++)
+        {
+            d.NoAccount();
+        }
+
+        d.ShouldStop.Should().BeTrue();
     }
 
     [Fact]
@@ -154,7 +205,7 @@ public sealed class BatchStopPolicyTests
         d.NoAccount();
 
         d.ConsecutiveNoAccount.Should().Be(1);
-        d.AcabouDeAcusarLista.Should().BeFalse();
+        d.DeveAlertarRecusas.Should().BeFalse();
     }
 
     [Fact]
@@ -170,6 +221,6 @@ public sealed class BatchStopPolicyTests
         d.NoAccount();
 
         d.ConsecutiveNoAccount.Should().Be(3);
-        d.AcabouDeAcusarLista.Should().BeTrue();
+        d.DeveAlertarRecusas.Should().BeTrue();
     }
 }

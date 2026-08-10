@@ -1205,19 +1205,23 @@ internal sealed class PhoneConsoleCommand(
                 + "só não FECHE A TAMPA: isso suspende por política do Windows e nenhum programa impede.[/]");
         }
 
-        var (enviados, falhas) = await DispararAsync(plano, log, serial, ct);
+        var (enviados, falhas, semConta) = await DispararAsync(plano, log, serial, ct);
 
+        // O recorte de "sem conta" sai NO FECHO porque é a linha que sobra na tela e a que o operador
+        // lê de manhã. Sem ele, "0 enviada(s), 87 falha(s)" some com a informação que importa: as 87
+        // são a MESMA categoria, e categoria única em bloco é sintoma de causa comum, não de lista fria.
+        var recorte = semConta == 0 ? "" : $" [grey]({semConta} sem conta)[/]";
         AnsiConsole.MarkupLine(
             falhas == 0
                 ? $"[green]lote concluído: {enviados} enviada(s), sem falhas.[/]"
-                : $"[yellow]lote concluído: {enviados} enviada(s), {falhas} falha(s).[/]");
+                : $"[yellow]lote concluído: {enviados} enviada(s), {falhas} falha(s).[/]{recorte}");
         AnsiConsole.MarkupLine($"[grey]log: {log.EscapeMarkup()}[/]");
     }
 
     /// <summary>O laço de disparo. Separado do <see cref="EnviarAsync"/> porque lá tudo é decisão
     /// (pode? vale a pena? confirma?) e aqui tudo é execução — e porque um laço com efeito
     /// irreversível merece um <c>finally</c> visível em vez de ficar no meio de 140 linhas.</summary>
-    private async Task<(int Enviados, int Falhas)> DispararAsync(
+    private async Task<(int Enviados, int Falhas, int SemConta)> DispararAsync(
         List<(Contato Contato, int Variante, string Texto)> plano,
         string log,
         string serial,
@@ -1225,6 +1229,7 @@ internal sealed class PhoneConsoleCommand(
     {
         var enviados = 0;
         var falhas = 0;
+        var semConta = 0;
         // O disjuntor mora no Core, e não em variáveis soltas aqui, porque tem estado e casos de borda
         // (ver BatchStopPolicy) e este projeto não tem como ser testado. A primeira versão era feita à
         // mão neste laço e nasceu com um furo na sequência alternada.
@@ -1418,6 +1423,10 @@ internal sealed class PhoneConsoleCommand(
                     // que manda conferir a tela do celular. Linha própria também na tela, porque
                     // "falhou" e "sem conta" mandam o operador para lugares diferentes.
                     falhas++;
+                    // Contado à parte pro FECHO do lote: "0 enviada(s), 87 falha(s)" esconde que as 87
+                    // são a MESMA categoria, e é justamente isso que denuncia causa comum. Quem lê só a
+                    // última linha de manhã precisa enxergar o padrão sem reler 87 linhas.
+                    semConta++;
                     disjuntor.NoAccount();
                     AnsiConsole.MarkupLine(
                         $"[red]({i + 1}/{plano.Count}) sem conta[/] {contato.Numero}: "
@@ -1458,21 +1467,33 @@ internal sealed class PhoneConsoleCommand(
                 // O aviso fica porque falha de APARELHO é a única que prevê o próximo contato: tela
                 // bloqueada continua bloqueada. Sem ele, um celular travado no meio do lote só seria
                 // descoberto no fim, com trinta linhas vermelhas e nenhuma entrega.
-                // 🔴 LISTA SENDO RECUSADA EM SEQUÊNCIA. Um número negado é rotina e não prevê nada
-                // sobre o próximo. Três seguidos preveem: a causa provável deixou de ser "esses números
-                // morreram" e passou a ser comum aos três. Sem este aviso o lote seguia até o fim
-                // abrindo conversa para cada um, que é a enumeração que o disjuntor existe pra evitar —
-                // 87 contatos viram até 174 aberturas sem UMA entrega.
-                if (disjuntor.AcabouDeAcusarLista)
+                // 🔴 AVISA E SEGUE. Cheguei a fazer isto PARAR o lote e recuei: três recusas seguidas
+                // acontecem com frequência SEM restrição nenhuma, e travar interrompia o fluxo no caso
+                // comum. O aviso repete a cada 10 (ver DeveAlertarRecusas) porque com a conta restrita
+                // um único alerta no 3º contato deixaria os 84 seguintes em silêncio.
+                //
+                // O aparelho NÃO consegue distinguir "lista ruim" de "conta restringida": a restrição
+                // quebra a resolução de número NOVO, e nenhuma sonda no celular passa por esse caminho
+                // (conversa já existente abre normal; número nunca contatado esbarra no cache local).
+                // Quem tem essa informação é o operador, olhando o WhatsApp Web — por isso o texto
+                // manda começar por lá, e por isso a decisão de parar fica com ele.
+                if (disjuntor.DeveAlertarRecusas)
                 {
                     AnsiConsole.MarkupLine(
                         $"[yellow]atenção: {disjuntor.ConsecutiveNoAccount} números seguidos recusados "
-                        + "como \"sem conta\".[/] [grey]isso raramente é coincidência. confira, nesta "
-                        + "ordem: 1. abra o WhatsApp NO CELULAR e procure um desses contatos — se ele "
-                        + "existe lá, o problema não é a lista. 2. veja a tela salva que o erro aponta, "
-                        + "pra saber o que o app mostrou de verdade. 3. lista de origem duvidosa? o lote "
-                        + "continua, mas cada recusa abre uma conversa à toa —[/] Ctrl+C [grey]interrompe, "
-                        + "e[/] parar 5 [grey]faz o lote parar sozinho da próxima vez.[/]");
+                        + "como \"sem conta\".[/] [grey]isso raramente é coincidência.[/]");
+                    AnsiConsole.MarkupLine(
+                        "[grey]confira nesta ordem: 1. abra o[/] [bold]WhatsApp Web[/] [grey]com este "
+                        + "chip e veja se há aviso de RESTRIÇÃO — conta restringida para de resolver "
+                        + "número e faz todo contato voltar como \"sem conta\", e o aparelho costuma "
+                        + "NÃO mostrar isso. 2. abra o WhatsApp no celular e procure um desses "
+                        + "contatos: se ele existe lá, não é a lista. 3. veja a tela salva que o erro "
+                        + "aponta.[/]");
+                    AnsiConsole.MarkupLine(
+                        "[grey]o lote CONTINUA. se o chip estiver restringido, pare você:[/] Ctrl+C "
+                        + "[grey]interrompe agora e[/] parar 5 [grey]faz o lote parar sozinho da "
+                        + "próxima vez. insistir com a conta sob restrição é o que transforma restrição "
+                        + "temporária em banimento.[/]");
                 }
 
                 if (disjuntor.AcabouDeAcusarAparelho)
@@ -1566,7 +1587,7 @@ internal sealed class PhoneConsoleCommand(
             }
         }
 
-        return (enviados, falhas);
+        return (enviados, falhas, semConta);
     }
 
     /// <summary>Avisa quem desta lista já recebeu deste aparelho. O log é a única memória entre

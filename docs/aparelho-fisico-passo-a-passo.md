@@ -285,13 +285,41 @@ permite conferir depois o que o app mostrou de verdade, sem ninguém ter estado 
 ### Vários seguidos é outro problema
 
 Um número negado não diz nada sobre o próximo. **Três seguidos dizem**: a chance de três acasos em
-sequência é pequena perto da chance de haver causa comum. Ao cruzar esse limiar o console avisa uma
-vez, com o roteiro acima.
+sequência é pequena perto da chance de haver causa comum. Ao cruzar esse limiar o console **avisa e
+continua**, e repete o aviso a cada 10 recusas enquanto a sequência durar (um aviso só, no 3º contato,
+deixaria os 84 seguintes em silêncio).
 
-O lote **continua** (a decisão de 2026-08-07 é avisar, não travar), mas vale saber o custo de seguir:
-cada recusa abre uma conversa, e conversa atrás de conversa para número que não existe é o padrão de
-bot enumerando. Numa lista de 87 são até 174 aberturas sem uma entrega. `Ctrl+C` interrompe, e
-`parar 5` faz o lote parar sozinho na próxima vez.
+Além da lista ruim e do cache envenenado, entra aqui a causa mais séria: **a conta pode estar
+restringida**. Conta restringida **deixa de resolver número**, então todo contato volta como "sem
+conta", inclusive quem existe e está na agenda. O veredito do driver continua tecnicamente certo (o
+app disse isso) e a causa fica invertida.
+
+> 🔴 **A restrição aparece no WhatsApp Web e costuma NÃO aparecer no aparelho.** Confirmado em
+> 2026-08-10. Abra o Web com esse chip antes de concluir qualquer coisa sobre a lista.
+
+**Se estiver restringido, pare de disparar desse chip até normalizar.** Insistir com a conta sob
+restrição é o que transforma restrição temporária em banimento. `Ctrl+C` interrompe na hora, e
+`parar 5` faz o lote parar sozinho da próxima vez.
+
+### Por que o console não decide isso sozinho
+
+Porque **o aparelho não tem como saber**. A operação é automatizada direto no celular, sem WAHA no
+caminho, e não existe sonda possível:
+
+- A restrição quebra a resolução de **número desconhecido**. Abrir uma conversa **já existente** não
+  passa por esse caminho, então responderia "está tudo bem" mesmo com a conta restrita.
+- Um número nunca contatado testaria o caminho certo, mas o app **cacheia** a resposta localmente, e a
+  segunda consulta viria da memória.
+- Sem root não há acesso ao estado interno do app.
+
+Ou seja, o único sinal disponível no aparelho é o sintoma ambíguo ("todo número é recusado"), e
+nenhum ajuste de limiar resolve ambiguidade: só troca qual erro se comete. Quem tem a informação é
+você, olhando o Web. Por isso o console informa bem e deixa a decisão com você.
+
+Chegou a existir uma versão que **parava** o lote nesse ponto. Foi revertida: três recusas seguidas
+acontecem com frequência sem restrição nenhuma, e travar interrompia o fluxo no caso comum. O ritmo já
+protege o que precisava ser protegido, voltando aos 150-360s normais depois de 3 falhas, então o lote
+não dispara em rajada mesmo seguindo.
 
 ---
 
