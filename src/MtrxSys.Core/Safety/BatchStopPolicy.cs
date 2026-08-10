@@ -51,13 +51,53 @@ public sealed class BatchStopPolicy(int failureLimit)
     /// <summary>Falhas de qualquer tipo desde a última entrega.</summary>
     public int ConsecutiveFailures { get; private set; }
 
-    /// <summary>Entregou: zera tudo. Uma entrega no meio prova as duas coisas de uma vez, que o
-    /// aparelho está bom e que a lista não é toda lixo.</summary>
+    /// <summary>Entregas do lote INTEIRO. Diferente dos outros contadores, este NÃO zera.</summary>
+    /// <remarks>
+    /// 🔴 O QUE ELE RESPONDE: "esta conta já provou que resolve número hoje?". Uma entrega exige que o
+    /// WhatsApp tenha resolvido o destinatário e aceitado a mensagem, então uma única entrega no lote é
+    /// prova de que o canal funciona.
+    /// </remarks>
+    public int TotalDelivered { get; private set; }
+
+    /// <summary>O lote ainda não entregou NADA. É o que muda o PESO de uma sequência de recusas.</summary>
+    /// <remarks>
+    /// 🔴 A MESMA sequência de 3 recusas significa coisas MUITO diferentes conforme o que veio antes:
+    /// <list type="bullet">
+    /// <item>Depois de 20 entregas: a conta resolve número, então a causa provável são aqueles três
+    /// números. É o caso comum, e travar ou gritar alto aqui era o que atrapalhava o operador.</item>
+    /// <item>Com ZERO entregas no lote inteiro: nada resolveu ainda, nem uma vez. Aí a suspeita
+    /// legítima deixa de ser "três números ruins" e passa a ser algo comum a todos.</item>
+    /// </list>
+    /// <para>Este contador não elimina a ambiguidade (só o aparelho saber o estado da conta
+    /// eliminaria), mas usa informação que o lote JÁ TINHA e ninguém lia para separar o alarme forte do
+    /// fraco. Reduzir falso positivo com dado existente é mais barato que qualquer sonda.</para>
+    /// </remarks>
+    public bool NadaEntregouAinda => TotalDelivered == 0;
+
+    /// <summary>A suspeita recai sobre a CONTA (e não sobre a lista)?</summary>
+    /// <remarks>
+    /// 🔴 <see cref="TotalDelivered"/> é fato sobre o PASSADO, e restrição pode começar no MEIO do
+    /// lote. Um lote que entregou 12 nas duas primeiras horas e depois emenda 40 recusas não autoriza
+    /// dizer "a conta resolve número": autorizava duas horas atrás. Sem esta segunda condição, a
+    /// mensagem branda tranquilizaria justamente no cenário em que o chip acabou de cair — e
+    /// tranquilizar errado é pior que calar.
+    ///
+    /// <para>Por isso só o PRIMEIRO alerta (a sequência ainda no limiar) pode ser brando. Qualquer
+    /// repetição significa que a sequência passou de {LimiarSequencia} e continuou crescendo, e aí o
+    /// que veio antes deixa de explicar o que está acontecendo agora.</para>
+    /// </remarks>
+    public bool SuspeitaRecaiSobreAConta =>
+        NadaEntregouAinda || ConsecutiveNoAccount > LimiarSequencia;
+
+    /// <summary>Entregou: zera as sequências. Uma entrega no meio prova as duas coisas de uma vez, que
+    /// o aparelho está bom e que a lista não é toda lixo.</summary>
     public void Delivered()
     {
+        TotalDelivered++;
         ConsecutiveDeviceFailures = 0;
         ConsecutiveNoAccount = 0;
         ConsecutiveFailures = 0;
+        ConsecutiveContradicoes = 0;
     }
 
     /// <summary>Falha que acusa o aparelho. Inclui o envio NÃO CONFIRMADO: "toquei enviar e não
@@ -69,11 +109,48 @@ public sealed class BatchStopPolicy(int failureLimit)
     }
 
     /// <summary>O app afirmou que este número não tem conta no WhatsApp.</summary>
-    public void NoAccount()
+    /// <param name="contradizidoPelaAgenda">O ESPELHO que o próprio WhatsApp publica na agenda do
+    /// Android diz que este número É usuário. Ver <see cref="ConsecutiveContradicoes"/>.</param>
+    public void NoAccount(bool contradizidoPelaAgenda = false)
     {
         ConsecutiveNoAccount++;
         ConsecutiveFailures++;
+        if (contradizidoPelaAgenda)
+        {
+            ConsecutiveContradicoes++;
+        }
     }
+
+    /// <summary>Recusas em que o app se CONTRADISSE: disse "não tem conta" para um número que o espelho
+    /// dele mesmo, na agenda do Android, marca como usuário do WhatsApp.</summary>
+    /// <remarks>
+    /// 🔴 É A ÚNICA EVIDÊNCIA DE GRAU DE CERTEZA que existe sem root e sem WhatsApp Web. Duas fontes
+    /// independentes descrevem o mesmo fato e discordam: o deep link diz que o número não tem conta, e
+    /// o `vnd.com.whatsapp.profile` publicado pelo sync de contatos diz que tem. Um número que o
+    /// próprio app marcou como usuário não deixa de ser usuário de um dia pro outro — então quem está
+    /// errado é a resposta de agora, e o motivo de ela estar errada é a conta ter parado de resolver.
+    ///
+    /// <para>NÃO zera numa recusa comum, só numa entrega. Uma lista pode intercalar número morto de
+    /// verdade (espelho não sabe) com número contradito; zerar no meio apagaria justamente o rastro que
+    /// interessa. Entrega zera porque ela PROVA que a conta resolve.</para>
+    ///
+    /// <para>A assimetria que torna isto seguro: <c>IsOnWhatsAppAsync</c> nunca devolve false, só true
+    /// ou null. Então esta contagem só consegue produzir evidência A FAVOR de restrição, jamais um
+    /// "está tudo bem" falso. Foi o defeito fatal da ideia do canário, e aqui ele não existe.</para>
+    /// </remarks>
+    public int ConsecutiveContradicoes { get; private set; }
+
+    /// <summary>Limiar de contradições. DOIS, e não três como o resto: a evidência é qualitativamente
+    /// mais forte, porque não depende de estimar probabilidade de coincidência. Uma contradição isolada
+    /// ainda pode ser espelho velho (alguém que saiu do WhatsApp recentemente); duas, em números
+    /// independentes e sem nenhuma entrega no meio, não.</summary>
+    public const int LimiarContradicao = 2;
+
+    /// <summary>O app se contradisse o bastante: a conta muito provavelmente parou de resolver número.</summary>
+    public bool ContaProvavelmenteRestrita => ConsecutiveContradicoes >= LimiarContradicao;
+
+    /// <summary>Cruzou AGORA o limiar de contradições: hora de dizer, com todas as letras.</summary>
+    public bool AcabouDeConfirmarContradicao => ConsecutiveContradicoes == LimiarContradicao;
 
     /// <summary>Já é uma SEQUÊNCIA de falhas, e não uma falha isolada? Governa o RITMO.</summary>
     public bool InFailureStreak => ConsecutiveFailures >= LimiarSequencia;
@@ -118,9 +195,21 @@ public sealed class BatchStopPolicy(int failureLimit)
     /// <para>Com a parada fora, um alarme falso passa a custar três linhas na tela em vez de um lote
     /// interrompido — e é isso que permite manter o limiar sensível em 3.</para>
     /// </remarks>
+    /// <remarks>
+    /// <para>🔴 A SEGUNDA CLÁUSULA É A TRANSIÇÃO, e ela faltava. Com entregas antes, o alerta do limiar
+    /// sai BRANDO ("a conta resolveu número há pouco, provavelmente são esses três"). Se a sequência
+    /// continua, <see cref="SuspeitaRecaiSobreAConta"/> vira true na recusa seguinte — mas o aviso só
+    /// voltaria em {RepeteAviso} contatos, ou seja, meia hora depois no ritmo normal. O MOMENTO
+    /// informativo é exatamente esse: a hipótese branda acabou de ser desmentida, e o operador ficaria
+    /// sem saber. Avisar na virada não é ruído, é a notícia.</para>
+    /// <para>Sem entregas antes o limiar já sai forte, então a cláusula não dispara e não há aviso
+    /// repetido em sequência.</para>
+    /// </remarks>
     public bool DeveAlertarRecusas =>
-        ConsecutiveNoAccount >= LimiarSequencia
-        && (ConsecutiveNoAccount - LimiarSequencia) % RepeteAviso == 0;
+        ConsecutiveNoAccount == LimiarSequencia
+        || (ConsecutiveNoAccount == LimiarSequencia + 1 && TotalDelivered > 0)
+        || (ConsecutiveNoAccount > LimiarSequencia
+            && (ConsecutiveNoAccount - LimiarSequencia) % RepeteAviso == 0);
 
     /// <summary>Parar agora? Só quando o operador pediu um teto explícito.</summary>
     public bool ShouldStop => _teto > 0 && ConsecutiveFailures >= _teto;

@@ -53,6 +53,14 @@ internal sealed class PhoneConsoleCommand(
     /// <param name="Nome">Opcional; alimenta o token <c>{nome}</c> nos textos.</param>
     private sealed record Contato(string Numero, string? Nome);
 
+    /// <summary>O que o lote produziu.</summary>
+    /// <param name="SemConta">Subconjunto de <paramref name="Falhas"/>: os recusados pelo app.</param>
+    /// <param name="EntregasConfirmadas">Subconjunto de <paramref name="Enviados"/> em que a tela já
+    /// mostrava tique de entrega. Ver o comentário no fecho do lote: é PISO, não taxa.</param>
+    /// <remarks>Record em vez de tupla de quatro inteiros: nome de campo é o que impede alguém inverter
+    /// dois deles na chamada com o compilador aceitando de boa vontade.</remarks>
+    private sealed record ResumoDoLote(int Enviados, int Falhas, int SemConta, int EntregasConfirmadas);
+
     /// <summary>O que sobrevive ao fechar a janela. Uma lista de 80 contatos colada à mão é cara de
     /// refazer, e fechar console por engano é rotina.</summary>
     private sealed record Estado
@@ -1205,23 +1213,38 @@ internal sealed class PhoneConsoleCommand(
                 + "só não FECHE A TAMPA: isso suspende por política do Windows e nenhum programa impede.[/]");
         }
 
-        var (enviados, falhas, semConta) = await DispararAsync(plano, log, serial, ct);
+        var resumo = await DispararAsync(plano, log, serial, ct);
 
         // O recorte de "sem conta" sai NO FECHO porque é a linha que sobra na tela e a que o operador
         // lê de manhã. Sem ele, "0 enviada(s), 87 falha(s)" some com a informação que importa: as 87
         // são a MESMA categoria, e categoria única em bloco é sintoma de causa comum, não de lista fria.
-        var recorte = semConta == 0 ? "" : $" [grey]({semConta} sem conta)[/]";
+        var recorte = resumo.SemConta == 0 ? "" : $" [grey]({resumo.SemConta} sem conta)[/]";
         AnsiConsole.MarkupLine(
-            falhas == 0
-                ? $"[green]lote concluído: {enviados} enviada(s), sem falhas.[/]"
-                : $"[yellow]lote concluído: {enviados} enviada(s), {falhas} falha(s).[/]{recorte}");
+            resumo.Falhas == 0
+                ? $"[green]lote concluído: {resumo.Enviados} enviada(s), sem falhas.[/]"
+                : $"[yellow]lote concluído: {resumo.Enviados} enviada(s), {resumo.Falhas} falha(s).[/]{recorte}");
+
+        // 🔴 MEDE E MOSTRA, NÃO ALARMA. A tentação era acusar shadow-restriction quando poucas entregas
+        // se confirmam. Não faço, e a razão está escrita no DispatchEngine: a leitura acontece SEGUNDOS
+        // depois do toque, então destinatário com o aparelho desligado aparece como "sent". Este número
+        // é um PISO da taxa real, não a taxa — e o próprio motor mantém o guard DESLIGADO no caminho de
+        // UI por isso, com o plano explícito de "primeiro se acumula o dado, depois se escolhe o limiar
+        // em cima da distribuição observada". Alarmar agora, com limiar chutado, pausaria lote por gente
+        // offline. Mostrar acumula a distribuição sem prometer conclusão nenhuma.
+        if (resumo.Enviados > 0)
+        {
+            AnsiConsole.MarkupLine(
+                $"[grey]entrega já confirmada na tela em {resumo.EntregasConfirmadas} de "
+                + $"{resumo.Enviados}. o resto pode ter sido entregue depois: a leitura acontece "
+                + "segundos após o envio, então este número é um piso, não a taxa real.[/]");
+        }
         AnsiConsole.MarkupLine($"[grey]log: {log.EscapeMarkup()}[/]");
     }
 
     /// <summary>O laço de disparo. Separado do <see cref="EnviarAsync"/> porque lá tudo é decisão
     /// (pode? vale a pena? confirma?) e aqui tudo é execução — e porque um laço com efeito
     /// irreversível merece um <c>finally</c> visível em vez de ficar no meio de 140 linhas.</summary>
-    private async Task<(int Enviados, int Falhas, int SemConta)> DispararAsync(
+    private async Task<ResumoDoLote> DispararAsync(
         List<(Contato Contato, int Variante, string Texto)> plano,
         string log,
         string serial,
@@ -1230,6 +1253,7 @@ internal sealed class PhoneConsoleCommand(
         var enviados = 0;
         var falhas = 0;
         var semConta = 0;
+        var entregasConfirmadas = 0;
         // O disjuntor mora no Core, e não em variáveis soltas aqui, porque tem estado e casos de borda
         // (ver BatchStopPolicy) e este projeto não tem como ser testado. A primeira versão era feita à
         // mão neste laço e nasceu com um furo na sequência alternada.
@@ -1390,6 +1414,12 @@ internal sealed class PhoneConsoleCommand(
                 if (r.Sent)
                 {
                     enviados++;
+                    // Tique de entrega JÁ visível na tela. Só "delivered"/"read" contam: "sent" é o
+                    // estado normal segundos depois do toque, e tratá-lo como entrega mentiria.
+                    if (r.DeliveryStatus is "delivered" or "read")
+                    {
+                        entregasConfirmadas++;
+                    }
                     disjuntor.Delivered();
                     entregues.Add(contato.Numero);
                     // A forma que REALMENTE recebeu também entra, senão o irmão dela (mesma pessoa,
@@ -1427,10 +1457,29 @@ internal sealed class PhoneConsoleCommand(
                     // são a MESMA categoria, e é justamente isso que denuncia causa comum. Quem lê só a
                     // última linha de manhã precisa enxergar o padrão sem reler 87 linhas.
                     semConta++;
-                    disjuntor.NoAccount();
+
+                    // 🔴 CONFRONTA O APP COM O ESPELHO DELE MESMO. O deep link acabou de dizer "este
+                    // número não tem conta"; o `vnd.com.whatsapp.profile` que o sync de contatos do
+                    // WhatsApp publica na agenda do Android diz se ele É usuário. Duas fontes
+                    // independentes sobre o mesmo fato — e a DISCORDÂNCIA entre elas responde o que
+                    // nenhuma das duas responde sozinha: se o número é morto ou se a CONTA parou de
+                    // resolver. É o mesmo que o operador faz à mão ao procurar o contato no celular.
+                    //
+                    // Custa 2 chamadas adb e SÓ na recusa, não em todo envio. E `IsOnWhatsAppAsync`
+                    // nunca devolve false (só true ou null), então isto só produz evidência A FAVOR de
+                    // restrição, nunca um "está tudo bem" falso.
+                    var espelho = await phone.IsOnWhatsAppAsync(contato.Numero, ct);
+                    var contradito = espelho == true;
+                    disjuntor.NoAccount(contradito);
                     AnsiConsole.MarkupLine(
                         $"[red]({i + 1}/{plano.Count}) sem conta[/] {contato.Numero}: "
                         + $"{(r.Error ?? "").EscapeMarkup()}");
+                    if (contradito)
+                    {
+                        AnsiConsole.MarkupLine(
+                            "[yellow]  ⚠ a agenda do aparelho diz que ESTE número É usuário do "
+                            + "WhatsApp.[/] [grey]o app se contradisse: não é o número que está morto.[/]");
+                    }
                 }
                 else
                 {
@@ -1477,23 +1526,67 @@ internal sealed class PhoneConsoleCommand(
                 // (conversa já existente abre normal; número nunca contatado esbarra no cache local).
                 // Quem tem essa informação é o operador, olhando o WhatsApp Web — por isso o texto
                 // manda começar por lá, e por isso a decisão de parar fica com ele.
-                if (disjuntor.DeveAlertarRecusas)
+                // 🔴 CERTEZA, e não suspeita. Duas contradições sem nenhuma entrega no meio: o app negou
+                // dois números que o espelho dele mesmo marca como usuários. Isso não é lista fria, e
+                // não depende de limiar estatístico nenhum. Sai na hora, fora da cadência do aviso comum.
+                if (disjuntor.AcabouDeConfirmarContradicao)
                 {
                     AnsiConsole.MarkupLine(
-                        $"[yellow]atenção: {disjuntor.ConsecutiveNoAccount} números seguidos recusados "
-                        + "como \"sem conta\".[/] [grey]isso raramente é coincidência.[/]");
+                        $"[red]CONTA MUITO PROVAVELMENTE RESTRINGIDA.[/] [grey]{disjuntor.ConsecutiveContradicoes} "
+                        + "números recusados que a agenda do aparelho marca como usuários do WhatsApp. "
+                        + "Duas fontes do próprio app discordando: o número não é o problema, a conta "
+                        + "parou de resolver.[/]");
                     AnsiConsole.MarkupLine(
-                        "[grey]confira nesta ordem: 1. abra o[/] [bold]WhatsApp Web[/] [grey]com este "
-                        + "chip e veja se há aviso de RESTRIÇÃO — conta restringida para de resolver "
-                        + "número e faz todo contato voltar como \"sem conta\", e o aparelho costuma "
-                        + "NÃO mostrar isso. 2. abra o WhatsApp no celular e procure um desses "
-                        + "contatos: se ele existe lá, não é a lista. 3. veja a tela salva que o erro "
-                        + "aponta.[/]");
-                    AnsiConsole.MarkupLine(
-                        "[grey]o lote CONTINUA. se o chip estiver restringido, pare você:[/] Ctrl+C "
-                        + "[grey]interrompe agora e[/] parar 5 [grey]faz o lote parar sozinho da "
-                        + "próxima vez. insistir com a conta sob restrição é o que transforma restrição "
-                        + "temporária em banimento.[/]");
+                        "[yellow]enquanto isso durar NADA será entregue, para ninguém.[/] [grey]o lote "
+                        + "continua e retoma sozinho assim que a conta voltar (a primeira entrega zera "
+                        + "tudo). mas insistir com a conta sob restrição é o que transforma restrição "
+                        + "temporária em banimento —[/] Ctrl+C [grey]interrompe, e[/] parar 5 "
+                        + "[grey]faz parar sozinho da próxima vez.[/]");
+                }
+                else if (disjuntor.DeveAlertarRecusas)
+                {
+                    // 🔴 O MESMO NÚMERO DE RECUSAS, DOIS ALARMES DIFERENTES. Três recusas depois de
+                    // entregas provam que a conta resolve número: a causa provável são aqueles três
+                    // números, e gritar alto aí é o falso positivo que atrapalhava o operador. Três
+                    // recusas com ZERO entregas no lote inteiro é outra coisa — nada resolveu, nem uma
+                    // vez. O dado já existia (ver TotalDelivered) e ninguém lia.
+                    if (disjuntor.SuspeitaRecaiSobreAConta)
+                    {
+                        // Duas portas de entrada aqui, e a segunda é a que faltava: ou o lote NUNCA
+                        // entregou, ou ele entregou e a sequência de recusas continuou crescendo depois.
+                        // No segundo caso as entregas antigas não explicam o presente — a restrição pode
+                        // ter começado no meio do lote.
+                        var abertura = disjuntor.NadaEntregouAinda
+                            ? $"{disjuntor.ConsecutiveNoAccount} recusas e NENHUMA entrega neste lote"
+                            : $"{disjuntor.ConsecutiveNoAccount} recusas SEGUIDAS, mesmo com "
+                              + $"{disjuntor.TotalDelivered} entrega(s) antes";
+                        AnsiConsole.MarkupLine(
+                            $"[red]atenção: {abertura}.[/] [grey]a suspeita não é mais \"esses números "
+                            + "morreram\": é algo comum a todos. A causa mais séria é a CONTA "
+                            + "restringida, que para de resolver número e faz todo contato voltar como "
+                            + "\"sem conta\", inclusive quem existe e está na agenda.[/]");
+                        AnsiConsole.MarkupLine(
+                            "[grey]confira: abra o WhatsApp no celular e procure um desses contatos. Se "
+                            + "ele existe lá, não é a lista. A tela salva que o erro aponta mostra o que "
+                            + "o app respondeu de verdade. (Com poucos chips, o WhatsApp Web é onde a "
+                            + "restrição aparece — o aparelho costuma não mostrar.)[/]");
+                        AnsiConsole.MarkupLine(
+                            "[grey]o lote CONTINUA.[/] Ctrl+C [grey]interrompe agora, e[/] parar 5 "
+                            + "[grey]faz parar sozinho da próxima vez. insistir com a conta sob "
+                            + "restrição é o que transforma restrição temporária em banimento.[/]");
+                    }
+                    else
+                    {
+                        // Brando, e no PRETÉRITO de propósito: "resolveu" e não "resolve". A prova é de
+                        // antes, e afirmar no presente é o que faria esta linha tranquilizar um chip
+                        // que acabou de cair. Se a sequência crescer, o ramo de cima assume.
+                        AnsiConsole.MarkupLine(
+                            $"[yellow]{disjuntor.ConsecutiveNoAccount} números seguidos recusados como "
+                            + $"\"sem conta\".[/] [grey]este lote já entregou "
+                            + $"{disjuntor.TotalDelivered}, então a conta resolveu número há pouco: a "
+                            + "causa provável são esses números mesmo. o lote continua, e se a "
+                            + "sequência crescer eu aviso de novo com mais peso.[/]");
+                    }
                 }
 
                 if (disjuntor.AcabouDeAcusarAparelho)
@@ -1587,7 +1680,7 @@ internal sealed class PhoneConsoleCommand(
             }
         }
 
-        return (enviados, falhas, semConta);
+        return new ResumoDoLote(enviados, falhas, semConta, entregasConfirmadas);
     }
 
     /// <summary>Avisa quem desta lista já recebeu deste aparelho. O log é a única memória entre

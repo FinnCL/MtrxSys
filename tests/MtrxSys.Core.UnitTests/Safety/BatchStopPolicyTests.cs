@@ -193,6 +193,156 @@ public sealed class BatchStopPolicyTests
         d.ShouldStop.Should().BeTrue();
     }
 
+    // 🔴 A MESMA sequência de 3 recusas pesa diferente conforme o que veio antes. O contador de
+    // entregas do lote INTEIRO é o que separa "a conta resolve número, são esses três" de "nada
+    // resolveu ainda, nem uma vez" — e ele usa dado que o lote já tinha e ninguém lia.
+    [Fact]
+    public void Entrega_no_lote_nao_e_apagada_pelas_recusas_seguintes()
+    {
+        var d = Padrao();
+        d.NadaEntregouAinda.Should().BeTrue("lote recém-começado ainda não provou nada");
+
+        d.Delivered();
+        d.NoAccount();
+        d.NoAccount();
+        d.NoAccount();
+
+        d.NadaEntregouAinda.Should().BeFalse(
+            "uma entrega prova que o WhatsApp resolveu um destinatário e aceitou a mensagem; recusa "
+            + "depois disso não desfaz essa prova");
+        d.TotalDelivered.Should().Be(1);
+        d.DeveAlertarRecusas.Should().BeTrue("o alerta continua saindo, só que com peso menor");
+    }
+
+    // 🔴 TotalDelivered é fato sobre o PASSADO, e restrição pode começar no MEIO do lote. Um lote que
+    // entregou 12 e depois emenda recusas não autoriza dizer "a conta resolve número": autorizava
+    // antes. Sem esta regra, o aviso brando tranquilizaria justamente o chip que acabou de cair.
+    [Fact]
+    public void Entrega_antiga_deixa_de_absolver_quando_a_sequencia_cresce()
+    {
+        var d = Padrao();
+        d.Delivered();
+        d.NoAccount();
+        d.NoAccount();
+        d.NoAccount();
+
+        d.SuspeitaRecaiSobreAConta.Should().BeFalse(
+            "no limiar, com entrega recente, a causa provável ainda são esses três números");
+
+        d.NoAccount();
+        d.SuspeitaRecaiSobreAConta.Should().BeTrue(
+            "passou do limiar e continuou crescendo: o que veio antes já não explica o presente");
+    }
+
+    // 🔴 A VIRADA É A NOTÍCIA. Com entregas antes, o alerta do limiar sai brando; se a sequência
+    // continua, a hipótese branda acabou de ser desmentida. Sem este aviso na virada, o operador só
+    // saberia 10 contatos depois — meia hora no ritmo normal.
+    [Fact]
+    public void Avisa_de_novo_na_virada_de_brando_para_forte()
+    {
+        var d = Padrao();
+        d.Delivered();
+        d.NoAccount();
+        d.NoAccount();
+        d.NoAccount();
+        d.DeveAlertarRecusas.Should().BeTrue("limiar: aviso brando");
+        d.SuspeitaRecaiSobreAConta.Should().BeFalse();
+
+        d.NoAccount();
+        d.DeveAlertarRecusas.Should().BeTrue("a hipótese branda caiu; avisar agora é a notícia");
+        d.SuspeitaRecaiSobreAConta.Should().BeTrue();
+
+        d.NoAccount();
+        d.DeveAlertarRecusas.Should().BeFalse("dito uma vez, volta a espaçar");
+    }
+
+    [Fact]
+    public void Sem_entregas_o_limiar_nao_gera_dois_avisos_seguidos()
+    {
+        // Aqui o limiar já sai FORTE, então não há virada a comunicar e a cláusula não dispara.
+        var d = Padrao();
+        d.NoAccount();
+        d.NoAccount();
+        d.NoAccount();
+        d.DeveAlertarRecusas.Should().BeTrue();
+
+        d.NoAccount();
+        d.DeveAlertarRecusas.Should().BeFalse("repetir o mesmo alerta no contato seguinte é ruído");
+    }
+
+    // 🔴 A ÚNICA evidência de grau de CERTEZA sem root e sem WhatsApp Web: o app negou um número que o
+    // espelho dele mesmo, na agenda do Android, marca como usuário. Duas fontes independentes sobre o
+    // mesmo fato, discordando.
+    [Fact]
+    public void Duas_contradicoes_apontam_a_conta_com_certeza()
+    {
+        var d = Padrao();
+        d.NoAccount(contradizidoPelaAgenda: true);
+        d.ContaProvavelmenteRestrita.Should().BeFalse(
+            "uma isolada ainda pode ser espelho velho de quem saiu do WhatsApp");
+
+        d.NoAccount(contradizidoPelaAgenda: true);
+        d.ContaProvavelmenteRestrita.Should().BeTrue();
+        d.AcabouDeConfirmarContradicao.Should().BeTrue("diz com todas as letras, uma vez");
+
+        d.NoAccount(contradizidoPelaAgenda: true);
+        d.AcabouDeConfirmarContradicao.Should().BeFalse("o estado continua, o anúncio não repete");
+        d.ContaProvavelmenteRestrita.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Numero_morto_de_verdade_no_meio_nao_apaga_as_contradicoes()
+    {
+        // Lista real intercala morto de verdade (espelho não sabe) com contradito. Zerar numa recusa
+        // comum apagaria justamente o rastro que interessa.
+        var d = Padrao();
+        d.NoAccount(contradizidoPelaAgenda: true);
+        d.NoAccount(contradizidoPelaAgenda: false);
+        d.NoAccount(contradizidoPelaAgenda: true);
+
+        d.ConsecutiveContradicoes.Should().Be(2);
+        d.ContaProvavelmenteRestrita.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Entrega_zera_as_contradicoes()
+    {
+        // Entrega PROVA que a conta resolve número. Depois dela, contradição anterior não descreve mais
+        // o presente — mesma doutrina do TotalDelivered.
+        var d = Padrao();
+        d.NoAccount(contradizidoPelaAgenda: true);
+        d.Delivered();
+        d.NoAccount(contradizidoPelaAgenda: true);
+
+        d.ConsecutiveContradicoes.Should().Be(1);
+        d.ContaProvavelmenteRestrita.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Sem_nenhuma_entrega_a_suspeita_recai_sobre_a_conta_ja_no_limiar()
+    {
+        var d = Padrao();
+        for (var i = 0; i < 3; i++)
+        {
+            d.NoAccount();
+        }
+
+        d.SuspeitaRecaiSobreAConta.Should().BeTrue("nada resolveu ainda, nem uma vez");
+    }
+
+    [Fact]
+    public void Lote_que_nunca_entregou_mantem_a_suspeita_forte()
+    {
+        var d = Padrao();
+        for (var i = 0; i < 3; i++)
+        {
+            d.NoAccount();
+        }
+
+        d.NadaEntregouAinda.Should().BeTrue();
+        d.TotalDelivered.Should().Be(0);
+    }
+
     [Fact]
     public void Entrega_no_meio_absolve_a_lista()
     {
