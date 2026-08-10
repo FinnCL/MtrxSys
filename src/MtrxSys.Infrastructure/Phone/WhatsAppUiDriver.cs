@@ -652,8 +652,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// </remarks>
     private async Task AcordarAparelhoAsync(CancellationToken ct)
     {
-        await _adb.ShellAsync("input keyevent KEYCODE_WAKEUP", ct);
-        await _adb.ShellAsync("wm dismiss-keyguard", ct);
+        // Os dois numa linha só, pelo mesmo motivo do DumpUiAsync: cada ShellAsync é um processo `adb`
+        // novo no PC, e isto passou a rodar antes de CADA envio. São comandos independentes e sem
+        // decisão entre eles — não há o que inspecionar no meio que justifique pagar dois processos.
+        await _adb.ShellAsync("input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard", ct);
         // A animação de destravar leva um instante, e um dump tirado no meio dela lê a tela antiga.
         await Task.Delay(500, ct);
     }
