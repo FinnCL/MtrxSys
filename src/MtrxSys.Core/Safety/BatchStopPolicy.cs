@@ -85,6 +85,30 @@ public sealed class BatchStopPolicy(int failureLimit)
     /// </remarks>
     public bool AcabouDeAcusarAparelho => ConsecutiveDeviceFailures == LimiarSequencia;
 
+    /// <summary>Cruzou AGORA o limiar de números NEGADOS seguidos: a suspeita deixou de ser da lista e
+    /// passou a ser do conjunto. Grita uma vez só, pela mesma razão do alerta de aparelho.</summary>
+    /// <remarks>
+    /// 🔴 O CONTADOR EXISTIA E NINGUÉM LIA. <see cref="ConsecutiveNoAccount"/> era incrementado, tinha
+    /// teste, e nenhum consumidor em produção: uma lista inteira sendo recusada rodava até o fim sem
+    /// alarme nenhum. MEDIDO operando em 2026-08-10 — dois contatos seguidos negados nas duas formas do
+    /// número, ambos JÁ na agenda do aparelho, e só a desconfiança do operador interrompeu o lote.
+    ///
+    /// <para>Por que 3 negados seguidos merecem alarme, se um negado é rotina: um número morto não
+    /// prevê nada sobre o próximo (é por isso que ele NÃO alimenta o alerta de aparelho). Três seguidos
+    /// preveem — a chance de três números independentes estarem mortos em sequência é baixa perto da
+    /// chance de haver uma causa comum: lista de origem ruim, ou o cache do WhatsApp envenenado por
+    /// contato que um dia foi gravado na agenda em forma que o app não resolve (ver
+    /// <c>WhatsAppContactsReader.SaveContactAsync</c>, medido em 2026-08-05).</para>
+    ///
+    /// <para>E o custo de seguir sem saber é o padrão que este arquivo inteiro tenta evitar: cada
+    /// contato negado abre conversa, e conversa atrás de conversa para número que não existe é
+    /// enumeração. Numa lista de 87 são até 174 aberturas sem uma entrega.</para>
+    ///
+    /// <para>AVISA, não trava — mesma doutrina do alerta de aparelho e mesma decisão do operador em
+    /// 2026-08-07. Quem quiser parada automática já tem o <c>parar N</c>.</para>
+    /// </remarks>
+    public bool AcabouDeAcusarLista => ConsecutiveNoAccount == LimiarSequencia;
+
     /// <summary>Parar agora? Só quando o operador pediu um teto explícito.</summary>
     public bool ShouldStop => _teto > 0 && ConsecutiveFailures >= _teto;
 }

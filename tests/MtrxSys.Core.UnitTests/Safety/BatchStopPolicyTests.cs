@@ -122,4 +122,54 @@ public sealed class BatchStopPolicyTests
         d.DeviceFailure();
         d.ShouldStop.Should().BeFalse();
     }
+
+    // 🔴 O contador de recusados EXISTIA e ninguém o lia: uma lista inteira sendo negada rodava até o
+    // fim sem alarme. Aconteceu operando em 2026-08-10, e só a desconfiança do operador parou o lote.
+    [Fact]
+    public void Tres_numeros_negados_seguidos_acusam_a_LISTA()
+    {
+        var d = Padrao();
+        d.NoAccount();
+        d.NoAccount();
+        d.AcabouDeAcusarLista.Should().BeFalse("dois pode ser coincidência de lista fria");
+
+        d.NoAccount();
+        d.AcabouDeAcusarLista.Should().BeTrue("três seguidos preveem uma causa comum, não três acasos");
+
+        d.NoAccount();
+        d.AcabouDeAcusarLista.Should().BeFalse(
+            "grita UMA vez: repetir a cada contato vira ruído que a pessoa aprende a pular, e junto "
+            + "com ele ela pula o resto da tela");
+    }
+
+    [Fact]
+    public void Entrega_no_meio_absolve_a_lista()
+    {
+        // Uma entrega prova que o aparelho fala com o WhatsApp e que a lista não é toda lixo. Sem este
+        // zeramento, um lote longo acumularia recusas espalhadas e acusaria a lista sem motivo.
+        var d = Padrao();
+        d.NoAccount();
+        d.NoAccount();
+        d.Delivered();
+        d.NoAccount();
+
+        d.ConsecutiveNoAccount.Should().Be(1);
+        d.AcabouDeAcusarLista.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Falha_de_aparelho_no_meio_nao_apaga_o_rastro_da_lista()
+    {
+        // O espelho do teste que protege o contador de aparelho. Se um zerasse o outro, o alerta some
+        // exatamente na situação mista, que é a mais difícil de diagnosticar no olho.
+        var d = Padrao();
+        d.NoAccount();
+        d.DeviceFailure();
+        d.NoAccount();
+        d.DeviceFailure();
+        d.NoAccount();
+
+        d.ConsecutiveNoAccount.Should().Be(3);
+        d.AcabouDeAcusarLista.Should().BeTrue();
+    }
 }

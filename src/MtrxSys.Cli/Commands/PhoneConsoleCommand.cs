@@ -1458,6 +1458,23 @@ internal sealed class PhoneConsoleCommand(
                 // O aviso fica porque falha de APARELHO é a única que prevê o próximo contato: tela
                 // bloqueada continua bloqueada. Sem ele, um celular travado no meio do lote só seria
                 // descoberto no fim, com trinta linhas vermelhas e nenhuma entrega.
+                // 🔴 LISTA SENDO RECUSADA EM SEQUÊNCIA. Um número negado é rotina e não prevê nada
+                // sobre o próximo. Três seguidos preveem: a causa provável deixou de ser "esses números
+                // morreram" e passou a ser comum aos três. Sem este aviso o lote seguia até o fim
+                // abrindo conversa para cada um, que é a enumeração que o disjuntor existe pra evitar —
+                // 87 contatos viram até 174 aberturas sem UMA entrega.
+                if (disjuntor.AcabouDeAcusarLista)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[yellow]atenção: {disjuntor.ConsecutiveNoAccount} números seguidos recusados "
+                        + "como \"sem conta\".[/] [grey]isso raramente é coincidência. confira, nesta "
+                        + "ordem: 1. abra o WhatsApp NO CELULAR e procure um desses contatos — se ele "
+                        + "existe lá, o problema não é a lista. 2. veja a tela salva que o erro aponta, "
+                        + "pra saber o que o app mostrou de verdade. 3. lista de origem duvidosa? o lote "
+                        + "continua, mas cada recusa abre uma conversa à toa —[/] Ctrl+C [grey]interrompe, "
+                        + "e[/] parar 5 [grey]faz o lote parar sozinho da próxima vez.[/]");
+                }
+
                 if (disjuntor.AcabouDeAcusarAparelho)
                 {
                     AnsiConsole.MarkupLine(
