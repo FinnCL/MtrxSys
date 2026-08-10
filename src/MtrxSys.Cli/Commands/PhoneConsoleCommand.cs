@@ -3,7 +3,6 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using MtrxSys.Cli.Infrastructure;
 using MtrxSys.Core.Application.Abstractions;
@@ -31,15 +30,16 @@ namespace MtrxSys.Cli.Commands;
 /// o <c>uiautomator dump</c> grava num arquivo fixo dentro do aparelho e uma leria a tela da outra.</para>
 /// </remarks>
 /// <remarks>
-/// <para>O <c>IServiceScopeFactory</c> em vez do <c>IContactRepository</c> direto NÃO é preciosismo: o
-/// repositório é Scoped e o <c>TypeResolver</c> do CLI resolve do provider RAIZ, então injetá-lo aqui
-/// o tornaria cativo — um <c>DbContext</c> vivo pelas HORAS que o console fica aberto, segurando
-/// conexão e acumulando change tracker. Escopo curto por consulta é o certo.</para>
+/// <para>NÃO fala com o banco, e isso é escopo, não limitação: a lista vem COLADA. O console já teve um
+/// comando <c>sistema</c> que trazia os contatos importados pelo painel, removido a pedido do operador
+/// em 2026-08-10. Se voltar a ser preciso, o caminho é <c>IServiceScopeFactory</c> e escopo curto por
+/// consulta, nunca <c>IContactRepository</c> direto: o repositório é Scoped e o <c>TypeResolver</c> do
+/// CLI resolve do provider RAIZ, então injetá-lo aqui o tornaria cativo, com um <c>DbContext</c> vivo
+/// pelas HORAS que o console fica aberto.</para>
 /// </remarks>
 internal sealed class PhoneConsoleCommand(
     IPhoneOrchestrator phone,
     IOptions<PhoneOptions> options,
-    IServiceScopeFactory escopos,
     CancellationTokenProvider cancellation) : AsyncCommand<PhoneConsoleCommand.Settings>
 {
     internal sealed class Settings : CommandSettings
@@ -76,6 +76,10 @@ internal sealed class PhoneConsoleCommand(
         public int? HoraFim { get; init; }
         public bool Agenda { get; init; } = true;
         public bool DigitacaoHumana { get; init; } = true;
+
+        // Anulável pelo mesmo motivo do Bloco: false é escolha legítima. Sessão anterior ao campo tem
+        // null e cai no default LIGADO; quem desligou continua desligado.
+        public bool? Bip { get; init; }
     }
 
     private const string TokenNome = "{nome}";
@@ -179,6 +183,21 @@ internal sealed class PhoneConsoleCommand(
     /// do operador (2026-07-30). Sessão salva com o valor desligado continua desligada: escolha
     /// explícita ganha do default.</summary>
     private bool _agenda = true;
+
+    /// <summary>Bip a cada mensagem, para acompanhar o lote de ouvido.</summary>
+    /// <remarks>
+    /// 🔴 O PONTO É NÃO PRECISAR OLHAR. Entre uma mensagem e a seguinte passam 150-360s, e um bloco
+    /// leva ~1h: ninguém fica encarando o terminal esse tempo todo. Sem som, a única forma de saber que
+    /// o lote anda é voltar na tela, e é aí que um lote que morreu às 2h só é descoberto às 8h.
+    ///
+    /// <para>DOIS TONS, e não um: o bip existe pra informar de longe, e "saiu" e "falhou" mandam a
+    /// pessoa a lugares diferentes. Um bip único obrigaria a conferir a tela pra saber qual foi, ou
+    /// seja, devolveria o problema que o som resolve. Agudo curto = saiu; dois graves = não saiu.</para>
+    ///
+    /// <para>Desligável porque este console roda em qualquer horário (a janela vem 0h-24h por decisão
+    /// do operador), e bip de madrugada na casa dos outros é motivo pra fechar a janela do lote.</para>
+    /// </remarks>
+    private bool _bip = true;
 
     /// <summary>Digitar caractere a caractere (ligada) ou entregar o texto pronto pelo deep link
     /// (desligada). Espelha <see cref="PhoneOptions.HumanTyping"/>, que o driver lê a cada envio.</summary>
@@ -350,6 +369,18 @@ internal sealed class PhoneConsoleCommand(
                         AnsiConsole.MarkupLine($"gravar na agenda antes de enviar: [bold]{(_agenda ? "ligado" : "desligado")}[/]");
                         Salvar(serial);
                         break;
+                    case "bip" or "som":
+                        _bip = !_bip;
+                        AnsiConsole.MarkupLine(_bip
+                            ? "bip a cada mensagem: [bold]ligado[/] [grey](agudo curto = saiu; dois graves "
+                              + "= não saiu). dá pra acompanhar o lote sem olhar a tela.[/]"
+                            : "bip a cada mensagem: [grey]desligado (lote silencioso).[/]");
+                        if (_bip)
+                        {
+                            await BiparAsync(true); // amostra na hora: som que ninguém ouviu não foi configurado.
+                        }
+                        Salvar(serial);
+                        break;
                     case "acentos" or "semacento":
                         TirarAcentos();
                         Salvar(serial);
@@ -375,13 +406,6 @@ internal sealed class PhoneConsoleCommand(
                         break;
                     case "sair" or "exit" or "quit":
                         sair = true;
-                        break;
-                    case "sistema" or "s":
-                        // PERGUNTA antes de substituir, como os menus 4 e 5 já faziam. Sem isto, um `s`
-                        // digitado por engano apagava uma lista curada e SALVAVA por cima — destrutivo,
-                        // silencioso e sem desfazer. O `+` explícito continua somando direto.
-                        await CarregarDoSistemaAsync(somar: partes is [_, "+", ..] || QuerAcrescentar(), ct);
-                        Salvar(serial);
                         break;
                     case "gravar" or "g":
                         await GravarAgendaAsync(ct);
@@ -532,9 +556,10 @@ internal sealed class PhoneConsoleCommand(
         // IsPlausibleBrazilian e NÃO o Validate estrito: o legado de 12 dígitos, SEM o 9º, é o caso
         // normal na base fria, e exigir validade de hoje já fez um grupo inteiro importar zero contatos.
         //
-        // Só vale para o que é COLADO. Contato vindo do banco (comando `sistema`) não passa por aqui de
-        // propósito: ele veio do WhatsApp, que não rotearia número inexistente, e revalidar formato ali
-        // descartaria contato bom. Rigor se calibra pela origem do dado.
+        // Vale para TODO contato, porque colar é a única entrada que existe. Enquanto havia o comando
+        // `sistema`, o que vinha do banco pulava esta validação de propósito: aquilo veio do WhatsApp,
+        // que não rotearia número inexistente, e revalidar formato ali descartaria contato bom. Fica
+        // registrado porque a regra é a mesma se a entrada voltar: rigor se calibra pela origem do dado.
         if (!Telefones.IsPlausibleBrazilian("+" + numero))
         {
             return (null, "não parece um celular brasileiro (confira o 55, o DDD e o 9)");
@@ -808,7 +833,7 @@ internal sealed class PhoneConsoleCommand(
     {
         if (_contatos.Count == 0)
         {
-            AnsiConsole.MarkupLine("[red]sem contatos.[/] use [bold]contatos[/] ou [bold]sistema[/] antes.");
+            AnsiConsole.MarkupLine("[red]sem contatos.[/] use [bold]contatos[/] antes.");
             return;
         }
 
@@ -969,8 +994,7 @@ internal sealed class PhoneConsoleCommand(
     {
         if (_contatos.Count == 0)
         {
-            AnsiConsole.MarkupLine(
-                "[red]sem contatos.[/] use [bold]sistema[/] (traz do banco) ou [bold]contatos[/] (cola a lista).");
+            AnsiConsole.MarkupLine("[red]sem contatos.[/] use [bold]contatos[/] (cola a lista).");
             return;
         }
         if (!await AparelhoPronto(ct))
@@ -979,10 +1003,11 @@ internal sealed class PhoneConsoleCommand(
         }
 
         // 🔴 CONFIRMAÇÃO OBRIGATÓRIA, e não é simetria com o `enviar` por gosto. Gravar escreve na
-        // agenda de um celular REAL, que sincroniza pra conta Google: é ação difícil de desfazer, e o
-        // `sistema` traz a base inteira com uma tecla (549 contatos na base do operador em 2026-08-05).
-        // Cada contato custa 3-4 chamadas adb, então a base inteira é DEZENAS DE MINUTOS de laço. Sem
-        // este passo, um `g` distraído logo depois de um `s` vira meia hora de escrita não intencional.
+        // agenda de um celular REAL, que sincroniza pra conta Google: é ação difícil de desfazer. Cada
+        // contato custa 3-4 chamadas adb, então uma lista grande é DEZENAS DE MINUTOS de laço — e listas
+        // grandes acontecem (549 contatos colados de uma vez, na base do operador em 2026-08-05). Sem
+        // este passo, um `g` distraído logo depois de uma colagem vira meia hora de escrita não
+        // intencional.
         var estimativaMin = Math.Max(1, _contatos.Count * 3 / 60);
         AnsiConsole.MarkupLine(
             $"vai gravar [bold]{_contatos.Count}[/] contato(s) na agenda do aparelho "
@@ -1078,126 +1103,6 @@ internal sealed class PhoneConsoleCommand(
         }
 
         return (criados, jaTinha, [.. falhas]);
-    }
-
-    /// <summary>Lista vazia: nada a proteger. Com conteúdo, pergunta, e o padrão (Enter) é o modo NÃO
-    /// destrutivo — mesma doutrina do <see cref="PerguntarModo"/>, que existe porque perder uma lista
-    /// carregada é caro e não tem desfazer.</summary>
-    private bool QuerAcrescentar()
-    {
-        if (_contatos.Count == 0)
-        {
-            return false;
-        }
-        AnsiConsole.MarkupLine($"[grey]já há {_contatos.Count} contato(s) na lista.[/]");
-        AnsiConsole.MarkupLine("  [bold]1[/] [grey]acrescentar (mantém o que já existe)[/]");
-        AnsiConsole.MarkupLine("  [bold]2[/] [red]apagar tudo[/] [grey]e trazer do sistema[/]");
-        AnsiConsole.Markup("[grey]escolha (Enter = acrescentar):[/] ");
-        return (Console.ReadLine()?.Trim() ?? "") is not ['2', ..];
-    }
-
-    /// <summary>Traz para a lista os contatos que o SISTEMA já tem (importados dos grupos pelo painel).</summary>
-    /// <remarks>
-    /// <para>Escopo curto por consulta — ver a nota do <c>IServiceScopeFactory</c> no topo da classe.</para>
-    /// <para>Vem pelo <see cref="ContactFilter"/> padrão, que já esconde descartados e opt-out: montar
-    /// lista com <c>ListAllPhoneStatusAsync</c> ofereceria de volta quem pediu para SAIR.</para>
-    /// <para>Estes contatos NÃO passam pelo <c>ParseContato</c>: vieram do WhatsApp, que não rotearia
-    /// número inexistente, e revalidar formato aqui descartaria o celular legado de 8 dígitos — o erro
-    /// que já fez um grupo inteiro importar zero. Dedup continua valendo, contra o que já está na lista.</para>
-    /// </remarks>
-    private async Task CarregarDoSistemaAsync(bool somar, CancellationToken ct)
-    {
-        using var escopo = escopos.CreateScope();
-        var repo = escopo.ServiceProvider.GetRequiredService<IContactRepository>();
-
-        IReadOnlyList<ContactGroupTag> grupos;
-        try
-        {
-            grupos = await repo.ListGroupTagsAsync(ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // O banco é do stack em Docker; console aberto com os containers no chão é rotina. Dizer o
-            // que houve evita o diagnóstico virar "o comando não funciona".
-            AnsiConsole.MarkupLine($"[red]não consegui ler o banco:[/] {ex.Message.EscapeMarkup()}");
-            AnsiConsole.MarkupLine("[grey]os containers estão no ar? (start.cmd)[/]");
-            return;
-        }
-
-        string? grupo = null;
-        if (grupos.Count > 0)
-        {
-            var t = new Table().Border(TableBorder.Rounded).AddColumn("n").AddColumn("grupo").AddColumn("contatos");
-            t.AddRow("[bold]0[/]", "[bold]todos[/]", grupos.Sum(g => g.Count).ToString(CultureInfo.InvariantCulture));
-            for (var i = 0; i < grupos.Count; i++)
-            {
-                t.AddRow(
-                    $"[bold]{i + 1}[/]",
-                    grupos[i].GroupTag.EscapeMarkup(),
-                    grupos[i].Count.ToString(CultureInfo.InvariantCulture));
-            }
-            AnsiConsole.Write(t);
-            AnsiConsole.Markup("[grey]número do grupo (Enter = todos):[/] ");
-            var escolha = Console.ReadLine()?.Trim();
-            if (int.TryParse(escolha, out var n) && n >= 1 && n <= grupos.Count)
-            {
-                grupo = grupos[n - 1].GroupTag;
-            }
-        }
-
-        var doBanco = await repo.ListByFilterAsync(new ContactFilter(GroupTag: grupo), ct);
-        if (!somar)
-        {
-            _contatos.Clear();
-        }
-
-        var jaTem = _contatos.Select(c => c.Numero).ToHashSet(StringComparer.Ordinal);
-        var trazidos = 0;
-        var repetidos = 0;
-        var estranhos = new List<string>();
-        foreach (var c in doBanco)
-        {
-            var digitos = new string([.. c.Phone.E164.Where(char.IsDigit)]);
-            if (!jaTem.Add(digitos))
-            {
-                repetidos++;
-                continue;
-            }
-            // AVISA, mas NÃO descarta. "veio do banco, logo é confiável" é quase verdade e a exceção
-            // está documentada: em 2026-07-27 um número da Moldávia (37368544314) virou contato ATIVO,
-            // ganhou entrada na agenda Google e foi enfileirado — só não recebeu porque alguém olhou a
-            // lista à mão. Descartar aqui repetiria o erro oposto, o que apagou um grupo inteiro na
-            // importação por rejeitar o celular legado. Contar e mostrar deixa a decisão com quem sabe.
-            if (!Telefones.IsPlausibleBrazilian("+" + digitos))
-            {
-                estranhos.Add(digitos);
-            }
-            _contatos.Add(new Contato(digitos, string.IsNullOrWhiteSpace(c.Name) ? null : c.Name));
-            trazidos++;
-        }
-
-        AnsiConsole.MarkupLine(
-            $"[green]{trazidos}[/] contato(s) do sistema"
-            + (grupo is null ? "" : $" [grey](grupo {grupo.EscapeMarkup()})[/]")
-            + $"; lista agora tem [bold]{_contatos.Count}[/]."
-            + (repetidos > 0 ? $" [grey]{repetidos} já estava(m) na lista.[/]" : ""));
-
-        if (estranhos.Count > 0)
-        {
-            AnsiConsole.MarkupLine(
-                $"[yellow]atenção:[/] {estranhos.Count} não parece(m) celular brasileiro. "
-                + "[grey]vieram assim do banco e foram trazidos; confira antes de gravar ou disparar.[/]");
-            MostrarAlguns(estranhos.Count, 10, i => $"  [yellow]{estranhos[i]}[/]", " suspeito(s)");
-        }
-
-        // 🔴 SEM o gate de chip. O DispatchEngine filtra por ImportedByPhone (só dispara pra contato
-        // importado PELO chip conectado), que é a defesa anti-463; aqui não dá pra aplicar, porque o
-        // engine físico não passa pelo WAHA e o console não tem como saber que número está no aparelho.
-        // Dito em voz alta em vez de escondido: quem opera vários chips precisa saber que esta lista
-        // pode conter contato de outro chip.
-        AnsiConsole.MarkupLine(
-            "[grey]sem filtro por chip: se você opera mais de um número, a lista pode ter contato "
-            + "importado por outro.[/]");
     }
 
     // ── Envio ────────────────────────────────────────────────────────────────────────────────────
@@ -1490,6 +1395,16 @@ internal sealed class PhoneConsoleCommand(
                 // são a mesma pessoa; a de fora do lote não ficava sabendo.
                 Registrar(log, serial, contato with { Numero = numeroUsado }, variante, texto, r);
 
+                // DEPOIS do registro em disco, de propósito: o CSV é o que sobrevive a tudo, o bip é
+                // conforto. Se a máquina morrer entre os dois, o que se perde é o som.
+                // "Incerto" bipa como FALHA porque é o resultado que pede uma pessoa: alguém precisa
+                // abrir a conversa no aparelho e conferir. Bipar como sucesso esconderia justamente o
+                // caso que não pode ser resolvido sozinho.
+                if (_bip)
+                {
+                    await BiparAsync(r.Sent);
+                }
+
                 // 🔴 AVISA, NÃO TRAVA. Antes, três falhas seguidas interrompiam o lote. Medido em
                 // 2026-08-07: três números na forma errada mataram uma execução em 22/30 com o aparelho
                 // perfeito, e 15 contatos bons ficaram sem receber. Se falhou, nada saiu — seguir para
@@ -1616,6 +1531,55 @@ internal sealed class PhoneConsoleCommand(
         MostrarAlguns(repetidos.Count, 5,
             i => $"  [yellow]{repetidos[i].Contato.Numero}[/] {(repetidos[i].Contato.Nome ?? "").EscapeMarkup()}");
         AnsiConsole.MarkupLine("[yellow]tire com[/] x [yellow]se não quiser mandar de novo.[/]");
+    }
+
+    /// <summary>A faixa que o <see cref="ComJitter"/> pode sortear, como "12-18". Deriva dos MESMOS
+    /// limites do sorteio: texto escrito à mão divergiria do código no primeiro ajuste da folga, e aí a
+    /// tela estaria mentindo sobre o que o sistema faz.</summary>
+    private static string FaixaJitter(int centro, double folga) =>
+        centro <= 0
+            ? "0"
+            : $"{Math.Max(1, (int)Math.Floor(centro * (1 - folga)))}-"
+              + $"{Math.Max(1, (int)Math.Ceiling(centro * (1 + folga)))}";
+
+    /// <summary>Bip de acompanhamento: agudo curto quando saiu, dois graves quando não saiu.</summary>
+    /// <remarks>
+    /// 🔴 NUNCA PROPAGA. Um lote de horas não pode morrer porque a máquina não tem alto-falante, ou
+    /// porque a saída foi redirecionada pra arquivo. O bip é conforto, a mensagem é o trabalho.
+    /// <para>`Console.Beep(freq, ms)` só existe no Windows; fora dele resta o `\a`, que o terminal
+    /// decide se toca. A guarda de plataforma é obrigatória: sem ela o analisador (CA1416) reprova a
+    /// build, e com razão, porque a chamada estouraria em Linux.</para>
+    /// <para>Bloqueia pela duração do tom, e é por isso que ele é curto: 120ms uma vez a cada 150-360s
+    /// não desloca o ritmo, mas um tom longo entraria na conta do intervalo entre mensagens.</para>
+    /// </remarks>
+    private static async Task BiparAsync(bool saiu)
+    {
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                Console.Write('\a');
+                return;
+            }
+            if (saiu)
+            {
+                Console.Beep(880, 120);
+                return;
+            }
+            // Dois graves: distingue de longe, sem depender de a pessoa lembrar de um tom só.
+            Console.Beep(330, 180);
+            // `await` e não `Thread.Sleep`: o intervalo entre os dois tons não tem por que segurar a
+            // thread. `Console.Beep` em si já bloqueia (é a API do Windows), e não há o que fazer
+            // quanto a isso — mas somar uma espera SÍNCRONA a ela seria escolher bloquear de graça,
+            // dentro de um método assíncrono, num laço que espera cancelamento por Ctrl+C.
+            await Task.Delay(90);
+            Console.Beep(330, 180);
+        }
+        catch (Exception ex) when (ex is PlatformNotSupportedException or IOException
+                                      or ArgumentOutOfRangeException)
+        {
+            // Sem som disponível: segue o lote em silêncio. A tela e o CSV continuam contando tudo.
+        }
     }
 
     /// <summary>Sorteia em torno de um centro, com a folga percentual dada. Nunca devolve menos de 1.</summary>
@@ -1811,10 +1775,17 @@ internal sealed class PhoneConsoleCommand(
             return;
         }
         (_bloco, _pausaMin) = (n, min);
+        // 🔴 A FAIXA SORTEADA NO RAMO DE SUCESSO, e não só no de erro. Ela estava explicada apenas na
+        // mensagem de uso, ou seja, só via quem errava o comando. Quem acertava configurava 15 e 30, via
+        // sair 14 e 29, e concluía que o sistema não obedece — relatado operando em 2026-08-10. Número
+        // sorteado sem a faixa à vista não parece sorteio, parece defeito.
         AnsiConsole.MarkupLine(
             _bloco == 0
                 ? "blocos: [bold]desligados[/] [grey](fluxo contínuo)[/]."
-                : $"blocos de [bold]{_bloco}[/] mensagem(ns), pausa de [bold]{_pausaMin}[/] min entre eles.");
+                : $"blocos de [bold]{_bloco}[/] mensagem(ns), pausa de [bold]{_pausaMin}[/] min entre eles. "
+                  + $"[grey]cada bloco sorteia em volta disso: {FaixaJitter(_bloco, JitterBloco)} "
+                  + $"mensagens e {FaixaJitter(_pausaMin, JitterPausa)} min. repetir os números cravados "
+                  + "seria o único trecho regular da série, que é o padrão que a pausa desmancha.[/]");
     }
 
     private void Janela(string[] partes)
@@ -1910,13 +1881,14 @@ internal sealed class PhoneConsoleCommand(
             _digitacaoHumana
                 ? "[bold]ligada[/] [grey](só ASCII)[/]"
                 : "[grey]desligada[/] [green](aceita acento)[/]");
+        t.AddRow("[bold]bip[/]", "aviso sonoro por mensagem",
+            _bip ? "[bold]ligado[/] [grey](acompanha de ouvido)[/]" : "[grey]desligado[/]");
         t.AddRow("[bold]4[/]", "contatos",
             _contatos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_contatos.Count}[/] na lista");
         t.AddRow("[bold]5[/]", "templates",
             _textos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_textos.Count}[/] template(s)");
         t.AddEmptyRow();
         // Letras porque os dígitos acabaram, e renumerar 1..9 quebraria a memória de quem já usa.
-        t.AddRow("[bold]s[/]", "sistema", "[grey]traz os contatos importados no painel[/]");
         t.AddRow("[bold]g[/]", "gravar", "[grey]grava a lista na agenda do aparelho, sem enviar[/]");
         t.AddEmptyRow();
         t.AddRow("[bold]6[/]", "ver", "[grey]confere o que está carregado[/]");
@@ -2250,7 +2222,6 @@ internal sealed class PhoneConsoleCommand(
     private static void Comandos()
     {
         var t = new Table().Border(TableBorder.Rounded).AddColumn("comando").AddColumn("o que faz");
-        t.AddRow("sistema [grey]| sistema +[/]", "traz os contatos do banco (substitui | soma). pergunta o grupo");
         t.AddRow("gravar", "grava a lista na agenda do aparelho, SEM enviar nada");
         t.AddRow("contatos [grey]| contatos +[/]", "cola a lista (substitui | soma). formato: numero ou numero;nome");
         t.AddRow("textos [grey]| textos +[/]", $"cola os templates (substitui | soma). {TokenNome} vira o nome do contato");
@@ -2265,6 +2236,7 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("teto <n>", "cota desta execução: manda os n primeiros e deixa o resto na lista");
         t.AddRow("parar <n>", "falhas seguidas que interrompem o lote (default 0 = nunca interrompe)");
         t.AddRow("agenda", "liga/desliga gravar o contato na agenda antes de enviar");
+        t.AddRow("bip [grey]| som[/]", "liga/desliga o aviso sonoro (agudo = saiu, dois graves = não saiu)");
         t.AddRow("x [grey][[contato|texto]] [[n]][/]", "exclui UM item (pergunta se você não disser qual)");
         t.AddRow("limpar [grey][[contatos|textos|tudo]][/]", "esvazia o que você pedir");
         t.AddRow("ajuda", "o passo a passo explicado, o mesmo que aparece ao abrir");
@@ -2367,6 +2339,10 @@ internal sealed class PhoneConsoleCommand(
             // ("nunca interrompa") e também o padrão, então sessão antiga e escolha explícita levam ao
             // mesmo lugar.
             _pararEm = Math.Clamp(e.PararEm, 0, 30);
+            if (e.Bip is { } bip)
+            {
+                _bip = bip;
+            }
             if (e.Bloco is { } b)
             {
                 _bloco = Math.Clamp(b, 0, 200);
@@ -2412,6 +2388,7 @@ internal sealed class PhoneConsoleCommand(
                 HoraFim = _horaFim,
                 Agenda = _agenda,
                 DigitacaoHumana = _digitacaoHumana,
+                Bip = _bip,
             };
             File.WriteAllText(Path.Combine(Pasta, $"{Higienizar(serial)}.json"), JsonSerializer.Serialize(e));
         }

@@ -164,9 +164,8 @@ como-fazer.
 
 O `phone send` resolve uma mensagem. Para uma **lista**, existe o console.
 
-> **Traz do sistema, e grava sem disparar.** Duas ações resolvem o fluxo "importei no painel, quero no
-> aparelho": **`sistema`** (ou `s`) traz os contatos que o painel importou dos grupos, perguntando o
-> grupo; **`gravar`** (ou `g`) grava a lista inteira na agenda do aparelho **sem enviar nada**.
+> **Grava sem disparar.** O **`gravar`** (ou `g`) grava a lista inteira na agenda do aparelho **sem
+> enviar nada**.
 > Gravar antes é melhor que deixar o `enviar` gravar: ele grava 2s antes de cada mensagem, e o contato
 > ainda precisa descer pela conta Google até o WhatsApp do aparelho (é a mesma espera de 180s que o
 > `DispatchEngine` faz). Grave o lote, espere alguns minutos, dispare depois.
