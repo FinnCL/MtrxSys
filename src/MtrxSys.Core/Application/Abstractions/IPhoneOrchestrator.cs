@@ -328,6 +328,26 @@ public sealed record WhatsAppSendResult(bool Sent, string? DeliveryStatus, strin
     /// </remarks>
     public bool AbertoPeloRegistro { get; init; }
 
+    /// <summary>O PRÓPRIO APP declarou na tela que a conta está restringida.</summary>
+    /// <remarks>
+    /// 🔴 MEDIDO em 2026-08-10, aparelho RQ8M908C0ZX, no meio de um lote: depois de 30 entregas normais,
+    /// a tela da conversa passou a trazer "Sua conta foi restringida. Você não pode…", e mais adiante o
+    /// app foi inteiro para a tela de recurso, com o botão "PEDIR ANÁLISE".
+    ///
+    /// <para>Isto encerra uma investigação inteira que partiu da premissa ERRADA de que o aparelho não
+    /// mostra restrição — premissa que veio de olhar o app à mão e não achar aviso. Ele mostra, dentro
+    /// da conversa, e a captura automática de tela é que trouxe a prova.</para>
+    ///
+    /// <para>É a única condição de CERTEZA que o driver consegue emitir sobre a conta: não é inferência
+    /// por sequência de falhas, é o app declarando. Por isso, diferente de tudo mais, ela autoriza PARAR
+    /// o lote: com a conta restrita nenhuma mensagem sai, e insistir é o que vira banimento.</para>
+    /// </remarks>
+    public bool ContaRestringida { get; init; }
+
+    /// <summary>O app declarou restrição na tela. Falha do CHIP, não do número nem do aparelho.</summary>
+    public static WhatsAppSendResult Restringida(string error) =>
+        new(false, null, error) { ContaRestringida = true };
+
     public static WhatsAppSendResult Ok(string? deliveryStatus) => new(true, deliveryStatus, null);
 
     /// <summary>Falha CONCLUSIVA: nada saiu, e tentar de novo é seguro.</summary>

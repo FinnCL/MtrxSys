@@ -1446,8 +1446,13 @@ internal sealed class PhoneConsoleCommand(
                 // que é o pior desfecho possível com contato frio.
                 // Antes isto não tinha como ser distinguido: o `Sent` era bool e "não saiu" chegava aqui
                 // igual a "não sei se saiu".
+                // 🔴 CONTA RESTRITA CANCELA A SEGUNDA CHANCE. Ela existe pra descobrir se o número está
+                // na outra forma do 9º dígito — pergunta que só faz sentido se o app CONSEGUE responder.
+                // Com a conta restrita nenhuma forma funciona, e insistir seria só mais uma conversa
+                // aberta contra um chip já sob restrição. MEDIDO em 2026-08-10: 22 dos 23 fracassos
+                // daquele lote pagaram essa tentativa extra à toa.
                 var numeroUsado = contato.Numero;
-                if (!r.Sent && !r.Uncertain
+                if (!r.Sent && !r.Uncertain && !r.ContaRestringida
                     && BrazilPhoneValidator.AlternateBrazilianForm(contato.Numero) is { } alternativo)
                 {
                     AnsiConsole.MarkupLine(
@@ -1494,6 +1499,30 @@ internal sealed class PhoneConsoleCommand(
                 // DispatchEngine aplica ao guard de entrega no caminho de UI, mantido desligado até
                 // haver distribuição observada.
                 var contradito = false;
+
+                // 🔴 PARA NA HORA, e desta vez a parada é justificada: não é inferência por sequência
+                // de falhas, é o PRÓPRIO APP declarando na tela que a conta está restringida.
+                //
+                // MEDIDO em 2026-08-10: o lote entregou 30, o chip foi restringido no meio, e seguiu
+                // por mais 33 contatos abrindo conversa sem nenhuma chance de entrega — cada um com a
+                // segunda chance dobrando as aberturas, contra um chip JÁ sob restrição. Foi o operador
+                // que teve de olhar o log e entender. Nada disso pode se repetir.
+                //
+                // Nem tenta a outra forma do número: com a conta restrita nenhuma forma funciona, e a
+                // segunda tentativa seria só mais uma conversa aberta.
+                if (r.ContaRestringida)
+                {
+                    Registrar(log, serial, contato, variante, texto, r, contradito: false);
+                    AnsiConsole.MarkupLine(
+                        $"[red]({i + 1}/{plano.Count}) LOTE INTERROMPIDO: o WhatsApp declarou na tela "
+                        + $"que ESTA CONTA está restringida.[/] [grey]{(r.Error ?? "").EscapeMarkup()}[/]");
+                    AnsiConsole.MarkupLine(
+                        "[yellow]não é o número nem o aparelho, é o chip.[/] [grey]enquanto durar, "
+                        + "nenhuma mensagem sai para ninguém. os contatos que faltam continuam na "
+                        + "lista, então nada se perdeu ao parar. NÃO dispare deste chip até normalizar: "
+                        + "insistir é o que transforma restrição temporária em banimento.[/]");
+                    break;
+                }
 
                 if (r.Sent)
                 {

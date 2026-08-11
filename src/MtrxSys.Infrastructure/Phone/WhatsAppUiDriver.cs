@@ -114,6 +114,20 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             "isn't on whatsapp", "is not on whatsapp", "not on whatsapp",
         ];
 
+        // 🔴 A CONTA DECLARADA RESTRITA VEM PRIMEIRO, antes de qualquer outra leitura. É a única
+        // condição de CERTEZA sobre o chip que existe aqui, e ela explica TODAS as outras: com a conta
+        // restrita o campo de mensagem some, o botão de enviar não aparece, e o número parece morto.
+        // Diagnosticar como "sem conta" ou "aparelho travado" nesse estado é culpar o inocente.
+        if (ContaRestrita(xml))
+        {
+            var telaSalva = GuardarTela(xml);
+            return (WhatsAppSendResult.Restringida(
+                "o WhatsApp declarou NA TELA que ESTA CONTA está restringida. Não é o número, não é o "
+                + "aparelho: é o chip. Enquanto durar, nenhuma mensagem sai para ninguém, e insistir é "
+                + "o que transforma restrição temporária em banimento."
+                + (telaSalva is null ? "" : $" Tela salva em {telaSalva}.")), xml);
+        }
+
         // Aparelho DORMINDO é a causa mais provável num lote sem ninguém por perto: a tela apaga em
         // ~10 min e a pausa entre blocos é maior que isso. O driver acorda antes de cada envio, então
         // chegar aqui bloqueado significa cadeado COM SENHA, que nenhum comando resolve.
@@ -874,6 +888,33 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// existe enquanto a causa real seguisse intocada. Errar para o lado do diagnóstico genérico é
     /// barato, porque a tela capturada continua lá para ser lida.</para>
     /// </remarks>
+    /// <summary>O app está DECLARANDO na tela que a conta foi restringida?</summary>
+    /// <remarks>
+    /// 🔴 MEDIDO em 2026-08-10, Galaxy RQ8M908C0ZX, no meio de um lote de 87. Depois de 30 entregas
+    /// normais, a tela da conversa passou a trazer, entre os nós clicáveis:
+    /// <c>Sua conta foi restringida. Você não pode…</c>. Mais adiante o app foi inteiro para a tela de
+    /// recurso, cujos únicos botões eram <c>Mais opções</c> e <c>PEDIR ANÁLISE</c>.
+    ///
+    /// <para>⚠️ ESTES DOIS SÃO MEDIDOS, ao contrário dos rótulos de <see cref="BotoesQueSoFecham"/>.
+    /// Os demais idiomas são extrapolação e estão aqui só para o caso de aparelho com outro locale;
+    /// quem confirmar, anote a DATA e o APARELHO, como manda o resto deste arquivo.</para>
+    ///
+    /// <para>Casa por TRECHO e sem acento porque a frase é cortada na árvore ("Você não pode…") e o
+    /// texto exato muda com a versão. "pedir analise" entra porque, quando o app vai para a tela de
+    /// recurso, a frase da restrição some e sobra só o botão.</para>
+    /// </remarks>
+    private static bool ContaRestrita(string xml)
+    {
+        var tela = xml.ToLowerInvariant();
+        string[] pistas =
+        [
+            "conta foi restringida", "sua conta foi restringida",
+            "pedir analise", "pedir análise",
+            "account has been restricted", "request a review",
+        ];
+        return pistas.Any(p => tela.Contains(p, StringComparison.Ordinal));
+    }
+
     private static bool TelaBloqueada(string xml) =>
         xml.Contains("com.android.systemui:id/keyguard", StringComparison.OrdinalIgnoreCase)
         || xml.Contains("com.android.systemui:id/lock_icon", StringComparison.OrdinalIgnoreCase)

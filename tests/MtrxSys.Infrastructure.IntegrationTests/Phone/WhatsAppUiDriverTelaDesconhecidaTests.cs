@@ -197,6 +197,46 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
         r.Error.Should().Contain(arquivos[0]);
     }
 
+    // 🔴 MEDIDO EM PRODUÇÃO, 2026-08-10, aparelho RQ8M908C0ZX. Depois de 30 entregas normais o chip foi
+    // restringido no meio do lote, e a tela da conversa passou a trazer a frase abaixo. O lote seguiu
+    // por mais 33 contatos sem chance nenhuma de entrega, cada um ainda pagando a segunda chance.
+    // Diferente de tudo mais neste arquivo, estas pistas NÃO são hipótese: vieram do XML capturado.
+    [Fact]
+    public async Task Conta_restringida_e_declarada_pelo_proprio_app_e_reconhecida()
+    {
+        const string TelaDeRestricao =
+            """
+            <node text="As mensagens e ligações são protegidas" clickable="true" bounds="[0,100][1080,200]"/>
+            <node text="Sua conta foi restringida. Você não pode enviar mensagens" clickable="true" bounds="[0,300][1080,400]"/>
+            """;
+        var adb = new AdbDeUmaTela(TelaDeRestricao);
+        using var driver = new WhatsAppUiDriver(adb, Opts);
+
+        var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
+
+        r.ContaRestringida.Should().BeTrue();
+        r.NoWhatsAppAccount.Should().BeFalse("a culpa não é do número");
+        r.Error.Should().Contain("restringida");
+    }
+
+    [Fact]
+    public async Task Tela_de_recurso_com_PEDIR_ANALISE_tambem_conta_como_restricao()
+    {
+        // Quando o app vai INTEIRO pra tela de recurso, a frase da restrição some e sobra só o botão.
+        // Sem esta pista, o lote voltaria a acusar "aparelho travado" com o aparelho perfeito.
+        const string TelaDeRecurso =
+            """
+            <node text="Mais opções" clickable="true" bounds="[0,0][100,100]"/>
+            <node text="PEDIR ANÁLISE" clickable="true" bounds="[300,900][800,1000]"/>
+            """;
+        var adb = new AdbDeUmaTela(TelaDeRecurso);
+        using var driver = new WhatsAppUiDriver(adb, Opts);
+
+        var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
+
+        r.ContaRestringida.Should().BeTrue();
+    }
+
     [Fact]
     public async Task Captura_acontece_ANTES_do_BACK_que_apaga_a_evidencia()
     {
