@@ -23,6 +23,18 @@ public sealed class ChipHistoryTests
         s.Motivo.Should().Contain("10 dias", "o período de risco máximo precisa aparecer na tela");
     }
 
+    // 🔴 A FRASE tem que bater com o que o painel mostra na linha de cima. "Sem histórico" para um
+    // aparelho que ja disparou hoje seria contradicao na mesma tela.
+    [Fact]
+    public void Chip_que_disparou_hoje_mas_sem_dia_fechado_nao_diz_sem_historico()
+    {
+        var s = ChipHistory.Sugerir(diasAtivos: 1, ultimoDia: null);
+
+        s.Sugestao.Should().Be(ChipHistory.SugestaoChipNovo, "sem dia fechado, não há base pra crescer");
+        s.Motivo.Should().Contain("FECHADO");
+        s.Motivo.Should().NotContain("sem histórico");
+    }
+
     [Fact]
     public void Dia_registrado_mas_sem_nenhum_envio_conta_como_sem_historico()
     {

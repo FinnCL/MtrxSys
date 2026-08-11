@@ -544,7 +544,13 @@ internal sealed class PhoneConsoleCommand(
             {
                 return (Juntar(linhas), false);
             }
-            linhas.Add(l.TrimEnd());
+            // 🔴 ESCAPE PARA LINHA EM BRANCO DENTRO DO TEXTO. A linha vazia já significa "fecha o
+            // template", então ela não pode ao mesmo tempo significar "parágrafo" — é o mesmo caractere
+            // com dois papéis, e um deles tem que ceder. O texto cede pro escape.
+            //
+            // `..` e não `.` porque o ponto sozinho JÁ encerra o bloco (ver FimDoBloco). Dois pontos
+            // seguidos é mnemônico contra ele: um encerra, dois abrem espaço.
+            linhas.Add(l.Trim() == ".." ? "" : l.TrimEnd());
         }
 
         static string? Juntar(List<string> linhas) =>
@@ -670,6 +676,11 @@ internal sealed class PhoneConsoleCommand(
         }
         AnsiConsole.MarkupLine($"[grey]use[/] [bold]{TokenNome}[/] [grey]onde entra o nome do contato. cada template pode ter VÁRIAS linhas.[/]");
         AnsiConsole.MarkupLine("[grey]uma[/] [bold]linha vazia[/] [grey]fecha o template. outra linha vazia (ou[/] fim[grey]) encerra.[/]");
+        // Repetido aqui, no ponto de uso, e não só na ajuda: quem está colando texto não vai abrir o
+        // manual pra descobrir como fazer um parágrafo, vai tentar a linha vazia e cortar o template.
+        AnsiConsole.MarkupLine(
+            "[grey]para uma[/] [bold]linha em branco DENTRO[/] [grey]do texto, use[/] [bold]..[/] "
+            + "[grey](dois pontos) numa linha sozinha — a linha vazia fecharia o template.[/]");
 
         var antes = _textos.Count;
         while (true)
@@ -1805,6 +1816,19 @@ internal sealed class PhoneConsoleCommand(
                         : $" os {naoConfirmados.Count} não confirmados foram tentados assim mesmo "
                           + "(ligue com[/] segurar [grey]pra não gastar disparo com eles).")
                     + "[/]");
+                // 🔴 A CAUSA MAIS COMUM DE MUITOS NÃO CONFIRMADOS É SYNC, NÃO NÚMERO MORTO, e o texto
+                // tinha deixado de dizer isso. O fluxo recomendado é `gravar`, esperar, disparar — e o
+                // WhatsApp leva de 2,5 a 7 minutos (medido em 2026-07-23) pra publicar a marca na
+                // agenda. Quem gravou e disparou em seguida vê a lista inteira segurada e conclui que o
+                // sistema quebrou, quando faltou esperar.
+                if (naoConfirmados.Count > confirmados)
+                {
+                    AnsiConsole.MarkupLine(
+                        "[yellow]mais da metade não confirmada.[/] [grey]se você gravou a lista há pouco, "
+                        + "é sync: o WhatsApp leva de 2,5 a 7 min pra reconhecer contato novo na agenda. "
+                        + "espere e rode de novo. se persistir depois disso, aí sim provavelmente não "
+                        + "têm conta — confira a forma deles com[/] c[grey].[/]");
+                }
                 MostrarAlguns(naoConfirmados.Count, 10, i => $"  [grey]{naoConfirmados[i]}[/]", " não confirmado(s)");
             }
 
@@ -1879,8 +1903,15 @@ internal sealed class PhoneConsoleCommand(
 
         // 🔴 VOLUME E INTERVALO JUNTOS, sempre. Sugerir volume baixo e deixar o intervalo do platô
         // despacha o dia inteiro numa hora, que é o padrão que o volume baixo tentava evitar.
+        // Cota do dia já alcançada: sugerir intervalo pra espalhar zero mensagem seria ruído, e ainda
+        // por cima confundiria com a linha logo acima, que acabou de dizer que não resta nada.
+        if (resta == 0 && enviadasHoje > 0)
+        {
+            return;
+        }
+
         // Espalha o que RESTA do dia, não a cota cheia: se metade já saiu, o resto tem a janela toda.
-        var paraEspalhar = Math.Max(1, resta == 0 ? s.Sugestao : resta);
+        var paraEspalhar = Math.Max(1, resta);
         var (im, ix) = ChipHistory.IntervaloPara(paraEspalhar, _horaFim - _horaInicio);
         AnsiConsole.MarkupLine(
             $"[grey]para espalhar ~{paraEspalhar} pela janela, o intervalo seria[/] "
@@ -2609,6 +2640,7 @@ internal sealed class PhoneConsoleCommand(
             ("cole", "Ola {nome}, tudo bem?"),
             ("+linhas", "continue digitando: a mensagem pode ter várias linhas"),
             ("separa", "linha vazia fecha o template e começa o próximo"),
+            ("em branco", ".. numa linha sozinha vira linha vazia DENTRO do texto"),
             ("encerra", "outra linha vazia, ou digite: fim"),
             ("acento", "ele oferece tirar sozinho; ou tecle d pra aceitar acento"),
             ("sorteio", "cada contato recebe UM template sorteado"),
@@ -2654,6 +2686,7 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("gravar", "grava a lista na agenda do aparelho, SEM enviar nada");
         t.AddRow("contatos [grey]| contatos +[/]", "cola a lista (substitui | soma). formato: numero ou numero;nome");
         t.AddRow("textos [grey]| textos +[/]", $"cola os templates (substitui | soma). {TokenNome} vira o nome do contato");
+        t.AddRow("[grey]  (ao colar)[/] ..", "numa linha sozinha, vira uma linha em BRANCO dentro do texto");
         t.AddRow("ver", "mostra a lista, os templates e os ajustes atuais");
         t.AddRow("previa", "simula quem receberia qual template, sem tocar no aparelho");
         t.AddRow("conferir [grey]| c[/]", "classifica cada número: celular, legado, fixo ou faltando o 9º dígito");

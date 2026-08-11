@@ -111,7 +111,11 @@ public static class ChipHistory
     {
         if (mensagensDoDia <= 0)
         {
-            return (IntervaloMinimoSegundos, (int)(IntervaloMinimoSegundos * (1 + Espalhamento) / (1 - Espalhamento)));
+            // Guarda, não caminho real: quem chama sempre passa pelo menos 1 (a sugestão nunca é zero e
+            // o console usa Math.Max). Devolve o par HISTÓRICO do console em vez de uma conta com
+            // divisão por zero disfarçada — antes havia aqui uma fórmula que produzia 350 e não
+            // significava nada.
+            return (IntervaloMinimoSegundos, 360);
         }
         var janela = Math.Clamp(janelaHoras <= 0 ? JanelaPadraoHoras : janelaHoras, 1, JanelaPadraoHoras);
         var centro = (double)janela * 3600 / mensagensDoDia;
@@ -143,12 +147,21 @@ public static class ChipHistory
     {
         if (ultimoDia is null || ultimoDia.Enviadas == 0)
         {
+            // 🔴 A FRASE MUDA CONFORME O MOTIVO. "Sem histórico" para um aparelho que já disparou HOJE
+            // seria contradição na mesma tela: o painel logo acima mostra os dias e o que já saiu. Sem
+            // dia FECHADO, a diferença é entre "nunca disparou" e "disparou, mas ainda não terminou um
+            // dia" — e a segunda não autoriza crescer, porque não se sabe como o dia acaba.
+            var semNenhum = diasAtivos <= 0;
             return new SugestaoDoChip(
                 Math.Max(0, diasAtivos),
                 FaseDe(diasAtivos),
                 SugestaoChipNovo,
-                "aparelho sem histórico de envio. os primeiros 10 dias são o período de maior risco "
-                + "para um número, então o começo pequeno é o que limita o estrago se algo der errado");
+                semNenhum
+                    ? "aparelho sem histórico de envio. os primeiros 10 dias são o período de maior "
+                      + "risco para um número, então o começo pequeno é o que limita o estrago se algo "
+                      + "der errado"
+                    : "ainda não há um dia FECHADO para servir de base: um dia pela metade não diz como "
+                      + "ele termina, então a sugestão continua a de aparelho novo");
         }
 
         var total = ultimoDia.Enviadas + ultimoDia.Recusadas;
