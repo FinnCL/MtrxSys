@@ -1202,7 +1202,10 @@ internal sealed class PhoneConsoleCommand(
         }
 
         MostrarPlano(plano);
-        AvisarRepeticao(plano, serial);
+        // UMA leitura do log para as duas perguntas do pré-voo: quem já recebeu, e como este chip vem
+        // se comportando. Ver LerLog — eram duas passadas completas no mesmo arquivo.
+        var resumoDoLog = LerLog(serial);
+        AvisarRepeticao(plano, resumoDoLog.JaEnviados);
         AvisarFormaSuspeita(plano);
 
         // Quantas pausas cabem: uma a cada bloco fechado, e nenhuma depois da última mensagem. Com 30
@@ -1221,6 +1224,8 @@ internal sealed class PhoneConsoleCommand(
         AnsiConsole.MarkupLine(
             $"[grey]~[/][bold]{Duracao(estimativa)}[/][grey] só de espera (o envio em si soma mais). "
             + $"término por volta das[/] [bold]{DateTime.Now.Add(estimativa):HH:mm}[/][grey].[/]");
+        MostrarPainelDoChip(plano.Count, resumoDoLog);
+        AvisarRiscoDoLote(plano.Count);
         AnsiConsole.Markup("[bold]confirmar? digite[/] sim [bold]:[/] ");
 
         if (!string.Equals(Console.ReadLine()?.Trim(), "sim", StringComparison.OrdinalIgnoreCase))
@@ -1606,7 +1611,7 @@ internal sealed class PhoneConsoleCommand(
                 // gravava "enviado=sim" para um número que não recebeu nada, e quem recebeu não
                 // aparecia em lugar nenhum.
                 // Não é só auditoria errada. O CSV é a ÚNICA memória entre execuções (ver
-                // NumerosJaEnviados), então a pessoa colada amanhã na forma certa passava sem aviso e
+                // LerLog), então a pessoa colada amanhã na forma certa passava sem aviso e
                 // podia receber a campanha de novo. A dedup DENTRO do lote já sabia que as duas formas
                 // são a mesma pessoa; a de fora do lote não ficava sabendo.
                 Registrar(log, serial, contato with { Numero = numeroUsado }, variante, texto, r, contradito);
@@ -1816,6 +1821,114 @@ internal sealed class PhoneConsoleCommand(
         return new ResumoDoLote(enviados, falhas, semConta, entregasConfirmadas);
     }
 
+    /// <summary>O histórico deste aparelho e o que ele sugere para hoje, antes do "confirmar".</summary>
+    /// <remarks>
+    /// 🔴 MOSTRA, NUNCA CORTA. Decisão explícita do operador em 2026-08-11, e coerente com o resto do
+    /// console. O sistema não tem sinal de resposta nem de bloqueio, que é o que de fato governa a
+    /// punição do WhatsApp, então decidir volume por ele seria decidir com meio dado.
+    ///
+    /// <para>🔴 OS NÚMEROS CRUS VÊM ANTES DA SUGESTÃO, de propósito: dá pra discordar da sugestão
+    /// usando o mesmo dado que a gerou. Sugestão sozinha vira ordem disfarçada, e ordem que o operador
+    /// não pode auditar é ordem que ele ignora na primeira vez que ela atrapalha.</para>
+    ///
+    /// <para>O caso que motivou: em 2026-08-10 o lote mandou 30 num chip novo e ele foi restringido.
+    /// Nada na tela dizia quantos dias aquele chip tinha nem quanto ele havia feito antes — e o CSV
+    /// sabia das duas coisas.</para>
+    /// </remarks>
+    private void MostrarPainelDoChip(int tamanhoDoLote, ResumoDoLog log)
+    {
+        var (dias, ultimo, enviadasHoje) = (log.DiasAtivos, log.UltimoFechado, log.EnviadasHoje);
+        var s = ChipHistory.Sugerir(dias, ultimo);
+
+        var historico = ultimo is null
+            ? (dias == 0
+                ? "[yellow]sem histórico de envio neste aparelho[/]"
+                : $"[bold]{dias}[/] dia(s) de disparo, mas nenhum dia FECHADO ainda")
+            : $"[bold]{dias}[/] dia(s) de disparo · último dia fechado: [bold]{ultimo.Enviadas}[/] "
+              + $"enviada(s), {ultimo.Recusadas} recusa(s)"
+              + (ultimo.Enviadas > 0
+                  ? $", entrega confirmada em {ultimo.EntregasConfirmadas} de {ultimo.Enviadas}"
+                  : "");
+
+        var fase = s.Fase switch
+        {
+            FaseDoChip.Novo =>
+                $"[red]NOVO[/] [grey](até {ChipHistory.DiasChipNovo} dias de disparo — período de "
+                + "risco máximo para um número)[/]",
+            FaseDoChip.Aquecendo =>
+                $"[yellow]AQUECENDO[/] [grey](maduro a partir de {ChipHistory.DiasChipMaduro} dias)[/]",
+            _ => "[green]MADURO[/] [grey](pode operar no platô)[/]",
+        };
+
+        AnsiConsole.MarkupLine($"[grey]chip:[/] {fase}");
+        AnsiConsole.MarkupLine($"[grey]histórico:[/] {historico}");
+        // 🔴 DESCONTA O QUE JÁ SAIU HOJE. Sem isto, o segundo lote do dia recomeçaria a cota do zero.
+        var resta = Math.Max(0, s.Sugestao - enviadasHoje);
+        AnsiConsole.MarkupLine(
+            $"[grey]sugere ~[/][bold]{s.Sugestao}[/][grey] mensagem(ns) para HOJE. {s.Motivo}.[/]");
+        if (enviadasHoje > 0)
+        {
+            AnsiConsole.MarkupLine(
+                resta == 0
+                    ? $"[yellow]já saíram {enviadasHoje} hoje deste aparelho: a sugestão do dia já foi "
+                      + "alcançada.[/]"
+                    : $"[grey]já saíram [/][bold]{enviadasHoje}[/][grey] hoje deste aparelho, então "
+                      + $"restariam ~[/][bold]{resta}[/][grey].[/]");
+        }
+        AnsiConsole.MarkupLine($"[grey]seu lote tem [/][bold]{tamanhoDoLote}[/][grey] contato(s).[/]");
+
+        // 🔴 VOLUME E INTERVALO JUNTOS, sempre. Sugerir volume baixo e deixar o intervalo do platô
+        // despacha o dia inteiro numa hora, que é o padrão que o volume baixo tentava evitar.
+        // Espalha o que RESTA do dia, não a cota cheia: se metade já saiu, o resto tem a janela toda.
+        var paraEspalhar = Math.Max(1, resta == 0 ? s.Sugestao : resta);
+        var (im, ix) = ChipHistory.IntervaloPara(paraEspalhar, _horaFim - _horaInicio);
+        AnsiConsole.MarkupLine(
+            $"[grey]para espalhar ~{paraEspalhar} pela janela, o intervalo seria[/] "
+            + $"[bold]{im}-{ix}s[/] [grey]({Duracao(TimeSpan.FromSeconds(im))} a "
+            + $"{Duracao(TimeSpan.FromSeconds(ix))} entre mensagens); o seu é {_min}-{_max}s.[/]");
+        AnsiConsole.MarkupLine(
+            "[grey]é sugestão, não limite: nada será cortado. para aplicar:[/] "
+            + $"teto {paraEspalhar} [grey]e[/] intervalo {im} {ix}");
+    }
+
+    /// <summary>Os três sinais de risco que o console consegue enxergar antes de disparar.</summary>
+    /// <remarks>
+    /// 🔴 CADA LINHA CORRESPONDE A UM SINAL MEDIDO por fontes de 2026, não a palpite:
+    /// <list type="bullet">
+    /// <item>Bloqueio e denúncia acima de ~2% derrubam a qualidade da conta e cortam limites. Oferecer
+    /// saída converte quem ia denunciar em quem se descadastra.</item>
+    /// <item>Texto repetido em massa é sinal clássico de automação.</item>
+    /// <item>Mensagem para quem não te tem salvo é o item de MAIOR peso na pontuação de spam, e lista
+    /// fria é exatamente isso.</item>
+    /// </list>
+    /// <para>⚠️ NÃO sugere "responda SAIR". O <c>MessageComposer</c> parou de anunciar esse caminho de
+    /// propósito: responder depende do inbound, e o console físico não tem nenhum. Prometer uma saída
+    /// que não funciona é pior que não prometer, porque quem tenta sair e não consegue DENUNCIA. Por
+    /// isso o aviso fala em LINK, que funciona sem inbound.</para>
+    /// </remarks>
+    private void AvisarRiscoDoLote(int tamanhoDoLote)
+    {
+        if (!_textos.Any(t => t.Contains("http", StringComparison.OrdinalIgnoreCase)))
+        {
+            AnsiConsole.MarkupLine(
+                "[yellow]nenhum template oferece saída.[/] [grey]bloqueio e denúncia são o que derruba "
+                + "a conta, e quem não acha como sair denuncia. cole um LINK de descadastro no texto "
+                + "(não peça \"responda SAIR\": sem inbound, a resposta não chega a lugar nenhum e a "
+                + "pessoa denuncia achando que foi ignorada).[/]");
+        }
+
+        if (_textos.Count > 0 && tamanhoDoLote / _textos.Count >= 20)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]{_textos.Count} template(s) para {tamanhoDoLote} contatos.[/] [grey]texto "
+                + "repetido em massa é sinal clássico de automação. mais variações diluem isso.[/]");
+        }
+
+        AnsiConsole.MarkupLine(
+            "[grey]lembre que esta lista é FRIA: mandar para quem não te tem salvo é o item de maior "
+            + "peso na pontuação de spam, e o console não sabe quem já respondeu.[/]");
+    }
+
     /// <summary>Avisa quem desta lista já recebeu deste aparelho. O log é a única memória entre
     /// execuções. Avisa e deixa decidir, em vez de pular calado: reenviar às vezes é intencional.</summary>
     /// <remarks>
@@ -1825,9 +1938,10 @@ internal sealed class PhoneConsoleCommand(
     /// colado hoje em 13 não era reconhecido, e o aviso que existe pra impedir a segunda mensagem não
     /// aparecia.
     /// </remarks>
-    private void AvisarRepeticao(List<(Contato Contato, int Variante, string Texto)> plano, string serial)
+    private void AvisarRepeticao(
+        List<(Contato Contato, int Variante, string Texto)> plano, HashSet<string> jaReceberam)
     {
-        var jaReceberam = NumerosJaEnviados(serial);
+
         var repetidos = plano
             .Where(p => jaReceberam.Contains(p.Contato.Numero)
                 || (BrazilPhoneValidator.AlternateBrazilianForm(p.Contato.Numero) is { } outra
@@ -2753,7 +2867,7 @@ internal sealed class PhoneConsoleCommand(
     /// <param name="contradito">A recusa foi desmentida pelo espelho da agenda: o app disse "sem conta"
     /// para um número que ele mesmo marca como usuário do WhatsApp.</param>
     /// <remarks>
-    /// 🔴 A COLUNA NOVA ENTRA NO FIM, e isso não é preguiça. O <see cref="NumerosJaEnviados"/> lê por
+    /// 🔴 A COLUNA NOVA ENTRA NO FIM, e isso não é preguiça. O <see cref="LerLog"/> lê por
     /// ÍNDICE (número em [2], enviado em [5]), e é ele que impede mandar duas vezes pra mesma pessoa
     /// entre execuções. Acrescentar no fim deixa todos os índices anteriores intactos, então CSV antigo
     /// continua sendo lido igual.
@@ -2769,7 +2883,7 @@ internal sealed class PhoneConsoleCommand(
         try
         {
             // Três valores na coluna "enviado", não dois. "incerto" é o envio cujo toque aconteceu e não
-            // deu pra confirmar: gravar isso como "nao" mentiria pro NumerosJaEnviados, que é a única
+            // deu pra confirmar: gravar isso como "nao" mentiria pro LerLog, que é a única
             // memória entre execuções, e a pessoa voltaria amanhã sem nenhum aviso de que talvez já
             // tenha recebido.
             var enviado = r.Sent ? "sim" : r.Uncertain ? "incerto" : "nao";
@@ -2787,35 +2901,103 @@ internal sealed class PhoneConsoleCommand(
         }
     }
 
-    /// <summary>Quem já recebeu deste aparelho, lido do log. É a ÚNICA memória entre execuções: a
-    /// lista em si é esvaziada dos entregues, mas nada impede recolar os mesmos números amanhã.</summary>
-    private static HashSet<string> NumerosJaEnviados(string serial)
+    /// <summary>Tudo que o pré-voo precisa saber do log, numa leitura só.</summary>
+    /// <param name="JaEnviados">Quem já recebeu deste aparelho, em qualquer dia.</param>
+    /// <param name="DiasAtivos">Dias distintos com disparo.</param>
+    /// <param name="UltimoFechado">Resumo do último dia FECHADO. null = só há o dia de hoje.</param>
+    /// <param name="EnviadasHoje">Quanto já saiu hoje, para descontar da sugestão.</param>
+    private sealed record ResumoDoLog(
+        HashSet<string> JaEnviados, int DiasAtivos, DiaDoChip? UltimoFechado, int EnviadasHoje);
+
+    /// <summary>Lê o CSV do aparelho UMA vez e responde tudo que o pré-voo pergunta.</summary>
+    /// <remarks>
+    /// 🔴 ERAM DUAS PASSADAS COMPLETAS no mesmo arquivo, poucas linhas uma da outra: uma pro aviso de
+    /// repetição, outra pro painel do chip. Cada uma parseava todas as linhas com
+    /// <see cref="CamposCsv"/>, alocando lista e StringBuilder por linha — e este log CRESCE PARA
+    /// SEMPRE, então o desperdício aumenta a cada lote.
+    ///
+    /// <para>Perguntas diferentes, mesma fonte, mesmo instante: é o caso clássico de unificar a
+    /// leitura em vez de otimizar cada uma. Mesmo motivo do cache do <c>ContatoAsync</c> no leitor de
+    /// agenda.</para>
+    ///
+    /// <para>Best-effort: log ilegível devolve resumo vazio, que é o desfecho conservador — sem aviso
+    /// de repetição e com sugestão de chip novo.</para>
+    /// </remarks>
+    private static ResumoDoLog LerLog(string serial)
     {
         var numeros = new HashSet<string>(StringComparer.Ordinal);
+        var porDia = new Dictionary<string, (int Enviadas, int Recusadas, int Confirmadas)>(
+            StringComparer.Ordinal);
         try
         {
             var caminho = Path.Combine(Pasta, $"envios-{Higienizar(serial)}.csv");
             if (!File.Exists(caminho))
             {
-                return numeros;
+                return new ResumoDoLog(numeros, 0, null, 0);
             }
             foreach (var linha in File.ReadLines(caminho).Skip(1))
             {
                 var campos = CamposCsv(linha);
-                // "incerto" entra JUNTO com "sim": a pergunta que este conjunto responde é "pode já ter
-                // recebido?", e não "recebeu com certeza?". Deixar o incerto de fora devolveria o
-                // silêncio que o aviso existe pra quebrar.
-                if (campos.Count > 5 && campos[5] is "sim" or "incerto")
+                if (campos.Count < 7)
+                {
+                    continue;
+                }
+                // "incerto" entra JUNTO com "sim" nos dois usos. Pro aviso, a pergunta é "pode já ter
+                // recebido?" e não "recebeu com certeza?". Pro volume, o que conta contra o chip é a
+                // conversa ABERTA, e ela foi aberta do mesmo jeito.
+                var saiu = campos[5] is "sim" or "incerto";
+                if (saiu)
                 {
                     numeros.Add(campos[2]);
                 }
+
+                // A coluna `quando` é ISO-8601, então os 10 primeiros caracteres já são a data —
+                // parsear o timestamp inteiro só pra descartar a hora seria trabalho e um modo de
+                // falha a mais.
+                if (campos[0].Length < 10)
+                {
+                    continue;
+                }
+                var dia = campos[0][..10];
+                porDia.TryGetValue(dia, out var acc);
+                if (saiu)
+                {
+                    acc.Enviadas++;
+                    if (campos[6] is "delivered" or "read")
+                    {
+                        acc.Confirmadas++;
+                    }
+                }
+                else
+                {
+                    acc.Recusadas++;
+                }
+                porDia[dia] = acc;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Log ilegível não pode impedir o envio; no pior caso o aviso de repetição não aparece.
+            return new ResumoDoLog(numeros, 0, null, 0);
         }
-        return numeros;
+
+        if (porDia.Count == 0)
+        {
+            return new ResumoDoLog(numeros, 0, null, 0);
+        }
+
+        // 🔴 HOJE É SEPARADO DO ÚLTIMO DIA FECHADO, e a distinção não é cosmética. Rodando um SEGUNDO
+        // lote no mesmo dia, "o último dia" seria HOJE — e a sugestão cresceria sobre o que já saiu
+        // hoje, encorajando dobrar o volume do dia.
+        var hoje = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var enviadasHoje = porDia.TryGetValue(hoje, out var doDiaDeHoje) ? doDiaDeHoje.Enviadas : 0;
+        var fechado = porDia
+            .Where(p => !string.Equals(p.Key, hoje, StringComparison.Ordinal))
+            .OrderBy(p => p.Key, StringComparer.Ordinal)
+            .Select(p => (DiaDoChip?)new DiaDoChip(p.Value.Enviadas, p.Value.Recusadas, p.Value.Confirmadas))
+            .LastOrDefault();
+
+        return new ResumoDoLog(numeros, porDia.Count, fechado, enviadasHoje);
     }
 
     /// <summary>Separa por ';' respeitando aspas, senão um nome com ';' desloca todas as colunas.</summary>
