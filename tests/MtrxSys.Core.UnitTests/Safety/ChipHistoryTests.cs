@@ -137,6 +137,41 @@ public sealed class ChipHistoryTests
         minAberta.Should().Be(min12);
     }
 
+    // 🔴 O HISTÓRICO ENVELHECE. Os "dias de disparo" são dias de USO, não de calendário — de propósito,
+    // pra quem pula um dia não regredir. O efeito colateral é que o dia fechado pode ser antiquíssimo e
+    // ninguém percebe, porque ele continua sendo "o último".
+    [Fact]
+    public void Depois_de_silencio_longo_repete_o_volume_em_vez_de_crescer()
+    {
+        var recente = ChipHistory.Sugerir(6, new DiaDoChip(40, 1, 30), diasDesdeUltimoDia: 1);
+        var velho = ChipHistory.Sugerir(6, new DiaDoChip(40, 1, 30), diasDesdeUltimoDia: 30);
+
+        recente.Sugestao.Should().BeGreaterThan(40, "dia limpo e recente autoriza crescer");
+        velho.Sugestao.Should().Be(40, "sem parar nem recuar: repete o que o chip comprovadamente aguentou");
+        velho.Motivo.Should().Contain("30 dias");
+    }
+
+    [Fact]
+    public void Lacuna_nao_apaga_o_sinal_de_recusa()
+    {
+        // Encolher é mais cauteloso que repetir, então dia ruim continua mandando encolher mesmo depois
+        // de silêncio. Se a lacuna viesse antes, sumir um mês "limparia" um dia ruim.
+        var s = ChipHistory.Sugerir(4, new DiaDoChip(20, 15, 10), diasDesdeUltimoDia: 45);
+
+        s.Sugestao.Should().Be(10);
+        s.Motivo.Should().Contain("recusa");
+    }
+
+    [Fact]
+    public void Pausa_curta_de_fim_de_semana_nao_suspende_o_crescimento()
+    {
+        // Não disparar sábado e domingo é operação normal, e tratar isso como "dado velho" congelaria o
+        // aquecimento de quem só trabalha em dia útil.
+        var s = ChipHistory.Sugerir(6, new DiaDoChip(30, 0, 25), diasDesdeUltimoDia: 3);
+
+        s.Sugestao.Should().BeGreaterThan(30);
+    }
+
     [Fact]
     public void Nunca_sugere_zero_depois_de_um_dia_que_entregou()
     {

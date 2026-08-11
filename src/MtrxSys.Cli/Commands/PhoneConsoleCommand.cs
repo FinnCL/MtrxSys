@@ -44,9 +44,17 @@ internal sealed class PhoneConsoleCommand(
 {
     internal sealed class Settings : CommandSettings
     {
+        /// <summary>Anulável para distinguir "não passei a flag" de "passei 0".</summary>
+        /// <remarks>
+        /// 🔴 Era <c>int</c>, e por isso a flag MENTIA CALADA: o valor era atribuído antes do
+        /// <c>Carregar</c>, que sobrescrevia com o teto da sessão anterior. Quem rodasse com
+        /// <c>--teto 20</c> num aparelho com estado salvo não recebia teto nenhum e nem aviso.
+        /// Com <c>int</c> também não havia como consertar a ordem: zero é valor legítimo ("sem teto") e
+        /// é o default, então "não passei" e "passei 0" chegavam idênticos aqui.
+        /// </remarks>
         [CommandOption("--teto <N>")]
-        [Description("Cota por execução. 0 (default) = sem teto: manda a lista inteira.")]
-        public int Teto { get; init; }
+        [Description("Cota por execução, em ENVIOS. 0 = sem teto: manda a lista inteira.")]
+        public int? Teto { get; init; }
     }
 
     /// <param name="Numero">Só dígitos, já validado em 12 ou 13 (55 + DDD + número).</param>
@@ -82,6 +90,12 @@ internal sealed class PhoneConsoleCommand(
         public int? PausaMin { get; init; }
         public int? HoraInicio { get; init; }
         public int? HoraFim { get; init; }
+        // 🔴 CAMPO APOSENTADO em 2026-08-11, mantido no record só pra sessão antiga não quebrar na
+        // desserialização. O toggle "gravar na agenda antes de enviar" saiu: ele gravava 2 SEGUNDOS
+        // antes do envio, e o WhatsApp leva de 2,5 a 7 min pra publicar a marca — ou seja, tarde demais
+        // pra o próprio envio que ele deveria ajudar. No lote de 2026-08-10 ele respondeu "já existe"
+        // nos 53 contatos, gastando duas chamadas adb por contato pra confirmar o óbvio. Quem grava é o
+        // `gravar`, com tempo pra sincronizar.
         public bool Agenda { get; init; } = true;
         public bool DigitacaoHumana { get; init; } = true;
 
@@ -90,6 +104,16 @@ internal sealed class PhoneConsoleCommand(
         public bool? Bip { get; init; }
 
         public bool? SegurarNaoConfirmados { get; init; }
+
+        /// <summary>Teto automático ligado. Persistido pra o cronograma valer nos lotes seguintes.</summary>
+        public bool? TetoAuto { get; init; }
+
+        /// <summary>Marca da conta do WhatsApp vista no último lote. Só serve pra COMPARAR.</summary>
+        public string? Conta { get; init; }
+
+        /// <summary>Data (yyyy-MM-dd) em que a conta atual começou neste aparelho. Antes dela, o
+        /// histórico do CSV é de OUTRA conta e não conta pro aquecimento.</summary>
+        public string? ChipDesde { get; init; }
     }
 
     private const string TokenNome = "{nome}";
@@ -123,8 +147,20 @@ internal sealed class PhoneConsoleCommand(
 
     private readonly List<Contato> _contatos = [];
     private readonly List<string> _textos = [];
-    private int _min = 150;
-    private int _max = 360;
+    /// <summary>Intervalo de fábrica. Nomeado porque é COMPARADO, não só atribuído.</summary>
+    /// <remarks>
+    /// 🔴 É assim que o console distingue "o operador escolheu" de "ninguém mexeu", sem guardar um flag
+    /// a mais. O flag pareceria mais explícito e seria pior: ele teria que ser persistido, e sessão
+    /// antiga voltaria sem ele, indistinguível de escolha. O valor em si já responde a pergunta, e quem
+    /// digitar exatamente o padrão só perde o preenchimento automático, que é inofensivo.
+    /// <para>Estes dois números são o ritmo de 120 mensagens em 8 horas, ou seja o ajuste de um chip no
+    /// PLATÔ. Ver ChipHistory.IntervaloPara.</para>
+    /// </remarks>
+    private const int MinPadrao = 150;
+    private const int MaxPadrao = 360;
+
+    private int _min = MinPadrao;
+    private int _max = MaxPadrao;
     /// <summary>Cota desta execução. ZERO = sem teto, manda a lista inteira.</summary>
     /// <remarks>
     /// 🔴 SEM TETO POR PADRÃO, decisão do operador em 2026-08-07: "o teto pode ser 20, 50, 100, 1000, o
@@ -189,10 +225,6 @@ internal sealed class PhoneConsoleCommand(
 
     private int _horaFim = 24;
 
-    /// <summary>Grava o contato na agenda do aparelho antes de enviar. LIGADO por padrão por decisão
-    /// do operador (2026-07-30). Sessão salva com o valor desligado continua desligada: escolha
-    /// explícita ganha do default.</summary>
-    private bool _agenda = true;
 
     /// <summary>SEGURAR o contato quando a agenda não confirma que ele tem WhatsApp. DESLIGADO por
     /// padrão: a consulta sempre roda e é reportada, mas não muda o que sai.</summary>
@@ -241,7 +273,6 @@ internal sealed class PhoneConsoleCommand(
     public override async Task<int> ExecuteAsync(CommandContext context, Settings s)
     {
         var ct = cancellation.Token;
-        _teto = Math.Max(0, s.Teto);
 
         var opts = options.Value;
         var serial = string.IsNullOrWhiteSpace(opts.AdbSerial) ? "(sem serial)" : opts.AdbSerial;
@@ -274,6 +305,19 @@ internal sealed class PhoneConsoleCommand(
         }
 
         Carregar(serial);
+
+        // 🔴 A FLAG GANHA DO ESTADO SALVO, e por isso vem DEPOIS do Carregar. Antes vinha antes, e era
+        // sobrescrita em silêncio: `--teto 20` num aparelho com sessão salva não fazia nada e não dizia
+        // nada. Ordem invertida sem alarde é a pior forma de configuração errada, porque o operador tem
+        // prova na tela de que pediu.
+        if (s.Teto is { } tetoDaLinha)
+        {
+            _teto = Math.Max(0, tetoDaLinha);
+            _tetoAuto = false;
+            AnsiConsole.MarkupLine(
+                $"[grey]--teto {_teto} veio da linha de comando e vale para esta sessão"
+                + (_teto == 0 ? " (sem teto)" : "") + ".[/]");
+        }
 
         // O que a sessão gravou manda no que o driver faz: PhoneOptions é singleton e o driver relê
         // HumanTyping a cada envio, então escrever aqui basta.
@@ -383,6 +427,18 @@ internal sealed class PhoneConsoleCommand(
                         Teto(partes);
                         Salvar(serial);
                         break;
+                    // Manual porque nem todo aparelho responde qual conta está registrada. Onde ele
+                    // responde, a troca é detectada sozinha e ninguém precisa deste comando.
+                    case "chip" when partes.Length >= 2
+                        && string.Equals(partes[1], "novo", StringComparison.OrdinalIgnoreCase):
+                        ChipNovo(serial);
+                        break;
+                    case "chip":
+                        AnsiConsole.MarkupLine(
+                            "[red]uso:[/] chip novo   [grey]— use SÓ depois de registrar outra conta do "
+                            + "WhatsApp neste aparelho. trocar o SIM sem registrar de novo mantém a mesma "
+                            + "conta, e aí o histórico continua valendo.[/]");
+                        break;
                     case "parar":
                         Parar(partes);
                         Salvar(serial);
@@ -392,11 +448,6 @@ internal sealed class PhoneConsoleCommand(
                         break;
                     case "janela":
                         Janela(partes);
-                        Salvar(serial);
-                        break;
-                    case "3" or "agenda":
-                        _agenda = !_agenda;
-                        AnsiConsole.MarkupLine($"gravar na agenda antes de enviar: [bold]{(_agenda ? "ligado" : "desligado")}[/]");
                         Salvar(serial);
                         break;
                     case "segurar":
@@ -844,7 +895,7 @@ internal sealed class PhoneConsoleCommand(
         AnsiConsole.MarkupLine(
             $"[grey]intervalo {_min}-{_max}s · teto {TetoDescrito()} · "
             + (_bloco > 0 ? $"blocos ~{_bloco}/pausa ~{_pausaMin}min · " : "sem blocos · ")
-            + $"{JanelaDescrita()} · agenda {(_agenda ? "ligada" : "desligada")}[/]");
+            + $"{JanelaDescrita()}[/]");
     }
 
     /// <summary>Os templates INTEIROS, numerados. É o que permite escolher um deles: o resumo do menu
@@ -1190,12 +1241,74 @@ internal sealed class PhoneConsoleCommand(
         // existe para impedir, ou recortar a lista à mão a cada execução. Com blocos e pausas o lote
         // se auto-regula, então o teto passa a ser a COTA da execução: manda os primeiros, e o resto
         // fica na lista, que é justamente o que faz o ciclo de vários dias funcionar sozinho.
-        if (_teto > 0 && plano.Count > _teto)
+        // O log é lido AQUI porque o teto automático precisa dele antes de cortar o plano, e o painel
+        // logo abaixo usa o mesmo resumo. Uma leitura serve às três coisas.
+        // A conta ANTES de ler o log: se ela mudou, o corte do histórico muda junto e o painel logo
+        // abaixo já mostra a curva certa. Ler primeiro daria o número da conta anterior.
+        await ConferirContaAsync(serial, ct);
+        var resumoDoLog = LerLog(serial, _chipDesde);
+
+        // 🔴 TETO AUTOMÁTICO: a cota do dia sai do histórico deste chip, descontando o que já saiu hoje.
+        // É a única coisa que corta sozinha, e só porque o operador pediu com `teto auto`.
+        var tetoEfetivo = _teto;
+        if (_tetoAuto)
+        {
+            var sug = ChipHistory.Sugerir(
+                resumoDoLog.DiasAtivos, resumoDoLog.UltimoFechado, resumoDoLog.DiasDesdeUltimoDia);
+            tetoEfetivo = Math.Max(0, sug.Sugestao - resumoDoLog.EnviadasHoje);
+            if (tetoEfetivo == 0)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[yellow]teto automático: a cota de hoje (~{sug.Sugestao}) já foi alcançada. "
+                    + $"{resumoDoLog.EnviadasHoje} já saíram deste aparelho.[/] [grey]nada será enviado "
+                    + "agora. volte amanhã, ou use[/] teto <n> [grey]pra assumir o controle.[/]");
+                return;
+            }
+        }
+
+        // 🔴 A COTA É DE ENVIO, NÃO DE TENTATIVA, e a versão anterior cortava o plano em N CONTATOS.
+        // Falha, contato segurado pela agenda e duplicata pulada gastavam cota sem nada sair. Na lista
+        // real de 2026-08-10 isso é a maioria: 87 contatos, 34 segurados e ~17 na forma de fixo — cota
+        // de 40 entregava perto de 20, e o aquecimento andava pela metade da velocidade sem explicação.
+        // A cota protege a conta contra CONVERSA ABERTA, e recusa não abre conversa nenhuma.
+        // Por isso o plano NÃO é mais recortado aqui: o laço percorre a lista e para no N-ésimo ENVIO.
+        var alcance = tetoEfetivo > 0 ? Math.Min(plano.Count, tetoEfetivo) : plano.Count;
+        if (tetoEfetivo > 0 && plano.Count > tetoEfetivo)
         {
             AnsiConsole.MarkupLine(
-                $"[grey]lista com[/] [bold]{plano.Count}[/][grey] contato(s); esta execução manda os "
-                + $"primeiros[/] [bold]{_teto}[/] [grey](teto). o resto fica na lista para a próxima.[/]");
-            plano = [.. plano.Take(_teto)];
+                $"[grey]lista com[/] [bold]{plano.Count}[/][grey] contato(s); esta execução para depois "
+                + $"de[/] [bold]{tetoEfetivo}[/] [grey]ENVIO(s) ({(_tetoAuto ? "teto automático" : "teto")}). "
+                + "quem falhar ou não tiver WhatsApp não gasta cota, então ela pode percorrer mais "
+                + "contatos que isso. o resto fica na lista.[/]");
+        }
+
+        // 🔴 VOLUME E INTERVALO SÃO UM PARÂMETRO SÓ (ver ChipHistory), e o `teto auto` mexia só no
+        // volume. Cota de 2 com o intervalo do platô despacha o dia em 4 minutos e silencia 12 horas,
+        // que é o padrão que o volume baixo existia pra evitar.
+        //
+        // 🔴 SÓ PREENCHE O QUE VOCÊ NÃO ESCOLHEU. Se o operador digitou `intervalo`, o console não
+        // sobrescreve: mandar automatizar o VOLUME não é autorizar mexer numa escolha explícita dele.
+        // Aqui ele avisa e deixa como está. Local, nunca em _min/_max: gravar tornaria o ajuste
+        // "escolhido" e o lote seguinte já não saberia distinguir.
+        var (minEfetivo, maxEfetivo) = (_min, _max);
+        if (_tetoAuto && alcance > 0)
+        {
+            var (im, ix) = ChipHistory.IntervaloPara(alcance, _horaFim - _horaInicio);
+            if (_min == MinPadrao && _max == MaxPadrao)
+            {
+                (minEfetivo, maxEfetivo) = (im, ix);
+                AnsiConsole.MarkupLine(
+                    $"[grey]intervalo desta execução:[/] [bold]{im}-{ix}s[/] [grey](calculado pra "
+                    + $"espalhar {alcance} pela janela; você não escolheu um, então o teto automático "
+                    + "preenche). fixe o seu com[/] intervalo <min> <max][grey].[/]");
+            }
+            else if (ix > _max * 2)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[yellow]seu intervalo é {_min}-{_max}s e a cota é {alcance}.[/] [grey]isso despacha "
+                    + $"o dia inteiro em pouco tempo e depois silencia. pra espalhar, seria[/] "
+                    + $"intervalo {im} {ix}[grey]. não mudei nada: o ajuste é seu.[/]");
+            }
         }
 
         // Pré-voo da DIGITAÇÃO com o texto JÁ resolvido: o nome do contato pode trazer o acento que a
@@ -1212,22 +1325,19 @@ internal sealed class PhoneConsoleCommand(
             return;
         }
 
-        MostrarPlano(plano);
-        // UMA leitura do log para as duas perguntas do pré-voo: quem já recebeu, e como este chip vem
-        // se comportando. Ver LerLog — eram duas passadas completas no mesmo arquivo.
-        var resumoDoLog = LerLog(serial);
         AvisarRepeticao(plano, resumoDoLog.JaEnviados);
         AvisarFormaSuspeita(plano);
 
         // Quantas pausas cabem: uma a cada bloco fechado, e nenhuma depois da última mensagem. Com 30
         // mensagens em blocos de 15 são 2 blocos e UMA pausa, não duas.
-        var blocos = _bloco > 0 ? (plano.Count + _bloco - 1) / _bloco : 1;
+        // Estimativa sobre o ALCANCE (a cota), não sobre a lista: com teto, o lote termina na cota.
+        var blocos = _bloco > 0 ? (alcance + _bloco - 1) / _bloco : 1;
         var pausas = _bloco > 0 ? Math.Max(0, blocos - 1) : 0;
-        var esperaEntreMsg = (plano.Count - 1 - pausas) * ((_min + _max) / 2.0);
-        var estimativa = TimeSpan.FromSeconds(esperaEntreMsg + (pausas * _pausaMin * 60.0));
+        var esperaEntreMsg = (alcance - 1 - pausas) * ((minEfetivo + maxEfetivo) / 2.0);
+        var estimativa = TimeSpan.FromSeconds(Math.Max(0, esperaEntreMsg) + (pausas * _pausaMin * 60.0));
 
         AnsiConsole.MarkupLine(
-            $"[bold]{plano.Count}[/] mensagem(ns), intervalo {_min}-{_max}s"
+            $"[bold]{alcance}[/] mensagem(ns), intervalo {minEfetivo}-{maxEfetivo}s"
             + (_bloco > 0
                 ? $", em ~[bold]{blocos}[/] bloco(s) de ~{_bloco} com pausa de ~{_pausaMin} min "
                   + $"({JanelaDescrita()})."
@@ -1235,8 +1345,8 @@ internal sealed class PhoneConsoleCommand(
         AnsiConsole.MarkupLine(
             $"[grey]~[/][bold]{Duracao(estimativa)}[/][grey] só de espera (o envio em si soma mais). "
             + $"término por volta das[/] [bold]{DateTime.Now.Add(estimativa):HH:mm}[/][grey].[/]");
-        MostrarPainelDoChip(plano.Count, resumoDoLog);
-        AvisarRiscoDoLote(plano.Count);
+        MostrarPainelDoChip(alcance, resumoDoLog);
+        AvisarRiscoDoLote(alcance);
         AnsiConsole.Markup("[bold]confirmar? digite[/] sim [bold]:[/] ");
 
         if (!string.Equals(Console.ReadLine()?.Trim(), "sim", StringComparison.OrdinalIgnoreCase))
@@ -1261,7 +1371,7 @@ internal sealed class PhoneConsoleCommand(
                 + "só não FECHE A TAMPA: isso suspende por política do Windows e nenhum programa impede.[/]");
         }
 
-        var resumo = await DispararAsync(plano, log, serial, ct);
+        var resumo = await DispararAsync(plano, log, serial, tetoEfetivo, minEfetivo, maxEfetivo, ct);
 
         // O recorte de "sem conta" sai NO FECHO porque é a linha que sobra na tela e a que o operador
         // lê de manhã. Sem ele, "0 enviada(s), 87 falha(s)" some com a informação que importa: as 87
@@ -1292,16 +1402,29 @@ internal sealed class PhoneConsoleCommand(
     /// <summary>O laço de disparo. Separado do <see cref="EnviarAsync"/> porque lá tudo é decisão
     /// (pode? vale a pena? confirma?) e aqui tudo é execução — e porque um laço com efeito
     /// irreversível merece um <c>finally</c> visível em vez de ficar no meio de 140 linhas.</summary>
+    /// <param name="cota">Quantos ENVIOS esta execução pode fazer. 0 = sem cota.</param>
+    /// <param name="intervaloMin">Intervalo mínimo DESTA execução; pode diferir de <c>_min</c> quando o
+    /// teto automático preencheu um intervalo que o operador nunca escolheu.</param>
     private async Task<ResumoDoLote> DispararAsync(
         List<(Contato Contato, int Variante, string Texto)> plano,
         string log,
         string serial,
+        int cota,
+        int intervaloMin,
+        int intervaloMax,
         CancellationToken ct)
     {
         var enviados = 0;
         var falhas = 0;
         var semConta = 0;
         var entregasConfirmadas = 0;
+
+        // 🔴 SEPARADO DE `enviados` porque a pergunta é outra. `enviados` é o que SAIU, e vai pro
+        // relatório. Este é o que a conta GASTOU, e inclui o não confirmado: ali a conversa foi aberta e
+        // a mensagem pode ter saído, então cobrar é o lado seguro. É também a mesma regra que o LerLog
+        // aplica ao reler o CSV ("sim" ou "incerto"), e as duas contagens precisam concordar: se o lote
+        // não cobrasse o incerto e a releitura cobrasse, a cota de amanhã sairia menor sem explicação.
+        var cotaGasta = 0;
         // O disjuntor mora no Core, e não em variáveis soltas aqui, porque tem estado e casos de borda
         // (ver BatchStopPolicy) e este projeto não tem como ser testado. A primeira versão era feita à
         // mão neste laço e nasceu com um furo na sequência alternada.
@@ -1432,12 +1555,6 @@ internal sealed class PhoneConsoleCommand(
                     }
                 }
 
-                if (_agenda)
-                {
-                    var saved = await phone.SaveContactAsync(contato.Numero, contato.Nome, ct);
-                    AnsiConsole.MarkupLine($"[grey]agenda[/] {contato.Numero}: {saved.EscapeMarkup()}");
-                }
-
                 tentados.Add(contato.Numero);
                 // Conta TENTATIVA, não entrega: o que desenha padrão para o WhatsApp é a conversa
                 // aberta, e ela é aberta mesmo quando o envio falha. Contato pulado por duplicata não
@@ -1492,13 +1609,14 @@ internal sealed class PhoneConsoleCommand(
                         // vez, mesmo para a pessoa que existe. Gravar aqui a forma que REALMENTE recebeu
                         // é o que impede a agenda de continuar envenenando as próximas tentativas.
                         // O errado continua lá (o adb não apaga contato por aqui), mas ao lado do certo.
-                        if (_agenda)
-                        {
-                            var corrigido = await phone.SaveContactAsync(alternativo, contato.Nome, ct);
-                            AnsiConsole.MarkupLine(
-                                $"[grey]agenda[/] {alternativo}: {corrigido.EscapeMarkup()} "
-                                + "[grey](a forma que funciona)[/]");
-                        }
+                        // Incondicional: isto não é o "gravar antes de enviar" (que saiu, ver o remarks
+                        // do `gravar`), é CORREÇÃO de um registro que está envenenando a agenda. Deixar
+                        // isso opcional seria permitir que o operador desligue o conserto do próprio
+                        // estrago.
+                        var corrigido = await phone.SaveContactAsync(alternativo, contato.Nome, ct);
+                        AnsiConsole.MarkupLine(
+                            $"[grey]agenda[/] {alternativo}: {corrigido.EscapeMarkup()} "
+                            + "[grey](a forma que funciona)[/]");
                     }
                 }
 
@@ -1543,6 +1661,7 @@ internal sealed class PhoneConsoleCommand(
                 if (r.Sent)
                 {
                     enviados++;
+                    cotaGasta++;
                     // Tique de entrega JÁ visível na tela. Só "delivered"/"read" contam: "sent" é o
                     // estado normal segundos depois do toque, e tratá-lo como entrega mentiria.
                     if (r.DeliveryStatus is "delivered" or "read")
@@ -1565,6 +1684,8 @@ internal sealed class PhoneConsoleCommand(
                     // NÃO conta como enviado nem sai da lista: não há o que afirmar. Mas também não é
                     // uma falha comum, e chamá-la assim faria o operador reenviar achando que nada saiu.
                     falhas++;
+                    // Gasta cota mesmo assim: a conversa foi aberta e a mensagem pode ter saído.
+                    cotaGasta++;
                     // Conta como falha de APARELHO: "toquei enviar e não consegui confirmar" fala da
                     // leitura de tela, não do número, e repetido é sinal de aparelho ruim.
                     disjuntor.DeviceFailure();
@@ -1736,6 +1857,19 @@ internal sealed class PhoneConsoleCommand(
                     break;
                 }
 
+                // 🔴 A COTA SE GASTA AQUI, e não recortando o plano lá atrás. Contar CONTATOS fazia
+                // falha, contato segurado e duplicata pulada consumirem cota sem nada sair. A cota
+                // protege a conta contra CONVERSA ABERTA, e recusa não abre conversa nenhuma.
+                // Depois da parada por falha, de propósito: chegar na cota é fim normal e não deve
+                // mascarar um lote que estava sendo interrompido por problema.
+                if (cota > 0 && cotaGasta >= cota)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[blue]cota de {cota} envio(s) completa.[/] [grey]{plano.Count - (i + 1)} "
+                        + "contato(s) ficam na lista para a próxima execução.[/]");
+                    break;
+                }
+
                 // 🔴 PAUSA LONGA ENTRE BLOCOS, e ela SUBSTITUI a espera normal, não soma. O que pesa
                 // contra o chip é padrão: fluxo contínuo, hora após hora, no mesmo intervalo, é
                 // assinatura de máquina. Gente manda um punhado, some, volta depois.
@@ -1763,7 +1897,9 @@ internal sealed class PhoneConsoleCommand(
                     // normal, que espaça as aberturas. Com a parada fora, o ritmo é a proteção que
                     // sobrou, e por isso ele deixou de ser opcional.
                     var emSequencia = disjuntor.InFailureStreak;
-                    var (min, max) = r.Sent || emSequencia ? (_min, _max) : (FalhaEsperaMin, FalhaEsperaMax);
+                    var (min, max) = r.Sent || emSequencia
+                        ? (intervaloMin, intervaloMax)
+                        : (FalhaEsperaMin, FalhaEsperaMax);
                     var espera = Random.Shared.Next(min, max + 1);
                     AnsiConsole.MarkupLine(
                         r.Sent
@@ -1823,11 +1959,17 @@ internal sealed class PhoneConsoleCommand(
                 // sistema quebrou, quando faltou esperar.
                 if (naoConfirmados.Count > confirmados)
                 {
+                    // 🔴 AS DUAS CAUSAS, e a primeira é caminho SEM SAÍDA se não for dita. Desde que o
+                    // toggle "gravar antes de enviar" saiu, NADA no `enviar` põe contato na agenda. Quem
+                    // colar uma lista nova e disparar direto, com `segurar` ligado, vê todo mundo
+                    // segurado — e continuaria vendo pra sempre, porque nenhum lote grava. Dizer só
+                    // "espere o sync" mandaria o operador esperar por algo que nunca vai acontecer.
                     AnsiConsole.MarkupLine(
-                        "[yellow]mais da metade não confirmada.[/] [grey]se você gravou a lista há pouco, "
-                        + "é sync: o WhatsApp leva de 2,5 a 7 min pra reconhecer contato novo na agenda. "
-                        + "espere e rode de novo. se persistir depois disso, aí sim provavelmente não "
-                        + "têm conta — confira a forma deles com[/] c[grey].[/]");
+                        "[yellow]mais da metade não confirmada.[/] [grey]duas causas possíveis: (1) você "
+                        + "ainda não rodou o[/] gravar [grey]— sem ele os contatos NÃO entram na agenda "
+                        + "do celular e vão continuar segurados; (2) você gravou há pouco e é sync, que "
+                        + "leva de 2,5 a 7 min. se já gravou e esperou, aí sim provavelmente não têm "
+                        + "conta — confira a forma deles com[/] c[grey].[/]");
                 }
                 MostrarAlguns(naoConfirmados.Count, 10, i => $"  [grey]{naoConfirmados[i]}[/]", " não confirmado(s)");
             }
@@ -1862,14 +2004,23 @@ internal sealed class PhoneConsoleCommand(
     private void MostrarPainelDoChip(int tamanhoDoLote, ResumoDoLog log)
     {
         var (dias, ultimo, enviadasHoje) = (log.DiasAtivos, log.UltimoFechado, log.EnviadasHoje);
-        var s = ChipHistory.Sugerir(dias, ultimo);
+        var s = ChipHistory.Sugerir(dias, ultimo, log.DiasDesdeUltimoDia);
 
+        // "há N dias" na linha do histórico, e não só na do motivo: os dias de disparo NÃO são dias de
+        // calendário (quem pula dias não regride), então sem a lacuna à vista "6 dias de disparo" pode
+        // tanto ser a semana passada quanto seis dias espalhados por meio ano.
+        var quando = log.DiasDesdeUltimoDia switch
+        {
+            <= 0 => "",
+            1 => " (ontem)",
+            var n => $" (há {n} dias)",
+        };
         var historico = ultimo is null
             ? (dias == 0
                 ? "[yellow]sem histórico de envio neste aparelho[/]"
                 : $"[bold]{dias}[/] dia(s) de disparo, mas nenhum dia FECHADO ainda")
-            : $"[bold]{dias}[/] dia(s) de disparo · último dia fechado: [bold]{ultimo.Enviadas}[/] "
-              + $"enviada(s), {ultimo.Recusadas} recusa(s)"
+            : $"[bold]{dias}[/] dia(s) de disparo · último dia fechado{quando}: "
+              + $"[bold]{ultimo.Enviadas}[/] enviada(s), {ultimo.Recusadas} recusa(s)"
               + (ultimo.Enviadas > 0
                   ? $", entrega confirmada em {ultimo.EntregasConfirmadas} de {ultimo.Enviadas}"
                   : "");
@@ -2056,7 +2207,9 @@ internal sealed class PhoneConsoleCommand(
     /// <summary>A janela em uma linha, para o menu e o pré-voo. 0h-24h não é horário, é "sem
     /// restrição", e mostrar "0h-24h" faria o operador procurar uma limitação que não existe.</summary>
     private string TetoDescrito() =>
-        _teto == 0 ? "sem teto" : _teto.ToString(CultureInfo.InvariantCulture);
+        _tetoAuto ? "automático (pelo histórico do chip)"
+        : _teto == 0 ? "sem teto"
+        : _teto.ToString(CultureInfo.InvariantCulture);
 
     private string JanelaDescrita() =>
         _horaInicio == 0 && _horaFim == 24 ? "qualquer horário" : $"{_horaInicio}h-{_horaFim}h";
@@ -2161,17 +2314,109 @@ internal sealed class PhoneConsoleCommand(
         }
     }
 
+    /// <summary>Teto AUTOMÁTICO: a cota do dia sai do histórico do próprio chip, a cada lote.</summary>
+    /// <remarks>
+    /// 🔴 A ÚNICA COISA NESTE CONSOLE QUE CORTA SOZINHA, e ela existe porque o operador PEDIU
+    /// explicitamente em 2026-08-11 ("vamos implementar isso para agendar nosso cronograma"). A regra
+    /// da casa continua sendo sugerir e deixar decidir; aqui a decisão foi tomada uma vez, por comando,
+    /// e vale pros lotes seguintes até ele desligar com um `teto N` qualquer.
+    ///
+    /// <para>É o "cronograma" sem cronograma: não há tabela de dias em lugar nenhum. Cada lote recalcula
+    /// a partir do que AQUELE aparelho fez, então um chip que vai bem cresce e um que apanhou encolhe,
+    /// sem ninguém manter planilha.</para>
+    ///
+    /// <para>Desconta o que já saiu HOJE, senão o segundo lote do dia recomeçaria a cota do zero — que
+    /// é o mesmo defeito que o painel já teve e que custou uma revisão pra achar.</para>
+    /// </remarks>
+    private bool _tetoAuto;
+
+    /// <summary>Marca da conta vista no último lote, e desde quando ela vale.</summary>
+    /// <remarks>
+    /// 🔴 O HISTÓRICO É DO APARELHO; O QUE O WHATSAPP PUNE É A CONTA. Todo arquivo deste console é
+    /// indexado pelo serial do adb, e a classe que sugere volume se chama <c>ChipHistory</c> — mas nada
+    /// sabia QUAL conta produziu aquele histórico. Enquanto ninguém troca, os dois coincidem e a
+    /// diferença não aparece. No dia da troca, uma conta registrada hoje herdava 20 dias de maturidade e
+    /// recebia sugestão de volume alto justamente nos primeiros dias, que é o período de risco máximo.
+    /// É a única falha desta área que errava para MAIS.
+    ///
+    /// <para>Trocar o SIM sem registrar de novo não muda nada, e está certo: a reputação está no número
+    /// registrado, não no chip da bandeja. Por isso a marca vem da conta, não do SIM.</para>
+    ///
+    /// <para>Quando o aparelho não sabe responder (<c>null</c>), nada é presumido — resta o
+    /// <c>chip novo</c>, que é manual e existe justamente para esse caso.</para>
+    /// </remarks>
+    private string? _conta;
+    private string? _chipDesde;
+
+    /// <summary>Marca que a conta deste aparelho recomeçou hoje. O histórico anterior fica no CSV mas
+    /// para de contar para o aquecimento.</summary>
+    private void ChipNovo(string serial)
+    {
+        _chipDesde = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        _conta = null;   // a próxima leitura registra a conta nova sem acusar troca de novo
+        Salvar(serial);
+        AnsiConsole.MarkupLine(
+            $"[green]chip novo marcado em {_chipDesde}.[/] [grey]o aquecimento recomeça do zero: o que "
+            + "está no CSV antes desta data continua gravado, mas não conta mais como histórico deste "
+            + "chip. rode[/] chip novo [grey]só quando REGISTRAR outra conta no WhatsApp; trocar o SIM "
+            + "sem registrar de novo mantém a mesma conta e o histórico continua valendo.[/]");
+    }
+
+    /// <summary>Confere se a conta registrada mudou desde o último lote. Silencioso quando não mudou ou
+    /// quando o aparelho não sabe responder.</summary>
+    private async Task ConferirContaAsync(string serial, CancellationToken ct)
+    {
+        var atual = await phone.IdentidadeDaContaAsync(ct);
+        if (atual is null)
+        {
+            return;
+        }
+        if (_conta is null)
+        {
+            // Primeira vez que este console consegue ler a conta. Registra sem acusar troca: não há com
+            // o que comparar, e chamar isso de "mudou" zeraria o histórico de todo mundo uma vez.
+            _conta = atual;
+            Salvar(serial);
+            return;
+        }
+        if (string.Equals(_conta, atual, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _conta = atual;
+        _chipDesde = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        Salvar(serial);
+        AnsiConsole.MarkupLine(
+            "[yellow]a conta registrada neste aparelho MUDOU desde o último lote.[/] [grey]o aquecimento "
+            + "recomeça do zero: histórico de outra conta não diz nada sobre esta, e conta recém-"
+            + "registrada tem risco máximo nos primeiros dias. o CSV antigo continua no disco.[/]");
+    }
+
     private void Teto(string[] partes)
     {
+        if (partes.Length >= 2 && string.Equals(partes[1].Trim(), "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            _tetoAuto = true;
+            _teto = 0;
+            AnsiConsole.MarkupLine(
+                "teto: [bold]automático[/] [grey]— a cada lote, a cota sai do histórico deste aparelho "
+                + "(cresce em dia limpo, encolhe em dia com muita recusa) e desconta o que já saiu hoje. "
+                + "o pré-voo mostra o número antes de você confirmar. para voltar ao manual, use[/] "
+                + "teto <n>[grey].[/]");
+            return;
+        }
+
         if (partes.Length < 2 || !int.TryParse(partes[1], out var n) || n < 0)
         {
             AnsiConsole.MarkupLine(
-                $"[red]uso:[/] teto <n>   (atual: {(_teto == 0 ? "sem teto" : _teto.ToString(CultureInfo.InvariantCulture))})");
+                $"[red]uso:[/] teto <n>   [grey]ou[/] teto auto   (atual: {TetoDescrito()})");
             AnsiConsole.MarkupLine(
                 "[grey]quantas mandar NESTA execução; o resto fica na lista.[/] 0 [grey]= sem teto, "
-                + "manda a lista inteira.[/]");
+                + "manda a lista inteira.[/] auto [grey]= deriva do histórico do chip a cada lote.[/]");
             return;
         }
+        _tetoAuto = false;
         _teto = n;
         AnsiConsole.MarkupLine(
             _teto == 0
@@ -2326,13 +2571,12 @@ internal sealed class PhoneConsoleCommand(
         t.AddColumn(new TableColumn("agora"));
 
         t.AddRow("[bold]1[/]", "ritmo entre mensagens", $"[bold]{_min}-{_max}s[/]");
-        t.AddRow("[bold]2[/]", "cota por execução", $"[bold]{TetoDescrito()}[/]");
+        t.AddRow("[bold]2[/]", "cota de envios por execução", $"[bold]{TetoDescrito()}[/]");
         t.AddRow("[bold]b[/]", "blocos, pausa e janela",
             (_bloco == 0
                 ? "[grey]fluxo contínuo[/]"
                 : $"~[bold]{_bloco}[/] por vez, pausa ~[bold]{_pausaMin}[/] min")
             + $" [grey]· {JanelaDescrita()}[/]");
-        t.AddRow("[bold]3[/]", "gravar na agenda", _agenda ? "[bold]ligado[/]" : "[grey]desligado[/]");
         t.AddRow("[bold]d[/]", "digitação humana",
             _digitacaoHumana
                 ? "[bold]ligada[/] [grey](só ASCII)[/]"
@@ -2620,10 +2864,11 @@ internal sealed class PhoneConsoleCommand(
             ("resulta", "lista maior que 5 é recusada ANTES de começar"),
             ("use", "baixo: colagem errada vira recusa, não rajada"));
 
-        Passo(3, "gravar na agenda",
-            ("digite", "3   ou   agenda"),
-            ("resulta", "alterna ligado e desligado a cada vez"),
-            ("padrão", "LIGADO: grava o contato no celular antes de enviar"),
+        Passo(3, "gravar a lista na agenda",
+            ("digite", "g   ou   gravar"),
+            ("resulta", "grava a lista inteira no celular, SEM enviar nada"),
+            ("espere", "5 a 10 min: o WhatsApp leva esse tempo pra reconhecer"),
+            ("por quê", "só depois disso ele sabe quem tem WhatsApp"),
             ("já salvo", "detecta e não grava de novo, nem sobrescreve"));
 
         Passo(4, "colar os contatos",
@@ -2695,9 +2940,9 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("intervalo <min> <max>", "segundos entre um envio e o próximo (default 150 360)");
         t.AddRow("blocos <n> <min> [grey]| b[/]", "manda ~n, pausa ~min minutos, repete (default 15 e 30; n=0 desliga)");
         t.AddRow("janela <ini> <fim>", "horas em que é permitido enviar (default 8 22)");
-        t.AddRow("teto <n>", "cota desta execução: manda os n primeiros e deixa o resto na lista");
+        t.AddRow("teto <n> [grey]| teto auto[/]", "cota de ENVIOS desta execução; auto deriva do histórico do chip");
+        t.AddRow("chip novo", "você REGISTROU outra conta neste aparelho: o aquecimento recomeça do zero");
         t.AddRow("parar <n>", "falhas seguidas que interrompem o lote (default 0 = nunca interrompe)");
-        t.AddRow("agenda", "liga/desliga gravar o contato na agenda antes de enviar");
         t.AddRow("bip [grey]| som[/]", "liga/desliga o aviso sonoro (agudo = saiu, dois graves = não saiu)");
         t.AddRow("segurar", "liga/desliga NÃO enviar quando a agenda não confirma que o número tem WhatsApp");
         t.AddRow("x [grey][[contato|texto]] [[n]][/]", "exclui UM item (pergunta se você não disser qual)");
@@ -2793,7 +3038,7 @@ internal sealed class PhoneConsoleCommand(
                 _contatos.Add(new Contato(campos[0], campos.Length > 1 && campos[1].Length > 0 ? campos[1] : null));
             }
             _textos.AddRange(e.Textos);
-            (_min, _max, _agenda, _digitacaoHumana) = (e.MinDelay, e.MaxDelay, e.Agenda, e.DigitacaoHumana);
+            (_min, _max, _digitacaoHumana) = (e.MinDelay, e.MaxDelay, e.DigitacaoHumana);
             if (e.Teto is { } teto)
             {
                 _teto = Math.Max(0, teto);
@@ -2810,6 +3055,11 @@ internal sealed class PhoneConsoleCommand(
             {
                 _segurarNaoConfirmados = segurar;
             }
+            if (e.TetoAuto is { } ta)
+            {
+                _tetoAuto = ta;
+            }
+            (_conta, _chipDesde) = (e.Conta, e.ChipDesde);
             if (e.Bloco is { } b)
             {
                 _bloco = Math.Clamp(b, 0, 200);
@@ -2853,10 +3103,12 @@ internal sealed class PhoneConsoleCommand(
                 PausaMin = _pausaMin,
                 HoraInicio = _horaInicio,
                 HoraFim = _horaFim,
-                Agenda = _agenda,
                 DigitacaoHumana = _digitacaoHumana,
                 Bip = _bip,
                 SegurarNaoConfirmados = _segurarNaoConfirmados,
+                TetoAuto = _tetoAuto,
+                Conta = _conta,
+                ChipDesde = _chipDesde,
             };
             // 🔴 ESCREVE NUM TEMPORÁRIO E TROCA, em vez de sobrescrever direto.
             //
@@ -2939,8 +3191,14 @@ internal sealed class PhoneConsoleCommand(
     /// <param name="DiasAtivos">Dias distintos com disparo.</param>
     /// <param name="UltimoFechado">Resumo do último dia FECHADO. null = só há o dia de hoje.</param>
     /// <param name="EnviadasHoje">Quanto já saiu hoje, para descontar da sugestão.</param>
+    /// <param name="DiasDesdeUltimoDia">Dias corridos entre o último dia fechado e hoje. Sem lacuna
+    /// nenhuma (disparou ontem) dá 1; 0 significa que não há dia fechado.</param>
     private sealed record ResumoDoLog(
-        HashSet<string> JaEnviados, int DiasAtivos, DiaDoChip? UltimoFechado, int EnviadasHoje);
+        HashSet<string> JaEnviados,
+        int DiasAtivos,
+        DiaDoChip? UltimoFechado,
+        int EnviadasHoje,
+        int DiasDesdeUltimoDia);
 
     /// <summary>Lê o CSV do aparelho UMA vez e responde tudo que o pré-voo pergunta.</summary>
     /// <remarks>
@@ -2956,7 +3214,10 @@ internal sealed class PhoneConsoleCommand(
     /// <para>Best-effort: log ilegível devolve resumo vazio, que é o desfecho conservador — sem aviso
     /// de repetição e com sugestão de chip novo.</para>
     /// </remarks>
-    private static ResumoDoLog LerLog(string serial)
+    /// <param name="chipDesde">Data (yyyy-MM-dd) em que a conta atual começou, ou null. Dias anteriores
+    /// entram no aviso de repetição, porque a PESSOA já recebeu, mas ficam fora do aquecimento, porque
+    /// quem mandou foi outra conta. Os dois usos do mesmo arquivo têm perguntas diferentes.</param>
+    private static ResumoDoLog LerLog(string serial, string? chipDesde)
     {
         var numeros = new HashSet<string>(StringComparer.Ordinal);
         var porDia = new Dictionary<string, (int Enviadas, int Recusadas, int Confirmadas)>(
@@ -2966,7 +3227,7 @@ internal sealed class PhoneConsoleCommand(
             var caminho = Path.Combine(Pasta, $"envios-{Higienizar(serial)}.csv");
             if (!File.Exists(caminho))
             {
-                return new ResumoDoLog(numeros, 0, null, 0);
+                return new ResumoDoLog(numeros, 0, null, 0, 0);
             }
             foreach (var linha in File.ReadLines(caminho).Skip(1))
             {
@@ -2992,6 +3253,17 @@ internal sealed class PhoneConsoleCommand(
                     continue;
                 }
                 var dia = campos[0][..10];
+
+                // 🔴 SÓ O AQUECIMENTO É CORTADO. `numeros` acima já recebeu este contato, e de propósito:
+                // quem recebeu de outra conta continua sendo alguém que JÁ RECEBEU, e mandar de novo é
+                // gatilho de denúncia independente de qual chip mandou. O que muda de dono é a curva de
+                // volume, não a memória de quem foi atendido.
+                // Comparação por texto porque a data é ISO-8601, em que ordem alfabética é cronológica.
+                if (chipDesde is not null && string.CompareOrdinal(dia, chipDesde) < 0)
+                {
+                    continue;
+                }
+
                 porDia.TryGetValue(dia, out var acc);
                 if (saiu)
                 {
@@ -3011,26 +3283,45 @@ internal sealed class PhoneConsoleCommand(
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Log ilegível não pode impedir o envio; no pior caso o aviso de repetição não aparece.
-            return new ResumoDoLog(numeros, 0, null, 0);
+            return new ResumoDoLog(numeros, 0, null, 0, 0);
         }
 
         if (porDia.Count == 0)
         {
-            return new ResumoDoLog(numeros, 0, null, 0);
+            return new ResumoDoLog(numeros, 0, null, 0, 0);
         }
 
         // 🔴 HOJE É SEPARADO DO ÚLTIMO DIA FECHADO, e a distinção não é cosmética. Rodando um SEGUNDO
         // lote no mesmo dia, "o último dia" seria HOJE — e a sugestão cresceria sobre o que já saiu
         // hoje, encorajando dobrar o volume do dia.
-        var hoje = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var agora = DateTime.Now;
+        var hoje = agora.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var enviadasHoje = porDia.TryGetValue(hoje, out var doDiaDeHoje) ? doDiaDeHoje.Enviadas : 0;
-        var fechado = porDia
+        // Ordenação por texto vale porque a data é ISO-8601, em que ordem alfabética É ordem cronológica.
+        var ultimo = porDia
             .Where(p => !string.Equals(p.Key, hoje, StringComparison.Ordinal))
             .OrderBy(p => p.Key, StringComparer.Ordinal)
-            .Select(p => (DiaDoChip?)new DiaDoChip(p.Value.Enviadas, p.Value.Recusadas, p.Value.Confirmadas))
+            .Select(p => (KeyValuePair<string, (int Enviadas, int Recusadas, int Confirmadas)>?)p)
             .LastOrDefault();
+        if (ultimo is not { } fechado)
+        {
+            return new ResumoDoLog(numeros, porDia.Count, null, enviadasHoje, 0);
+        }
 
-        return new ResumoDoLog(numeros, porDia.Count, fechado, enviadasHoje);
+        // 🔴 QUANTOS DIAS FAZ, e não só qual foi o dia. Sem esta conta, quem some por um mês e volta
+        // recebe sugestão de CRESCER sobre o dia de um mês atrás, porque o dado diz "limpo" e nada
+        // pergunta quando. Silêncio longo seguido de pico é padrão punido por si só.
+        var lacuna = DateTime.TryParseExact(
+            fechado.Key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var data)
+            ? Math.Max(0, (int)(agora.Date - data.Date).TotalDays)
+            : 0;
+
+        return new ResumoDoLog(
+            numeros,
+            porDia.Count,
+            new DiaDoChip(fechado.Value.Enviadas, fechado.Value.Recusadas, fechado.Value.Confirmadas),
+            enviadasHoje,
+            lacuna);
     }
 
     /// <summary>Separa por ';' respeitando aspas, senão um nome com ';' desloca todas as colunas.</summary>

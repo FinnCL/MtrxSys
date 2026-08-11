@@ -141,9 +141,25 @@ public static class ChipHistory
     /// tem, e recusa em massa costuma preceder problema maior.</summary>
     private const double RecusaAceitavel = 0.2;
 
+    /// <summary>Dias de silêncio a partir dos quais o histórico deixa de autorizar CRESCER.</summary>
+    /// <remarks>
+    /// 🔴 O HISTÓRICO ENVELHECE, e ignorar isso era o buraco: a conta agrupa por DATA e trata "último
+    /// dia fechado" como se fosse ontem. Quem dispara 40, some um mês e volta receberia sugestão de 52,
+    /// porque o dado diz "limpo" e ninguém pergunta QUANDO.
+    /// <para>Silêncio longo seguido de pico é, sozinho, um dos padrões que o WhatsApp pune, e há um
+    /// motivo concreto além do padrão: bloqueio e denúncia chegam DEPOIS do envio, então um dia que
+    /// parecia limpo pode ter azedado durante o silêncio, e o console não tem como saber.</para>
+    /// <para>Sete dias porque é o ponto em que "semana passada" vira "outra época" para uma conta cuja
+    /// qualidade é medida em janela móvel. Não é parada nem recuo: repete o volume que aquele chip
+    /// comprovadamente tolerou. Sabe-se que ele aguentou N; não se sabe que aguenta 1,3 x N.</para>
+    /// </remarks>
+    public const int DiasDeSilencioQueSuspendeCrescimento = 7;
+
     /// <param name="diasAtivos">Dias distintos em que o aparelho já disparou, incluindo hoje.</param>
     /// <param name="ultimoDia">O resumo do último dia com disparo. null = nunca disparou.</param>
-    public static SugestaoDoChip Sugerir(int diasAtivos, DiaDoChip? ultimoDia)
+    /// <param name="diasDesdeUltimoDia">Dias corridos entre o último dia FECHADO e hoje. 0 = ontem ou
+    /// desconhecido.</param>
+    public static SugestaoDoChip Sugerir(int diasAtivos, DiaDoChip? ultimoDia, int diasDesdeUltimoDia = 0)
     {
         if (ultimoDia is null || ultimoDia.Enviadas == 0)
         {
@@ -178,6 +194,20 @@ public static class ChipHistory
                 metade,
                 $"o último dia teve {ultimoDia.Recusadas} recusa(s) em {total} tentativa(s), "
                 + $"{taxaRecusa:P0} — acima disso vale encolher e observar antes de voltar a crescer");
+        }
+
+        if (diasDesdeUltimoDia > DiasDeSilencioQueSuspendeCrescimento)
+        {
+            // Depois da recusa, de propósito: dia ruim continua mandando encolher, e encolher é mais
+            // cauteloso do que repetir. A lacuna só governa o caso em que o dado AUTORIZARIA crescer.
+            return new SugestaoDoChip(
+                diasAtivos,
+                FaseDe(diasAtivos),
+                Math.Min(TetoSugestao, Math.Max(1, ultimoDia.Enviadas)),
+                $"o último dia com disparo foi há {diasDesdeUltimoDia} dias, então ele já não diz como "
+                + "esta conta está hoje: bloqueio e denúncia chegam depois do envio. a sugestão repete "
+                + $"o volume que este chip comprovadamente aguentou ({ultimoDia.Enviadas}) em vez de "
+                + "crescer sobre dado velho");
         }
 
         var crescido = Math.Min(TetoSugestao, (int)Math.Round(ultimoDia.Enviadas * Crescimento));

@@ -178,6 +178,11 @@ internal sealed class PhysicalPhoneOrchestrator : IPhoneOrchestrator, IDisposabl
     public Task<bool?> IsOnWhatsAppAsync(string phoneE164, CancellationToken ct) =>
         _contacts.IsOnWhatsAppAsync(phoneE164, ct);
 
+    /// <summary>Marca da conta registrada, pela agenda. É o único caminho no físico: o do emulador lê as
+    /// shared_prefs do app, que sem root não abrem.</summary>
+    public Task<string?> IdentidadeDaContaAsync(CancellationToken ct) =>
+        _contacts.IdentidadeDaContaAsync(ct);
+
     public async Task<string> OpenUrlAsync(string url, CancellationToken ct)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out _) || url.Contains('\'', StringComparison.Ordinal))

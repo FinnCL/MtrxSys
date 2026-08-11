@@ -175,6 +175,43 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
     private static readonly Regex DataRowIdRx =
         new(@"(?:^|[,\s])_id=(\d+)", RegexOptions.Compiled);
 
+    /// <summary>Marca estável da conta do WhatsApp registrada. null = não deu pra saber.</summary>
+    /// <remarks>
+    /// 🔴 O QUE ISTO LÊ, e por que não precisa de root. O WhatsApp mantém um sync adapter que publica os
+    /// contatos que ele reconhece dentro de uma conta própria do Android (<c>account_type</c>
+    /// <c>com.whatsapp</c>), e o <c>account_name</c> dessas linhas identifica a conta registrada. É a
+    /// MESMA tabela e o MESMO mecanismo que o <see cref="SaveContactAsync"/> já usa, com a identidade do
+    /// shell — medido neste aparelho em 2026-07-29. A alternativa seria ler as shared_prefs do app, que é
+    /// o que o engine do emulador faz e que num aparelho sem root não dá.
+    ///
+    /// <para>🔴 DEVOLVE O VALOR CRU DE PROPÓSITO, sem tentar extrair "o número". Quem chama só compara
+    /// com o que viu da última vez. Interpretar o formato seria apostar em como o app nomeia a conta, e
+    /// errar isso silenciosamente confundiria conta trocada com conta igual, que é exatamente o dano que
+    /// esta função existe pra evitar. Como identificador, qualquer string estável serve.</para>
+    ///
+    /// <para>Registrar outra conta faz o app recriar essas linhas sob o novo nome, e é isso que torna a
+    /// mudança observável daqui.</para>
+    /// </remarks>
+    public async Task<string?> IdentidadeDaContaAsync(CancellationToken ct)
+    {
+        var (rc, saida, _) = await _adb.ShellAsync(
+            "content query --uri content://com.android.contacts/raw_contacts "
+            + "--projection account_name --where \"account_type='com.whatsapp'\"", ct);
+        if (rc != 0 || string.IsNullOrWhiteSpace(saida))
+        {
+            return null;
+        }
+        // Uma linha por contato espelhado, todas com o mesmo account_name: basta a primeira. Vazio não
+        // vira identidade — seria tratar "o app não publicou nada" como se fosse uma conta, e aí um
+        // aparelho mudo pareceria uma troca a cada lote.
+        var m = AccountNameRx.Match(saida);
+        var nome = m.Success ? m.Groups[1].Value.Trim() : "";
+        return nome.Length == 0 ? null : nome;
+    }
+
+    private static readonly Regex AccountNameRx =
+        new(@"account_name=([^,\r\n]+)", RegexOptions.Compiled);
+
     /// <summary>O número tem WhatsApp, segundo o próprio aparelho?</summary>
     /// <returns>true = o app publicou o espelho (é usuário). null = NÃO SEI. NUNCA devolve false.</returns>
     /// <remarks>

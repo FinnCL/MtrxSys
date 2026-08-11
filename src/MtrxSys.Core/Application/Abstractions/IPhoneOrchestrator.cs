@@ -174,6 +174,27 @@ public interface IPhoneOrchestrator
     Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
         Task.FromResult(WhatsAppSendResult.Fail("envio pela UI não suportado neste engine."));
 
+    /// <summary>Marca ESTÁVEL da conta do WhatsApp registrada no aparelho. Muda quando outra conta passa
+    /// a ser a registrada; null = não deu pra saber.</summary>
+    /// <remarks>
+    /// 🔴 SERVE PRA COMPARAR, NÃO PRA LER. É de propósito que o contrato não promete "o número": quem
+    /// chama só precisa saber se a conta é A MESMA de antes, e exigir o número obrigaria a interpretar um
+    /// formato que varia por versão de app e de Android — trocando uma pergunta que tem resposta certa
+    /// ("mudou?") por uma que teria resposta chutada.
+    ///
+    /// <para>Existe porque todo histórico deste projeto é indexado pelo APARELHO (serial do adb), e o
+    /// que o WhatsApp pune é a CONTA. Enquanto ninguém troca de conta os dois coincidem e a diferença é
+    /// invisível; no dia da troca, um chip recém-registrado herda a maturidade do anterior e recebe
+    /// sugestão de volume alto justamente nos primeiros dias, que é o período de risco máximo.</para>
+    ///
+    /// <para>Trocar o SIM sem registrar de novo NÃO muda a conta, e é certo que não mude nada aqui: a
+    /// reputação está no número registrado, não no chip que está na bandeja.</para>
+    ///
+    /// <para>Default null: engine que não sabe responder não deve inventar, e quem chama trata null como
+    /// "continue com o que você já sabia" em vez de supor troca.</para>
+    /// </remarks>
+    Task<string?> IdentidadeDaContaAsync(CancellationToken ct) => Task.FromResult<string?>(null);
+
     /// <summary>O aparelho consegue digitar ESTE texto? null = sim (ou o engine não opina); string =
     /// motivo pra mostrar ao operador ANTES de começar o lote.</summary>
     /// <remarks>
