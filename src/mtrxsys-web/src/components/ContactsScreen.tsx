@@ -1,9 +1,74 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import { type Contact, type ContactGroupTag } from "../api/types";
+import { contactStatusBadge, type Contact, type ContactGroupTag } from "../api/types";
+import { copyText } from "../utils/clipboard";
+import { downloadContactsXlsx } from "../utils/exportContacts";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { GoogleImportPanel } from "./GoogleImportPanel";
 import { StatusBadge } from "./StatusBadge";
+
+// Um telefone por linha: é o formato que cola direto em campo de busca, em bloco de notas e no
+// console do aparelho, sem o operador ter que limpar nada.
+//
+// 🔴 SEM quem pediu para sair. Este é o único formato que perde o status pelo caminho, e o destino
+// provável dele é o console do aparelho, que por escopo "não tem fila, curva de aquecimento, opt-out,
+// dedup entre execuções nem auditoria no banco" (PhoneConsoleCommand). Ou seja: colado lá, o número
+// vira mensagem sem ninguém mais conferir se aquela pessoa mandou SAIR. A tela é a última barreira,
+// então ela não entrega esses números nesse formato. Não é cortar informação calado: a contagem dos
+// excluídos vai no aviso, e os outros dois formatos (nome e telefone, planilha) levam TODOS com o
+// status ao lado, que é o que permite decidir caso a caso.
+const telefonesDaLista = (list: Contact[]) =>
+  list.filter((c) => !c.optOutAt).map((c) => c.phoneE164).join("\n");
+
+// TAB e quebra de linha SÃO os separadores do formato colado. Nome de contato vem do WhatsApp ou da
+// agenda Google, onde cabe qualquer caractere: um TAB no nome empurra as colunas seguintes e a linha
+// inteira cola errada, calada. Vira espaço antes de entrar no texto.
+const semSeparadores = (texto: string) => texto.replace(/[\t\r\n]+/g, " ").trim();
+
+// Nome, telefone e status separados por TAB. Serve pra colar em texto (chat, bloco de notas, ticket).
+// Pra PLANILHA existe o botão de baixar .xlsx ao lado: colado numa célula, "+5511..." é lido como
+// FÓRMULA pelo Excel e pelo Sheets (ambos aceitam "+" como início de fórmula), o "+" desaparece e o
+// número virá em notação científica. O .xlsx grava texto de verdade e não passa por esse parser.
+const tabelaDaLista = (list: Contact[]) =>
+  [
+    "Nome\tTelefone\tStatus",
+    ...list.map(
+      (c) =>
+        `${semSeparadores(c.name ?? "")}\t${c.phoneE164}\t${semSeparadores(contactStatusBadge(c).label)}`,
+    ),
+  ].join("\n");
+
+// Aviso da cópia de telefones: quantos saíram no texto e o que a lista de números NÃO carrega
+// consigo. A conta é dita por inteiro porque o número copiado perde o status que a tabela mostrava,
+// e fora desta tela ninguém mais vai reconstruir essa informação.
+//
+// Opt-out é EXCLUÍDO (não pode receber, nunca) e contado no aviso. "Outro chip" é INCLUÍDO e avisado:
+// aquele contato pode receber, só não por este chip; disparar por ele é risco de 463, e re-importar o
+// grupo com o chip conectado resolve. Uma proibição e um risco não merecem o mesmo tratamento.
+function avisoTelefones(list: Contact[], tag: string): { texto: string; alerta: boolean } {
+  const saidas = list.filter((c) => c.optOutAt).length;
+  const copiados = list.length - saidas;
+  const vivos = list.filter((c) => !c.optOutAt);
+  const outroChip = vivos.filter((c) => !c.fromCurrentChip).length;
+  // Já receberam mensagem, por este ambiente (lastSentAt) ou por outro (sentElsewhere). O console do
+  // aparelho não tem dedup entre execuções, então colar a lista inteira manda de novo pra essa gente,
+  // e a mesma pessoa recebendo duas vezes é o padrão que faz o destinatário denunciar.
+  const jaReceberam = vivos.filter((c) => c.lastSentAt || c.sentElsewhere).length;
+  const partes = [`${copiados} telefone(s) copiado(s) da lista "${tag}".`];
+  if (saidas > 0) {
+    partes.push(`${saidas} ficaram fora da cópia por opt-out (pediram para sair).`);
+  }
+  if (jaReceberam > 0) {
+    partes.push(`${jaReceberam} já receberam mensagem antes: colar tudo manda de novo pra eles.`);
+  }
+  if (outroChip > 0) {
+    partes.push(`${outroChip} são de outro chip: disparar por este chip é risco de bloqueio (463).`);
+  }
+  return {
+    texto: partes.join(" "),
+    alerta: saidas > 0 || jaReceberam > 0 || outroChip > 0,
+  };
+}
 
 export function ContactsScreen() {
   const [groups, setGroups] = useState<ContactGroupTag[]>([]);
@@ -23,6 +88,62 @@ export function ContactsScreen() {
   >(null);
   const [busy, setBusy] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  // Qual botão de copiar acabou de ser usado (id do contato, ou "lista:<tag>") e se deu certo, pra
+  // trocar o rótulo dele por "Copiado!" ou "Falhou" por um instante. O retorno vai no PRÓPRIO botão
+  // porque é o único ponto da tela que o operador com certeza está olhando quando clica.
+  const [copiado, setCopiado] = useState<{ chave: string; ok: boolean } | null>(null);
+  // Retorno da cópia. Fica JUNTO dos botões, e não no aviso do topo da tela: a lista aberta pode ter
+  // centenas de linhas, o topo está fora da vista quando o operador clica lá embaixo, e um alerta que
+  // não é visto não avisou nada.
+  const [copiaMsg, setCopiaMsg] = useState<{ texto: string; alerta: boolean } | null>(null);
+  const copiadoTimer = useRef<number | null>(null);
+
+  // Limpa o timer se a tela sair do ar antes de ele disparar (evita setState em componente morto).
+  useEffect(() => {
+    return () => {
+      if (copiadoTimer.current !== null) window.clearTimeout(copiadoTimer.current);
+    };
+  }, []);
+
+  // Devolve o rótulo do botão ao normal depois de um tempo. Falha fica mais na tela que sucesso: é o
+  // caso em que o operador precisa ler antes de o aviso sumir.
+  function agendarLimpeza(ok: boolean) {
+    if (copiadoTimer.current !== null) window.clearTimeout(copiadoTimer.current);
+    copiadoTimer.current = window.setTimeout(() => setCopiado(null), ok ? 2000 : 5000);
+  }
+
+  // Copia e responde no botão. Falha (http sem contexto seguro, permissão negada) é dita em voz alta:
+  // botão que não confirma nem reclama é pior que botão que não existe.
+  async function copiar(
+    chave: string,
+    texto: string,
+    aviso?: { texto: string; alerta: boolean },
+    avisoVazio?: string,
+  ) {
+    // Texto vazio tratado ANTES de tentar copiar: a área de transferência recusaria, e a mensagem
+    // genérica de falha mandaria o operador procurar problema de navegador quando o motivo é que não
+    // sobrou ninguém pra copiar.
+    if (!texto) {
+      setCopiado({ chave, ok: false });
+      setCopiaMsg({ texto: avisoVazio ?? "Nada a copiar nesta lista.", alerta: true });
+      agendarLimpeza(false);
+      return;
+    }
+    const ok = await copyText(texto);
+    setCopiado({ chave, ok });
+    setCopiaMsg(
+      ok
+        ? (aviso ?? null)
+        : { texto: "Não consegui copiar. Selecione o texto na tela e use Ctrl+C.", alerta: true },
+    );
+    agendarLimpeza(ok);
+  }
+
+  // Rótulo do botão de copiar: "Copiado!" / "Falhou" só no botão que foi clicado.
+  function rotuloCopia(chave: string, padrao: string): string {
+    if (copiado?.chave !== chave) return padrao;
+    return copiado.ok ? "Copiado!" : "Falhou";
+  }
 
 
   // Extraída do useEffect pra poder ser rechamada: depois de importar da agenda Google, a lista de
@@ -107,6 +228,10 @@ export function ContactsScreen() {
   }
 
   async function toggle(tag: string) {
+    // Zera o retorno da cópia: a contagem e o alerta valem pra UMA lista, e ficar pendurado ao abrir
+    // outra faria o operador ler o aviso da lista errada.
+    setCopiaMsg(null);
+    setCopiado(null);
     if (expanded === tag) {
       setExpanded(null);
       return;
@@ -237,6 +362,7 @@ export function ContactsScreen() {
                     {loadingGroup === g.groupTag && !list ? (
                       <p className="muted small">Carregando...</p>
                     ) : list && list.length > 0 ? (
+                      <>
                       <table className="contacts-table">
                         <thead>
                           <tr>
@@ -271,6 +397,17 @@ export function ContactsScreen() {
                               </td>
                               <td>
                                 <div className="contact-actions">
+                                  {/* Copiar vem primeiro e SEMPRE aparece: é a única ação da linha
+                                      que não muda nada no banco, e vale até pra contato de outro
+                                      chip ou com opt-out (o operador quer o número, não disparar). */}
+                                  <button
+                                    type="button"
+                                    className="contact-copy-btn"
+                                    title={`Copia o telefone ${c.phoneE164} para a área de transferência`}
+                                    onClick={() => void copiar(c.id, c.phoneE164)}
+                                  >
+                                    {rotuloCopia(c.id, "Copiar")}
+                                  </button>
                                   {c.optOutAt ? (
                                     <button
                                       type="button"
@@ -345,6 +482,60 @@ export function ContactsScreen() {
                           ))}
                         </tbody>
                       </table>
+                      {/* Saída da lista inteira, logo abaixo da tabela. Três destinos, porque o
+                          formato certo depende de onde vai colar: texto puro, texto em colunas, ou
+                          planilha de verdade. Nenhum dos três grava nada. */}
+                      <div className="contacts-copy-tools">
+                        <button
+                          type="button"
+                          className="contact-copy-btn"
+                          title="Copia os telefones desta lista, um por linha. Não inclui quem pediu para sair. Atenção: o número solto perde o status, e envio feito pelo console do aparelho não volta pra cá (o contato continua marcado como novo)."
+                          onClick={() =>
+                            void copiar(
+                              `lista:${g.groupTag}`,
+                              telefonesDaLista(list),
+                              avisoTelefones(list, g.groupTag),
+                              "Nada a copiar: todos os contatos desta lista pediram para sair (opt-out).",
+                            )
+                          }
+                        >
+                          {rotuloCopia(
+                            `lista:${g.groupTag}`,
+                            // A contagem no rótulo é a do que SAI na cópia (sem opt-out), não a da
+                            // tabela: botão que promete 120 e entrega 117 é a mentira mais fácil de
+                            // cometer aqui.
+                            `Copiar telefones (${list.filter((c) => !c.optOutAt).length})`,
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="contact-copy-btn"
+                          title="Copia nome, telefone e status separados por TAB, pra colar em texto (chat, bloco de notas). Pra planilha, use o botão de baixar Excel."
+                          onClick={() =>
+                            void copiar(`tabela:${g.groupTag}`, tabelaDaLista(list), {
+                              texto: `${list.length} linha(s) copiada(s) com nome, telefone e status.`,
+                              alerta: false,
+                            })
+                          }
+                        >
+                          {rotuloCopia(`tabela:${g.groupTag}`, "Copiar nome e telefone")}
+                        </button>
+                        {/* Planilha é DOWNLOAD, não cópia: colado numa célula, o "+" do E.164 é lido
+                            como início de fórmula pelo Excel e pelo Sheets, e o telefone chega
+                            adulterado. O .xlsx grava texto e não passa por esse parser. */}
+                        <button
+                          type="button"
+                          className="contact-copy-btn"
+                          title="Baixa a lista em .xlsx com nome, telefone, grupo e status. Os telefones vão como texto, com o + preservado."
+                          onClick={() => downloadContactsXlsx(list, g.groupTag)}
+                        >
+                          Baixar planilha (Excel)
+                        </button>
+                      </div>
+                      {copiaMsg && (
+                        <p className={copiaMsg.alerta ? "error small" : "muted small"}>{copiaMsg.texto}</p>
+                      )}
+                      </>
                     ) : (
                       <p className="muted small">Sem contatos nesta lista.</p>
                     )}
