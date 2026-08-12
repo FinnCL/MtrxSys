@@ -7,6 +7,14 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { GoogleImportPanel } from "./GoogleImportPanel";
 import { StatusBadge } from "./StatusBadge";
 
+// O "+" sai do número BRASILEIRO e SÓ dele. Nos dois destinos prováveis da cópia (busca do WhatsApp
+// e console do aparelho) o que falta é completado com o código do país do aparelho, que é 55 — então
+// pro +55 o sinal é redundante, e o driver automático já digita sem ele (`Where(char.IsDigit)` em
+// WhatsAppUiDriver.cs:41). Tirar de TODOS deixaria a lista bonita e uniforme e quebraria os de fora
+// calado: sem o "+", "+2349054438019" (Nigéria) é lido como um número do Brasil e vira mensagem pra
+// outra pessoa, ou pra ninguém. Uniformidade não vale um número entregue errado.
+const semMais = (e164: string) => (e164.startsWith("+55") ? e164.slice(1) : e164);
+
 // Um telefone por linha: é o formato que cola direto em campo de busca, em bloco de notas e no
 // console do aparelho, sem o operador ter que limpar nada.
 //
@@ -18,7 +26,7 @@ import { StatusBadge } from "./StatusBadge";
 // excluídos vai no aviso, e os outros dois formatos (nome e telefone, planilha) levam TODOS com o
 // status ao lado, que é o que permite decidir caso a caso.
 const telefonesDaLista = (list: Contact[]) =>
-  list.filter((c) => !c.optOutAt).map((c) => c.phoneE164).join("\n");
+  list.filter((c) => !c.optOutAt).map((c) => semMais(c.phoneE164)).join("\n");
 
 // TAB e quebra de linha SÃO os separadores do formato colado. Nome de contato vem do WhatsApp ou da
 // agenda Google, onde cabe qualquer caractere: um TAB no nome empurra as colunas seguintes e a linha
@@ -26,15 +34,17 @@ const telefonesDaLista = (list: Contact[]) =>
 const semSeparadores = (texto: string) => texto.replace(/[\t\r\n]+/g, " ").trim();
 
 // Nome, telefone e status separados por TAB. Serve pra colar em texto (chat, bloco de notas, ticket).
-// Pra PLANILHA existe o botão de baixar .xlsx ao lado: colado numa célula, "+5511..." é lido como
-// FÓRMULA pelo Excel e pelo Sheets (ambos aceitam "+" como início de fórmula), o "+" desaparece e o
-// número virá em notação científica. O .xlsx grava texto de verdade e não passa por esse parser.
+//
+// Pra PLANILHA continua valendo o botão de baixar .xlsx ao lado, e tirar o "+" NÃO resolveu isso —
+// só trocou o estrago. Com "+", o Excel e o Sheets liam "+5511..." como início de FÓRMULA. Sem
+// "+", "5511965146354" é um número de 13 dígitos e a célula mostra 5,51197E+12. Os dois caminhos
+// entregam telefone adulterado; o .xlsx grava texto de verdade e não passa por parser nenhum.
 const tabelaDaLista = (list: Contact[]) =>
   [
     "Nome\tTelefone\tStatus",
     ...list.map(
       (c) =>
-        `${semSeparadores(c.name ?? "")}\t${c.phoneE164}\t${semSeparadores(contactStatusBadge(c).label)}`,
+        `${semSeparadores(c.name ?? "")}\t${semMais(c.phoneE164)}\t${semSeparadores(contactStatusBadge(c).label)}`,
     ),
   ].join("\n");
 
@@ -162,7 +172,6 @@ export function ContactsScreen() {
 
   useEffect(() => {
     void loadGroups();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -403,8 +412,12 @@ export function ContactsScreen() {
                                   <button
                                     type="button"
                                     className="contact-copy-btn"
-                                    title={`Copia o telefone ${c.phoneE164} para a área de transferência`}
-                                    onClick={() => void copiar(c.id, c.phoneE164)}
+                                    // O título mostra o que VAI PRO CLIPBOARD, não o que está na
+                                    // célula ao lado: pro +55 os dois diferem agora, e um botão que
+                                    // promete "+5511..." e entrega "5511..." ensina o operador a
+                                    // desconfiar do resto da tela.
+                                    title={`Copia o telefone ${semMais(c.phoneE164)} para a área de transferência`}
+                                    onClick={() => void copiar(c.id, semMais(c.phoneE164))}
                                   >
                                     {rotuloCopia(c.id, "Copiar")}
                                   </button>
@@ -527,7 +540,17 @@ export function ContactsScreen() {
                           type="button"
                           className="contact-copy-btn"
                           title="Baixa a lista em .xlsx com nome, telefone, grupo e status. Os telefones vão como texto, com o + preservado."
-                          onClick={() => downloadContactsXlsx(list, g.groupTag)}
+                          // A falha vai pro MESMO aviso que a cópia usa, logo abaixo destes botões:
+                          // é o único ponto da tela que o operador está olhando quando clica aqui, e
+                          // um download que não acontece precisa dizer isso em algum lugar.
+                          onClick={() =>
+                            void downloadContactsXlsx(list, g.groupTag).catch((ex: unknown) =>
+                              setCopiaMsg({
+                                texto: `Não consegui gerar a planilha: ${ex instanceof Error ? ex.message : String(ex)}`,
+                                alerta: true,
+                              }),
+                            )
+                          }
                         >
                           Baixar planilha (Excel)
                         </button>
