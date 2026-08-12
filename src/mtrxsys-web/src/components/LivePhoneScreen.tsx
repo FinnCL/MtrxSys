@@ -3,18 +3,24 @@ import { api, type ChipIdentity, type PhoneMode, type PhoneStatus } from "../api
 import { usePoll } from "../hooks/usePoll";
 import { HumanPhaseCard } from "./HumanPhaseCard";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { WhatsAppConnect } from "./WhatsAppConnect";
 
 // Aba "Celular": a TELA do Android (noVNC do docker-android) embutida direto na página, sem moldura.
 // O emulador é o ÚNICO caminho de disparo — o app oficial dentro dele envia, e é isso que mata o 463.
 // Barra de navegação Android + recarregar/abrir a tela. Só aparece onde há viewer (VITE_EMULATOR_URL).
 //
-// O que esta tela NÃO faz mais (removido de propósito, o emulador é o único modo):
+// O que esta tela NÃO faz mais (removido de propósito, o emulador é o único modo de DISPARO):
 //  • alternar Emulator/WahaOnly — o modo persistido segue sendo LIDO (é ele que o dispatcher usa),
-//    mas não é alternável aqui;
-//  • parear o WAHA por QR — o número vive no EMULADOR e o envio não passa pelo companion.
-//    ⚠️ Sem o companion vinculado não há INBOUND: respostas não chegam ao Chat, "SAIR" por texto não
-//    é detectado (só o link do opt-out) e não há acks. Re-parear exige a UI antiga (ver git).
-// O backend (endpoints, orquestrador, /api/phone/mode) segue intacto; isto é só a camada de tela.
+//    mas não é alternável aqui.
+//
+// O pareamento por QR VOLTOU (2026-08-12), e o motivo é que a remoção provou demais. O argumento era
+// "o número vive no EMULADOR e o envio não passa pelo companion" — verdadeiro para DISPARAR, falso
+// para todo o resto. Sem companion vinculado não há INBOUND (resposta não chega ao Chat, "SAIR" por
+// texto não é detectado, e sem acks o sensor de entrega fica cego) e, em WahaOnly, também não há
+// IMPORTAÇÃO: `GET /api/groups` cai no `waha.ListGroupsAsync` (GroupsEndpoints.cs:36) e o botão
+// "Sincronizar" só é renderizado com `wahaWorking === true` (App.tsx:234). Uma tela sem QR num
+// ambiente WahaOnly é uma tela onde não dá pra fazer nada.
+// O backend (endpoints, orquestrador, /api/phone/mode) nunca foi mexido; isto é só a camada de tela.
 interface LivePhoneScreenProps {
   url: string; // viewer do emulador (ws-scrcpy/noVNC). Vazio = host sem emulador → sempre WAHA+físico.
   viewerKind?: string; // usado no passo do emulador (deep-link scrcpy) — ainda não neste baseline.
@@ -287,8 +293,9 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
           mais alternável pela tela. Se algum dia o banco voltar pra WahaOnly, a tela do emulador
           some (emulatorMode fica false) e o ajuste é no banco/endpoint, não aqui. */}
 
-      {/* Identidade do companion. Conectado → mostra número e saúde de entrega. Sem pareamento por QR:
-          o número vive no EMULADOR, e o envio não depende do companion. */}
+      {/* Identidade do companion. Conectado → mostra número e saúde de entrega. Desconectado → o
+          painel de pareamento (QR, com o código como alternativa), que é o que destrava importar
+          grupo e sincronizar em WahaOnly. Ver a nota do cabeçalho sobre a volta do QR. */}
       {!identKnown ? (
         // Ainda não sabemos: NÃO afirme "desconectado" (era o que fazia o acordeão "Conectar o
         // WhatsApp" piscar a cada volta pra aba, parecendo queda de sessão).
@@ -321,7 +328,25 @@ export function LivePhoneScreen({ url, onDisconnect, onOpenConversation, active 
             </button>
           )}
         </div>
-      ) : null}
+      ) : (
+        // Aqui era `: null`, e esse null era o buraco: o App.tsx:143 manda o desconectado PRA ESTA ABA
+        // ("onde a conexão vive"), e a aba não tinha o que oferecer. Quem abria desconectado caía numa
+        // tela muda, sem nenhum caminho de volta.
+        //
+        // SEM `codeOnly`: quem escaneia aqui é um celular de verdade, que tem câmera. O `codeOnly`
+        // existe pro emulador, que não tem — e o painel ainda oferece o código como saída secundária
+        // pra quem não consegue fechar o scan.
+        //
+        // `onConnected={refreshIdent}` passa a função ESTÁVEL (useCallback sem deps), e não uma seta
+        // criada no render: o WhatsAppConnect a tem como dependência do useCallback do poll, então uma
+        // referência nova a cada render remontaria o intervalo de 3s sem parar.
+        <>
+          <p className="phone-off-hint" style={{ textAlign: "center", margin: "0 0 8px" }}>
+            Nenhum celular conectado. Escaneie o QR abaixo para importar contatos e sincronizar.
+          </p>
+          <WhatsAppConnect active={active} onConnected={refreshIdent} />
+        </>
+      )}
 
       {/* FASE HUMANA (dias 1-3 do chip novo): é do CHIP, não do emulador. Só faz sentido com chip
           conectado — sem chip não há fase. O card some sozinho quando não se aplica. */}
