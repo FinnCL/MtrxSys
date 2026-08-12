@@ -41,7 +41,20 @@ export function GoogleImportPanel({ onImported }: { onImported: () => void }) {
     setMsg(null);
     try {
       const r = await api.googleImport([...marcados]);
-      setMsg(`${r.added} importado(s), ${r.duplicated} já existiam, ${r.invalid} inválido(s).`);
+      // A conta tem que FECHAR contra o que foi marcado. Duas parcelas ficavam de fora e o operador
+      // via "8 importados" de 10 sem explicação pros outros 2:
+      //  - barrados: descartados ou com opt-out. A API reconfere isso no clique, porque entre abrir a
+      //    prévia e importar alguém pode ter descartado o contato em outra aba.
+      //  - corrigidos: entraram, mas com o número alterado (9º dígito). Já estão dentro de "added";
+      //    aparecem à parte porque o operador precisa saber que o número gravado não é o que ele viu.
+      const partes = [
+        `${r.added} importado(s)`,
+        `${r.duplicated} já existiam`,
+        `${r.invalid} inválido(s)`,
+      ];
+      if (r.barrados) partes.push(`${r.barrados} barrado(s) por descarte ou opt-out`);
+      if (r.corrected) partes.push(`${r.corrected} com 9º dígito inserido`);
+      setMsg(`${partes.join(", ")}.`);
       setPreview(null);
       setMarcados(new Set());
       onImported();

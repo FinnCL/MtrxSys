@@ -225,6 +225,11 @@ export interface ManualImportResult {
   corrected: number;
   invalid: number;
   lines: ManualLineResult[];
+  // Selecionados que NÃO entraram por estarem descartados ou com opt-out. Só a importação da agenda
+  // Google preenche (a API recusa esses números entre a prévia e o clique); no cadastro manual vem 0
+  // ou ausente. Precisa ser MOSTRADO: sem ele o operador marca 10, vê "8 importados" e os 2 que
+  // faltam não aparecem em nenhuma linha da conta.
+  barrados?: number;
 }
 
 export interface GoogleContact {
