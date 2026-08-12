@@ -29,38 +29,129 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
     /// </remarks>
     private static readonly Regex ContactIdRx = new(@"contact_id=(\d+)", RegexOptions.Compiled);
 
-    /// <summary>As linhas de dados do contato deste número, com cache MUITO curto.</summary>
+    /// <summary>O <c>_id</c> da linha <c>vnd.com.whatsapp.profile</c> deste número, com cache MUITO
+    /// curto. null = não achei.</summary>
     /// <remarks>
-    /// 🔴 A MESMA CONSULTA ERA PAGA DUAS VEZES POR CONTATO. O console pergunta "tem WhatsApp?"
-    /// (<see cref="IsOnWhatsAppAsync"/>) e o orquestrador pergunta "qual a URI da conversa?"
-    /// (<see cref="WhatsAppChatUriAsync"/>) — perguntas diferentes, MESMA leitura: achar o contact_id e
-    /// ler as linhas de dados. São 3 a 4 processos `adb` cobrados em dobro, sempre para o mesmo número
-    /// e com segundos de diferença.
+    /// 🔴 LER PELO CONTATO AGREGADO NÃO ENXERGA O ESPELHO NESTE APARELHO, e o estrago era total: TODO
+    /// número respondia "a agenda não confirma", inclusive 24 de 27 de um lote que estavam ativos no
+    /// WhatsApp. Com o `segurar` ligado o console segurava a lista inteira, para sempre, e a mensagem
+    /// culpava o contato quando a culpa era da consulta.
     ///
-    /// <para>Janela curta de propósito. O <c>SaveContactAsync</c> ESCREVE nessas mesmas linhas, e um
-    /// cache generoso responderia "não está na agenda" logo depois de gravar. Alguns segundos cobrem as
-    /// duas perguntas do mesmo envio e vencem muito antes do contato seguinte, que vem depois de um
-    /// intervalo de 150-360s.</para>
+    /// <para>MEDIDO em 2026-08-12 no Galaxy A14 (SM_A145M, Android 15), contato 845 = +5511980370241:</para>
+    /// <code>
+    /// adb shell content query --uri content://com.android.contacts/contacts/845/data --projection mimetype
+    ///   -> SÓ vnd.android.cursor.item/name e .../phone_v2
+    /// adb shell content query --uri content://com.android.contacts/raw_contacts --where contact_id=845 --projection account_type
+    ///   -> vnd.sec.contact.phone E com.whatsapp
+    /// adb shell content query --uri content://com.android.contacts/raw_contacts/907/data --projection mimetype
+    ///   -> .../vnd.com.whatsapp.profile, .../vnd.com.whatsapp.voip.call, .../video.call
+    /// </code>
+    /// A One UI acrescenta a coluna <c>sec_supports_uploading</c> e FILTRA a view de dados por ela. O
+    /// próprio provider vazou o SQL ao recusar um `--where` malformado:
+    /// <c>WHERE (1 AND sec_supports_uploading is not 0)</c>. A conta <c>com.whatsapp</c> não sobe para
+    /// lugar nenhum, então as linhas dela somem do contato agregado. Pelo URI do RAW contact o filtro
+    /// não se aplica e tudo aparece.
+    ///
+    /// <para>⚠️ Se for medir de novo, escreva aqui a DATA, o APARELHO e o COMANDO — a mesma disciplina
+    /// do <see cref="LookupContactIdAsync"/>, e pelo mesmo motivo: foi a ausência dos três que deixou
+    /// uma afirmação errada de pé com cara de evidência.</para>
+    ///
+    /// <para>Janela curta de propósito. O <c>SaveContactAsync</c> ESCREVE na agenda, e um cache generoso
+    /// responderia "não está lá" logo depois de gravar. Alguns segundos cobrem as duas perguntas do
+    /// mesmo envio — "tem WhatsApp?" (<see cref="IsOnWhatsAppAsync"/>) e "qual a URI da conversa?"
+    /// (<see cref="WhatsAppChatUriAsync"/>), que antes pagavam a leitura em dobro — e vencem muito antes
+    /// do contato seguinte, que vem depois de um intervalo de 150-360s.</para>
     /// </remarks>
-    private async Task<(string? ContactId, string? Dados)> ContatoAsync(string digits, CancellationToken ct)
+    private async Task<string?> PerfilAsync(string digits, CancellationToken ct)
     {
         if (_cacheDigits == digits && Environment.TickCount64 - _cacheEmTicks < CacheMs)
         {
             return _cache;
         }
-        var contactId = await LookupContactIdAsync(digits, ct)
-            ?? await LookupContactIdAsync("%2B" + digits, ct);
-        var resultado = contactId is null
-            ? ((string?)null, (string?)null)
-            : (contactId, await ContactDataAsync(contactId, ct));
-        (_cacheDigits, _cache, _cacheEmTicks) = (digits, resultado, Environment.TickCount64);
-        return resultado;
+        var perfil = await AcharPerfilAsync(digits, ct);
+        (_cacheDigits, _cache, _cacheEmTicks) = (digits, perfil, Environment.TickCount64);
+        return perfil;
     }
 
     private const int CacheMs = 5_000;
     private string? _cacheDigits;
-    private (string? ContactId, string? Dados) _cache;
+    private string? _cache;
     private long _cacheEmTicks;
+
+    private async Task<string?> AcharPerfilAsync(string digits, CancellationToken ct)
+    {
+        // Nem está na agenda: quem chama grava e re-pergunta depois do sync.
+        var contactId = await LookupContactIdAsync(digits, ct)
+            ?? await LookupContactIdAsync("%2B" + digits, ct);
+        if (contactId is null)
+        {
+            return null;
+        }
+
+        // Os raw contacts agregados neste contato. O `--where` é NUMÉRICO de propósito: um literal de
+        // texto precisaria de aspas simples, e elas não sobrevivem à viagem até o shell do aparelho —
+        // o provider recebe o valor sem aspas e responde erro de sintaxe SQL. Comparar id é imune a isso.
+        var (rc, linhas, _) = await _adb.ShellAsync(
+            "content query --uri content://com.android.contacts/raw_contacts "
+            + $"--where contact_id={contactId}", ct);
+        if (rc != 0 || string.IsNullOrWhiteSpace(linhas))
+        {
+            return null;
+        }
+
+        var candidatos = new List<(string DataId, bool ENosso)>();
+        foreach (var linha in Registros(linhas))
+        {
+            if (!linha.Contains("account_type=com.whatsapp", StringComparison.Ordinal)
+                || RowIdRx.Match(linha) is not { Success: true } raw)
+            {
+                continue;
+            }
+            var (dc, dados, _) = await _adb.ShellAsync(
+                "content query --uri content://com.android.contacts/raw_contacts/"
+                + $"{raw.Groups[1].Value}/data", ct);
+            if (dc != 0 || string.IsNullOrWhiteSpace(dados))
+            {
+                continue;
+            }
+            foreach (var d in Registros(dados))
+            {
+                if (d.Contains("vnd.com.whatsapp.profile", StringComparison.Ordinal)
+                    && RowIdRx.Match(d) is { Success: true } perfil)
+                {
+                    // O espelho carrega o número da CONTA em `data1`, como `<dígitos>@s.whatsapp.net`.
+                    candidatos.Add((perfil.Groups[1].Value,
+                        d.Contains($"data1={digits}@", StringComparison.Ordinal)));
+                }
+            }
+        }
+
+        // 🔴 QUAL ESPELHO, quando o contato agregado tem mais de um. A agregação do Android junta raw
+        // contacts que ela julga ser a mesma pessoa, e o WhatsApp publica UM espelho por número que
+        // reconhece. Abrir o espelho errado manda a campanha para OUTRA PESSOA, e isso não tem desfazer
+        // — então a preferência é sempre o que traz o nosso número em `data1`.
+        foreach (var c in candidatos)
+        {
+            if (c.ENosso)
+            {
+                return c.DataId;
+            }
+        }
+
+        // 🔴 NENHUM CASOU E EXISTE UM SÓ: VALE, e este ramo não é detalhe — é a maioria dos casos. A
+        // conta guarda o número na forma que tinha quando foi registrada, e ela diverge do que gravamos
+        // com frequência: em 2026-08-12, num lote de 27, 24 tinham espelho e 16 DELES vinham na forma de
+        // 12 dígitos, sem o 9º (ex.: contato +5541999644042, espelho 554199644042@s.whatsapp.net).
+        // Exigir o casamento exato aqui devolveria "não sei" para dois terços de uma lista boa, que é o
+        // falso negativo que este método existe para matar.
+        //
+        // De quebra, é o que resolve a segunda chance sem gastá-la: abrir pelo espelho usa um contato JÁ
+        // RESOLVIDO, então a forma do 9º dígito deixa de importar no envio.
+        //
+        // Vários sem nenhum casando é outra coisa: aí é ambiguidade, e diante dela a saída é não
+        // escolher, porque o erro abre a conversa de outra pessoa.
+        return candidatos.Count == 1 ? candidatos[0].DataId : null;
+    }
 
     /// <summary>contact_id do primeiro resultado do phone_lookup, ou null.</summary>
     /// <remarks>
@@ -97,7 +188,20 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         return m.Success ? m.Groups[1].Value : null;
     }
 
-    /// <summary>As linhas de dados do contato (nome, telefones, espelhos). null = não deu pra ler.</summary>
+    /// <summary>As linhas de dados do contato agregado. null = não deu pra ler.</summary>
+    /// <remarks>
+    /// 🔴 SEGUE LENDO O CONTATO AGREGADO DE PROPÓSITO, e não é descuido depois do que se descobriu em
+    /// <see cref="PerfilAsync"/>. Quem usa isto é o <see cref="TemFormaE164Async"/>, que pergunta "COMO
+    /// o número está gravado?" — e a resposta só vale sobre o registro que NÓS criamos. O espelho do
+    /// WhatsApp traz um `phone_v2` próprio, já em E.164 com o "+" (medido em 2026-08-12, raw contact 907
+    /// do contato 845). Juntar os raw contacts aqui faria um registro envenenado, gravado só com dígitos
+    /// crus, parecer saudável — e a cura do <see cref="SaveContactAsync"/> nunca rodaria.
+    ///
+    /// <para>Ou seja: o filtro da One UI que quebrava a leitura do espelho é justamente o que mantém
+    /// esta pergunta honesta. Depender disso seria frágil, então a garantia real é o escopo — esta
+    /// função responde sobre o telefone visível do contato, e o espelho é assunto do
+    /// <see cref="PerfilAsync"/>.</para>
+    /// </remarks>
     private async Task<string?> ContactDataAsync(string contactId, CancellationToken ct)
     {
         var (rc, dados, _) = await _adb.ShellAsync(
@@ -149,30 +253,37 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
         {
             return null;
         }
-        if (await ContatoAsync(digits, ct) is not { Dados: { } dados })
-        {
-            return null;
-        }
-        foreach (var linha in dados.Split('\n'))
-        {
-            if (!linha.Contains("vnd.com.whatsapp.profile", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            // 🔴 A ÂNCORA ANTES DO `_id` NÃO É ENFEITE: a mesma linha traz `raw_contact_id=45`, e um
-            // padrão solto casaria o "_id=45" DE DENTRO dele. O id do raw contact não é o da linha de
-            // dados, e abrir pelo errado abre outra coisa (ou nada).
-            var m = DataRowIdRx.Match(linha);
-            if (m.Success)
-            {
-                return $"content://com.android.contacts/data/{m.Groups[1].Value}";
-            }
-        }
-        return null;
+        return await PerfilAsync(digits, ct) is { } dataId
+            ? $"content://com.android.contacts/data/{dataId}"
+            : null;
     }
 
-    /// <summary><c>_id</c> da linha de dados, ancorado pra não casar o de <c>raw_contact_id</c>.</summary>
-    private static readonly Regex DataRowIdRx =
+    /// <summary>A saída do `content query` partida em REGISTROS, e não em linhas.</summary>
+    /// <remarks>
+    /// 🔴 UM REGISTRO OCUPA MAIS DE UMA LINHA. O `hash_id` das linhas de dados vem com uma QUEBRA DENTRO
+    /// do valor, e o `_id` do registro cai depois dela. Medido em 2026-08-12 no Galaxy A14 (SM_A145M,
+    /// Android 15):
+    /// <code>
+    /// adb shell content query --uri content://com.android.contacts/raw_contacts/907/data
+    ///   -> 10 linhas para 5 registros; a linha que traz o `mimetype` NÃO traz o `_id`
+    /// </code>
+    /// Partir por '\n' encontrava o espelho e o descartava em seguida, por "não achei o id" — um falso
+    /// negativo silencioso, do mesmo feitio do bug que este arquivo acabou de corrigir. O delimitador de
+    /// verdade é o `Row: N` no começo da linha.
+    /// </remarks>
+    private static IEnumerable<string> Registros(string saida) =>
+        RegistroRx.Split(saida).Where(r => r.Length > 0);
+
+    private static readonly Regex RegistroRx =
+        new(@"(?m)^Row:\s*\d+\s", RegexOptions.Compiled);
+
+    /// <summary><c>_id</c> de um registro do `content query`, ancorado.</summary>
+    /// <remarks>
+    /// 🔴 A ÂNCORA NÃO É ENFEITE. A mesma linha traz `raw_contact_id=45` nas linhas de dados e
+    /// `contact_id=845` nas de raw_contacts, e um padrão solto casaria o "_id=" DE DENTRO deles. Abrir
+    /// pelo id errado abre outra coisa, ou nada.
+    /// </remarks>
+    private static readonly Regex RowIdRx =
         new(@"(?:^|[,\s])_id=(\d+)", RegexOptions.Compiled);
 
     /// <summary>Marca estável da conta do WhatsApp registrada. null = não deu pra saber.</summary>
@@ -219,20 +330,17 @@ internal sealed class WhatsAppContactsReader(IAdbRunner adb)
     /// três causas indistinguíveis: o número não é usuário, o sync horário ainda não rodou, ou o espelho
     /// está num daqueles buracos de horas. Duas dessas são temporárias e a consequência do erro é
     /// TERMINAL (`MarkSkipped` no DispatchEngine). Adiar custa um ciclo; descartar custa o contato.
+    ///
+    /// <para>⚠️ Essa assimetria é o que tornou o bug do <see cref="PerfilAsync"/> tão caro de enxergar:
+    /// uma leitura cega devolve `null` para todo mundo, e `null` é exatamente o que um aparelho honesto
+    /// devolveria num dia ruim de sync. O sintoma que denuncia é a UNIFORMIDADE — negativo em 100% de um
+    /// lote não é o mundo real, é uma consulta olhando para o lugar errado.</para>
     /// </remarks>
     public async Task<bool?> IsOnWhatsAppAsync(string phoneE164, CancellationToken ct)
     {
         var digits = DigitsOf(phoneE164);
-        if (digits.Length < 8)
-        {
-            return null;
-        }
-        // nem está na agenda: quem chama salva e re-pergunta depois do sync.
-        // A marca que o WhatsApp cria para quem é usuário da plataforma. Só o SIM sai daqui.
-        return await ContatoAsync(digits, ct) is { Dados: { } data }
-            && data.Contains("vnd.com.whatsapp.profile", StringComparison.Ordinal)
-                ? true
-                : null;
+        // A marca que o WhatsApp publica para quem é usuário da plataforma. Só o SIM sai daqui.
+        return digits.Length >= 8 && await PerfilAsync(digits, ct) is not null ? true : null;
     }
 
     /// <summary>Grava o número na agenda do Android. Idempotente e best-effort.</summary>

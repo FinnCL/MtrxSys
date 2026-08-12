@@ -125,8 +125,22 @@ internal sealed class AndroidFalso : IAdbRunner
             return PhoneLookup(cmd);
         }
         if (cmd.Contains("content query", StringComparison.Ordinal)
+            && Regex.Match(cmd, @"raw_contacts/(\d+)/data") is { Success: true } rd)
+        {
+            return DadosDoRawContact(rd.Groups[1].Value);
+        }
+        if (cmd.Contains("content query", StringComparison.Ordinal)
+            && Regex.Match(cmd, @"raw_contacts.*--where contact_id=(\d+)") is { Success: true } rw)
+        {
+            return RawContactsDoContato(rw.Groups[1].Value);
+        }
+        if (cmd.Contains("content query", StringComparison.Ordinal)
             && cmd.Contains("raw_contacts", StringComparison.Ordinal))
         {
+            // ⚠️ SEM os espelhos de propósito, e é uma fronteira consciente deste falso. No aparelho
+            // eles aparecem aqui também, e é exatamente por isso que o SaveContactAsync trata salto de
+            // id como corrida. Quem modela essa corrida é o `AoCriarRawContact`, que a põe na janela
+            // exata; despejar espelhos aqui só empurraria todo teste de gravação para o ramo de recusa.
             var linhas = string.Join('\n', _agenda.Keys.Order().Select((id, i) => $"Row: {i} _id={id}"));
             return (0, linhas, "");
         }
@@ -252,6 +266,20 @@ internal sealed class AndroidFalso : IAdbRunner
     /// precisa decidir COMO o número está gravado.</summary>
     public bool FalharLeituraDeDados { get; set; }
 
+    /// <summary>As linhas do CONTATO AGREGADO. Nunca traz o espelho do WhatsApp.</summary>
+    /// <remarks>
+    /// 🔴 ESTE FALSO ERA OTIMISTA AQUI, e o custo foi um lote inteiro segurado no aparelho de verdade
+    /// enquanto os testes passavam. Ele devolvia o espelho por este URI; a One UI NÃO devolve.
+    ///
+    /// <para>MEDIDO em 2026-08-12 no Galaxy A14 (SM_A145M, Android 15), contato 845 = +5511980370241:
+    /// <c>contacts/845/data</c> traz só `name` e `phone_v2`, enquanto <c>raw_contacts --where
+    /// contact_id=845</c> mostra a conta `com.whatsapp` presente. A Samsung filtra a view de dados por
+    /// uma coluna própria, <c>sec_supports_uploading</c>, e as linhas de conta local somem.</para>
+    ///
+    /// <para>Mesma lição do <see cref="PhoneLookup"/>: um falso mais generoso que o aparelho faz o teste
+    /// validar uma ficção, e o defeito só aparece em produção — com o console jurando que 27 contatos
+    /// bons não tinham WhatsApp.</para>
+    /// </remarks>
     private (int, string, string) ContactData(string cmd)
     {
         if (FalharLeituraDeDados)
@@ -263,12 +291,65 @@ internal sealed class AndroidFalso : IAdbRunner
         {
             return (0, "No result found.", "");
         }
-        // O espelho que o WhatsApp publica pra quem é usuário da plataforma.
-        var espelho = c.Telefone is not null && ContasExistentes.Contains(SoDigitos(c.Telefone))
-            ? "Row: 1 mimetype=vnd.com.whatsapp.profile"
-            : "";
-        return (0, $"Row: 0 mimetype=vnd.android.cursor.item/phone_v2 data1={c.Telefone}\n{espelho}", "");
+        return (0, $"Row: 0 mimetype=vnd.android.cursor.item/phone_v2 data1={c.Telefone}", "");
     }
+
+    // Ids sintéticos do espelho, derivados do contato pra serem estáveis entre as duas consultas.
+    private static int EspelhoDe(int contato) => 10_000 + contato;
+
+    private static int PerfilDe(int contato) => 20_000 + contato;
+
+    /// <summary>Os raw contacts agregados num contato: o nosso e, se o número for usuário, o espelho que
+    /// o sync adapter do WhatsApp publica na conta <c>com.whatsapp</c>.</summary>
+    private (int, string, string) RawContactsDoContato(string contato)
+    {
+        if (!int.TryParse(contato, out var id) || !_agenda.TryGetValue(id, out var c))
+        {
+            return (0, "No result found.", "");
+        }
+        var linhas = $"Row: 0 _id={id}, contact_id={id}, account_type=vnd.sec.contact.phone, account_name=";
+        if (c.Telefone is not null && ContasExistentes.Contains(SoDigitos(c.Telefone)))
+        {
+            linhas += $"\nRow: 1 _id={EspelhoDe(id)}, contact_id={id}, "
+                + "account_type=com.whatsapp, account_name=WhatsApp";
+        }
+        return (0, linhas, "");
+    }
+
+    /// <summary>As linhas de dados de um raw contact. Aqui o filtro da One UI não se aplica, então é por
+    /// onde o espelho aparece.</summary>
+    private (int, string, string) DadosDoRawContact(string raw)
+    {
+        if (!int.TryParse(raw, out var rid))
+        {
+            return (0, "No result found.", "");
+        }
+        var contato = rid - 10_000;
+        if (!_agenda.TryGetValue(contato, out var c) || c.Telefone is null
+            || !ContasExistentes.Contains(SoDigitos(c.Telefone)))
+        {
+            return (0, "No result found.", "");
+        }
+        // 🔴 DUAS ARMADILHAS DO APARELHO DE VERDADE, as duas modeladas de propósito.
+        //
+        // 1) `raw_contact_id=` vem ANTES do `_id=` no mesmo registro. Um padrão solto casa o "_id=" de
+        //    dentro dele e devolve o id do raw contact no lugar do da linha de dados.
+        //
+        // 2) O REGISTRO QUEBRA NO MEIO. O `hash_id` traz um '\n' dentro do valor, e o `_id` cai na
+        //    continuação — a parte que tem o `mimetype` NÃO tem o id. Medido em 2026-08-12 no Galaxy
+        //    A14: `raw_contacts/907/data` devolve 10 linhas para 5 registros. Sem isto aqui, um leitor
+        //    que parta por linha passa no teste e falha no aparelho, que foi exatamente o que aconteceu.
+        var digitos = SoDigitos(c.Telefone);
+        return (0,
+            $"Row: 0 mimetype=vnd.android.cursor.item/name, data1=C{digitos}, raw_contact_id={rid}, "
+            + $"hash_id=fW9tZQ==\n, _id={rid}, data15=NULL\n"
+            + "Row: 1 mimetype=vnd.android.cursor.item/vnd.com.whatsapp.profile, "
+            + $"data1={digitos}@s.whatsapp.net, raw_contact_id={rid}, "
+            + $"hash_id=TEjjgsTHLn0=\n, _id={PerfilDe(contato)}, data15=NULL", "");
+    }
+
+    /// <summary>O `_id` da linha de perfil que o leitor deve devolver como URI da conversa.</summary>
+    public static int PerfilDataId(int contato) => PerfilDe(contato);
 
     private (int, string, string) InserirDado(string cmd)
     {

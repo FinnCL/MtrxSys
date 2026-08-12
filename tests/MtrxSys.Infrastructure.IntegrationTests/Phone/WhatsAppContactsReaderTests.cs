@@ -138,6 +138,72 @@ public sealed class WhatsAppContactsReaderTests
     // semântica medida no aparelho em 2026-08-06; o `AdbFalso` daqui roteia por trecho de comando e
     // modelaria essa parte por conta própria, com risco de validar uma ficção.
 
+    // ── O espelho do WhatsApp ────────────────────────────────────────────────────────────────────
+    //
+    // 🔴 O BUG QUE ISTO GUARDA. A leitura era feita no CONTATO AGREGADO, e a One UI filtra aquela view
+    // por uma coluna própria (`sec_supports_uploading`), sumindo com as linhas da conta `com.whatsapp`.
+    // Resultado no aparelho, em 2026-08-12: `IsOnWhatsAppAsync` devolvia "não sei" para 100% dos
+    // números, e com o `segurar` ligado o console segurou um lote inteiro — 24 dos 27 estavam ativos no
+    // WhatsApp. O `AndroidFalso` reproduzia o espelho pelo URI agregado, então os testes passavam
+    // enquanto o aparelho falhava; ele foi corrigido junto.
+
+    [Fact]
+    public async Task Espelho_e_encontrado_pelo_raw_contact()
+    {
+        var android = new AndroidFalso();
+        var contato = android.CriarContatoDeTerceiro("Fulano", Numero);
+        android.ContasExistentes.Add(Digitos);
+
+        var r = await new WhatsAppContactsReader(android).IsOnWhatsAppAsync(Numero, CancellationToken.None);
+
+        r.Should().BeTrue("o espelho existe na agenda, só não aparece pelo contato agregado");
+        android.Comandos.Should().Contain(c => c.Contains($"--where contact_id={contato.Id}", StringComparison.Ordinal),
+            "é a consulta que enxerga as contas agregadas, inclusive as que a One UI esconde");
+    }
+
+    [Fact]
+    public async Task Sem_espelho_devolve_nao_sei_e_nunca_false()
+    {
+        var android = new AndroidFalso();
+        android.CriarContatoDeTerceiro("Fulano", Numero);
+        // Na agenda, mas o WhatsApp não o reconhece (ou ainda não sincronizou).
+
+        var r = await new WhatsAppContactsReader(android).IsOnWhatsAppAsync(Numero, CancellationToken.None);
+
+        r.Should().BeNull("ausência de espelho tem três causas indistinguíveis, e duas são temporárias");
+    }
+
+    [Fact]
+    public async Task Uri_da_conversa_aponta_pra_linha_de_perfil()
+    {
+        var android = new AndroidFalso();
+        var contato = android.CriarContatoDeTerceiro("Fulano", Numero);
+        android.ContasExistentes.Add(Digitos);
+
+        var uri = await new WhatsAppContactsReader(android).WhatsAppChatUriAsync(Numero, CancellationToken.None);
+
+        // O `_id` da LINHA DE DADOS, não o do raw contact: a linha real traz `raw_contact_id=` ao lado, e
+        // abrir pelo id errado abre outra coisa.
+        uri.Should().Be($"content://com.android.contacts/data/{AndroidFalso.PerfilDataId(contato.Id)}");
+    }
+
+    [Fact]
+    public async Task As_duas_perguntas_do_mesmo_envio_pagam_uma_leitura_so()
+    {
+        var android = new AndroidFalso();
+        android.CriarContatoDeTerceiro("Fulano", Numero);
+        android.ContasExistentes.Add(Digitos);
+        var leitor = new WhatsAppContactsReader(android);
+
+        await leitor.IsOnWhatsAppAsync(Numero, CancellationToken.None);
+        var depoisDaPrimeira = android.Comandos.Count;
+        await leitor.WhatsAppChatUriAsync(Numero, CancellationToken.None);
+
+        android.Comandos.Count.Should().Be(depoisDaPrimeira,
+            "o console e o orquestrador perguntam coisas diferentes sobre o MESMO número com segundos "
+            + "de diferença; sem o cache curto a agenda seria lida em dobro a cada envio");
+    }
+
     [Fact]
     public async Task Numero_curto_nem_toca_no_aparelho()
     {
