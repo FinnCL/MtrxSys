@@ -268,7 +268,9 @@ export function CollectorScreen() {
       setNotice(`${result.imported} importados · ${result.duplicated} duplicados de "${tag}".`);
       try {
         const saved = await api.listContacts({ groupTag: tag });
-        if (saved.length > 0) downloadContactsXlsx(saved, tag);
+        // AWAIT: o download virou assíncrono (xlsx por import dinâmico). Sem esperar, a rejeição
+        // escaparia deste catch e viraria unhandled rejection — o "extra" deixaria de ser extra.
+        if (saved.length > 0) await downloadContactsXlsx(saved, tag);
       } catch {
         // download é extra
       }

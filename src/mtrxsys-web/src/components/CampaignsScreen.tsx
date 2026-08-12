@@ -505,7 +505,11 @@ export function CampaignsScreen() {
       // apaga tudo, então o backup precisa trazer inclusive não-respondedores/legado (includeAll).
       const all = await api.dispatchReport(undefined, 5000, true);
       if (all.length > 0) {
-        downloadDispatchReportXlsx(all);
+        // AWAIT obrigatório, não estilo: o download virou assíncrono (o xlsx entra por import
+        // dinâmico) e sem esperar aqui o `resetResults` abaixo apagaria o histórico ENQUANTO o
+        // backup ainda está sendo montado. Se o backup falhar, a exceção sobe pro catch e o reset
+        // NÃO acontece — que é a ordem certa: primeiro o backup no disco, depois o apagar.
+        await downloadDispatchReportXlsx(all);
       }
       await api.resetResults();
       setDispatchMsg("Lista renovada — resultados zerados (histórico salvo no Excel).");
@@ -872,7 +876,11 @@ export function CampaignsScreen() {
             <button
               type="button"
               className="report-export"
-              onClick={() => downloadDispatchReportXlsx(report)}
+              onClick={() =>
+                void downloadDispatchReportXlsx(report).catch((ex: unknown) =>
+                  setError(ex instanceof Error ? ex.message : String(ex)),
+                )
+              }
               disabled={report.length === 0}
             >
               Baixar relatório (Excel)

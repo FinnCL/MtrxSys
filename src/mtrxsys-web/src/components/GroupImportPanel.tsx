@@ -155,7 +155,9 @@ export function GroupImportPanel({
         try {
           const saved = await api.listContacts({ groupTag: tagSuggestion });
           if (saved.length > 0) {
-            downloadContactsXlsx(saved, tagSuggestion);
+            // AWAIT: o download virou assíncrono (xlsx por import dinâmico). Sem esperar, a
+            // rejeição escaparia deste catch e viraria unhandled rejection.
+            await downloadContactsXlsx(saved, tagSuggestion);
           }
         } catch {
           /* download é um extra */
