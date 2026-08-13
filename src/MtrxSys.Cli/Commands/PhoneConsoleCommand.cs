@@ -5,8 +5,10 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using MtrxSys.Cli.Infrastructure;
+using MtrxSys.Cli.Reporting;
 using MtrxSys.Core.Application.Abstractions;
 using MtrxSys.Core.Application.Options;
+using MtrxSys.Core.Reporting;
 using MtrxSys.Core.Safety;
 using MtrxSys.Core.Validation;
 using Spectre.Console;
@@ -69,6 +71,39 @@ internal sealed class PhoneConsoleCommand(
     /// dois deles na chamada com o compilador aceitando de boa vontade.</remarks>
     private sealed record ResumoDoLote(int Enviados, int Falhas, int SemConta, int EntregasConfirmadas);
 
+    /// <summary>O que o lote apurou, preenchido ENQUANTO ele roda.</summary>
+    /// <remarks>
+    /// 🔴 MUTÁVEL E DE FORA PRA DENTRO, ao contrário do <see cref="ResumoDoLote"/>, que só nasce no fim.
+    /// A razão é uma só: Ctrl+C faz o <c>DispararAsync</c> nunca RETORNAR. A exceção sobe pelo
+    /// <c>finally</c> e leva o valor de retorno junto — e é justamente o lote interrompido no meio da
+    /// madrugada que mais precisa do relatório, porque é o que ninguém viu acontecer.
+    ///
+    /// <para>Quem cria é o CHAMADOR, e isso é o ponto: o objeto sobrevive à exceção porque a referência
+    /// já é dele antes de a chamada começar. Devolver pelo retorno, por definição, não sobreviveria.</para>
+    ///
+    /// <para><see cref="Interrompido"/> nasce true e só vira false na última linha do lote. Provar que
+    /// terminou é responsabilidade de quem terminou; assumir que terminou e desmarcar no erro deixaria
+    /// todo caminho de saída novo nascer mentindo que foi até o fim.</para>
+    /// </remarks>
+    private sealed class DiarioDoLote
+    {
+        public DateTimeOffset Inicio { get; } = DateTimeOffset.Now;
+        public List<ContatoSuspenso> Suspensos { get; } = [];
+        public List<CorrecaoDeNumero> Corrigidos { get; } = [];
+        public int AgendaConfirmou { get; set; }
+        public int AgendaNaoConfirmou { get; set; }
+
+        /// <summary>O lote não chegou à própria última linha. Na prática: Ctrl+C ou erro inesperado.</summary>
+        /// <remarks>
+        /// Parar por cota, janela ou disjuntor NÃO é interrupção: esses caminhos fazem <c>break</c>, saem
+        /// pelo fim normal e já se explicam na tela. O que este flag pega é a saída que ninguém escreveu.
+        /// </remarks>
+        public bool Interrompido { get; set; } = true;
+
+        public ContextoDoLote ParaContexto() =>
+            new(Inicio, Corrigidos, Suspensos, AgendaConfirmou, AgendaNaoConfirmou, Interrompido);
+    }
+
     /// <summary>O que sobrevive ao fechar a janela. Uma lista de 80 contatos colada à mão é cara de
     /// refazer, e fechar console por engano é rotina.</summary>
     private sealed record Estado
@@ -114,6 +149,15 @@ internal sealed class PhoneConsoleCommand(
         /// <summary>Data (yyyy-MM-dd) em que a conta atual começou neste aparelho. Antes dela, o
         /// histórico do CSV é de OUTRA conta e não conta pro aquecimento.</summary>
         public string? ChipDesde { get; init; }
+
+        /// <summary>Quem saiu da lista por ser número morto, no formato "numero;nome".</summary>
+        /// <remarks>
+        /// Anulável pela mesma razão dos outros: lista VAZIA é estado legítimo ("já devolvi todo mundo"),
+        /// então ela não pode servir de "não gravado". Sessão anterior a este campo tem null.
+        /// <para>Mesmo formato dos <see cref="Contatos"/> de propósito: os dois viram e voltam a ser
+        /// <c>Contato</c>, e um formato só significa um lugar só pra errar o escape.</para>
+        /// </remarks>
+        public List<string>? Suspensos { get; init; }
     }
 
     private const string TokenNome = "{nome}";
@@ -146,6 +190,19 @@ internal sealed class PhoneConsoleCommand(
     private static readonly Regex SpintaxRx = new(@"\{[^{}]*\|[^{}]*\}", RegexOptions.Compiled);
 
     private readonly List<Contato> _contatos = [];
+
+    /// <summary>Tirados da fila por serem número morto, guardados em vez de apagados.</summary>
+    /// <remarks>
+    /// 🔴 QUARENTENA, NÃO LIXEIRA. Um número que o app negou nas DUAS formas volta em todo lote futuro
+    /// se ficar na lista, abrindo conversa contra um número inexistente — que é o padrão de bot
+    /// enumerando que este arquivo passa o tempo todo tentando evitar. Mas apagar de vez torna o console
+    /// capaz de destruir trabalho do operador em silêncio, e quando ele desconfiar não vai ter com que
+    /// discordar.
+    /// <para>Guardar resolve os dois: sai da fila, continua existindo, volta com um comando. É a mesma
+    /// doutrina do resto do console, que informa e deixa a decisão com quem opera.</para>
+    /// </remarks>
+    private readonly List<Contato> _suspensos = [];
+
     private readonly List<string> _textos = [];
     /// <summary>Intervalo de fábrica. Nomeado porque é COMPARADO, não só atribuído.</summary>
     /// <remarks>
@@ -500,6 +557,15 @@ internal sealed class PhoneConsoleCommand(
                         break;
                     case "gravar" or "g":
                         await GravarAgendaAsync(ct);
+                        break;
+                    case "relatorio" or "relatório" or "planilha":
+                        // Sem contexto de lote: o recorte vira o histórico inteiro, e a planilha diz
+                        // isso na aba Resumo em vez de deixar parecer que aqueles números são de hoje.
+                        GerarRelatorio(serial, null);
+                        break;
+                    case "suspensos":
+                        Suspensos();
+                        Salvar(serial);
                         break;
                     default:
                         // 🔴 UMA LINHA EM BRANCO NO MEIO DA LISTA ENCERRA O BLOCO (ver FimDoBloco), e as
@@ -1325,7 +1391,7 @@ internal sealed class PhoneConsoleCommand(
             return;
         }
 
-        AvisarRepeticao(plano, resumoDoLog.JaEnviados);
+        AvisarRepeticao(plano, resumoDoLog.JaEnviados, resumoDoLog.TalvezReceberam);
         AvisarFormaSuspeita(plano);
 
         // Quantas pausas cabem: uma a cada bloco fechado, e nenhuma depois da última mensagem. Com 30
@@ -1371,32 +1437,112 @@ internal sealed class PhoneConsoleCommand(
                 + "só não FECHE A TAMPA: isso suspende por política do Windows e nenhum programa impede.[/]");
         }
 
-        var resumo = await DispararAsync(plano, log, serial, tetoEfetivo, minEfetivo, maxEfetivo, ct);
+        // 🔴 CRIADO AQUI FORA, e o carimbo de início nasce com ele. O CSV é append-only e não tem noção
+        // de "lote": ele é um rio de tentativas, e o recorte no relatório é "tudo gravado daqui pra
+        // frente". Ver o DiarioDoLote sobre por que ele é do chamador e não do lote.
+        var diario = new DiarioDoLote();
+        try
+        {
+            var resumo = await DispararAsync(
+                plano, log, serial, tetoEfetivo, minEfetivo, maxEfetivo, diario, ct);
 
-        // O recorte de "sem conta" sai NO FECHO porque é a linha que sobra na tela e a que o operador
-        // lê de manhã. Sem ele, "0 enviada(s), 87 falha(s)" some com a informação que importa: as 87
-        // são a MESMA categoria, e categoria única em bloco é sintoma de causa comum, não de lista fria.
-        var recorte = resumo.SemConta == 0 ? "" : $" [grey]({resumo.SemConta} sem conta)[/]";
-        AnsiConsole.MarkupLine(
-            resumo.Falhas == 0
-                ? $"[green]lote concluído: {resumo.Enviados} enviada(s), sem falhas.[/]"
-                : $"[yellow]lote concluído: {resumo.Enviados} enviada(s), {resumo.Falhas} falha(s).[/]{recorte}");
+            // O recorte de "sem conta" sai NO FECHO porque é a linha que sobra na tela e a que o
+            // operador lê de manhã. Sem ele, "0 enviada(s), 87 falha(s)" some com a informação que
+            // importa: as 87 são a MESMA categoria, e categoria única em bloco é sintoma de causa
+            // comum, não de lista fria.
+            var recorte = resumo.SemConta == 0 ? "" : $" [grey]({resumo.SemConta} sem conta)[/]";
+            AnsiConsole.MarkupLine(
+                resumo.Falhas == 0
+                    ? $"[green]lote concluído: {resumo.Enviados} enviada(s), sem falhas.[/]"
+                    : $"[yellow]lote concluído: {resumo.Enviados} enviada(s), {resumo.Falhas} falha(s).[/]{recorte}");
 
-        // 🔴 MEDE E MOSTRA, NÃO ALARMA. A tentação era acusar shadow-restriction quando poucas entregas
-        // se confirmam. Não faço, e a razão está escrita no DispatchEngine: a leitura acontece SEGUNDOS
-        // depois do toque, então destinatário com o aparelho desligado aparece como "sent". Este número
-        // é um PISO da taxa real, não a taxa — e o próprio motor mantém o guard DESLIGADO no caminho de
-        // UI por isso, com o plano explícito de "primeiro se acumula o dado, depois se escolhe o limiar
-        // em cima da distribuição observada". Alarmar agora, com limiar chutado, pausaria lote por gente
-        // offline. Mostrar acumula a distribuição sem prometer conclusão nenhuma.
-        if (resumo.Enviados > 0)
+            // 🔴 MEDE E MOSTRA, NÃO ALARMA. A tentação era acusar shadow-restriction quando poucas
+            // entregas se confirmam. Não faço, e a razão está escrita no DispatchEngine: a leitura
+            // acontece SEGUNDOS depois do toque, então destinatário com o aparelho desligado aparece
+            // como "sent". Este número é um PISO da taxa real, não a taxa — e o próprio motor mantém o
+            // guard DESLIGADO no caminho de UI por isso, com o plano explícito de "primeiro se acumula
+            // o dado, depois se escolhe o limiar em cima da distribuição observada". Alarmar agora, com
+            // limiar chutado, pausaria lote por gente offline. Mostrar acumula a distribuição sem
+            // prometer conclusão nenhuma.
+            if (resumo.Enviados > 0)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[grey]entrega já confirmada na tela em {resumo.EntregasConfirmadas} de "
+                    + $"{resumo.Enviados}. o resto pode ter sido entregue depois: a leitura acontece "
+                    + "segundos após o envio, então este número é um piso, não a taxa real.[/]");
+            }
+            AnsiConsole.MarkupLine($"[grey]log: {log.EscapeMarkup()}[/]");
+        }
+        finally
+        {
+            // 🔴 NO FINALLY, e é o motivo de o diário existir. Ctrl+C num lote de horas fazia o
+            // relatório ser pulado e o console fechar em seguida, então nem o comando `relatorio`
+            // sobrava: o único lote que ninguém viu acontecer era justamente o que ficava sem
+            // explicação. O que já saiu está no CSV de qualquer jeito, e é dele que a planilha nasce.
+            GerarRelatorio(serial, diario.ParaContexto());
+        }
+    }
+
+    /// <summary>Escreve a planilha do lote e a abre.</summary>
+    /// <remarks>
+    /// 🔴 NUNCA PROPAGA. Mesma doutrina do <c>Registrar</c> e do <c>BiparAsync</c>: um lote de horas não
+    /// pode morrer depois de ter enviado tudo porque o disco encheu, porque o relatório anterior ficou
+    /// aberto no Excel, ou porque o antivírus segurou o arquivo. A mensagem é o trabalho; a planilha é a
+    /// leitura do trabalho, e ela chega no CSV de qualquer jeito.
+    ///
+    /// <para>Abrir sozinha é o ponto do "automaticamente": um caminho impresso no fim de um lote que
+    /// terminou às 3h da manhã é um caminho que ninguém vai copiar. A abertura também engole erro, e
+    /// separadamente: falhar em ABRIR não pode esconder que o arquivo foi GERADO.</para>
+    /// </remarks>
+    private static void GerarRelatorio(string serial, ContextoDoLote? lote)
+    {
+        try
+        {
+            var linhas = LerLinhas(serial);
+            if (linhas.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[grey]sem envios registrados neste aparelho: nada pra relatar.[/]");
+                return;
+            }
+
+            var arquivo = PlanilhaDeEnvios.Gerar(
+                Higienizar(serial), linhas, lote, Pasta, DateTimeOffset.Now);
+            AnsiConsole.MarkupLine($"[green]planilha:[/] {arquivo.EscapeMarkup()}");
+            Abrir(arquivo);
+        }
+        // 🔴 CATCH LARGO, DE PROPÓSITO, e este é um dos poucos lugares onde ele se justifica. Aqui as
+        // mensagens JÁ SAÍRAM: o trabalho está feito e gravado no CSV, e o que resta é desenhar. Uma
+        // biblioteca de terceiro no meio (ClosedXML sobre OpenXML sobre zip) tem um repertório de
+        // exceções que não dá pra enumerar honestamente, e enumerar errado significa derrubar o console
+        // depois de um lote de horas por causa de um arquivo .xlsx.
+        // OperationCanceledException é reerguida porque não é falha: é o Ctrl+C do operador subindo, e
+        // engoli-la faria o console continuar como se nada tivesse sido pedido.
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
         {
             AnsiConsole.MarkupLine(
-                $"[grey]entrega já confirmada na tela em {resumo.EntregasConfirmadas} de "
-                + $"{resumo.Enviados}. o resto pode ter sido entregue depois: a leitura acontece "
-                + "segundos após o envio, então este número é um piso, não a taxa real.[/]");
+                $"[grey]não deu pra gerar a planilha: {ex.Message.EscapeMarkup()}[/] "
+                + "[grey]o CSV do lote está intacto e o relatório pode ser refeito com[/] relatorio");
         }
-        AnsiConsole.MarkupLine($"[grey]log: {log.EscapeMarkup()}[/]");
+    }
+
+    /// <summary>Abre o arquivo no programa padrão do sistema. Silencioso quando não dá.</summary>
+    private static void Abrir(string arquivo)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(arquivo) { UseShellExecute = true });
+        }
+        catch (Exception)
+        {
+            // Máquina sem Excel, sem associação de .xlsx, ou console rodando por SSH. O caminho já foi
+            // impresso na linha de cima, então não há nada a acrescentar — e falhar em ABRIR não pode
+            // esconder que o arquivo foi GERADO, que é a parte que importa.
+        }
     }
 
     /// <summary>O laço de disparo. Separado do <see cref="EnviarAsync"/> porque lá tudo é decisão
@@ -1412,11 +1558,16 @@ internal sealed class PhoneConsoleCommand(
         int cota,
         int intervaloMin,
         int intervaloMax,
+        DiarioDoLote diario,
         CancellationToken ct)
     {
         var enviados = 0;
         var falhas = 0;
         var semConta = 0;
+        // Subconjunto de `falhas`, ao lado do `semConta` e pela mesma razão: os três baldes mandam o
+        // operador para lugares DIFERENTES. Sem separar o incerto, "restam N na lista" não tem como
+        // distinguir quem nunca recebeu de quem talvez já tenha recebido.
+        var incertas = 0;
         var entregasConfirmadas = 0;
 
         // 🔴 SEPARADO DE `enviados` porque a pergunta é outra. `enviados` é o que SAIU, e vai pro
@@ -1442,6 +1593,16 @@ internal sealed class PhoneConsoleCommand(
 
         // Correções que a segunda chance descobrir, para repetir de uma vez no fim do lote.
         var corrigidos = new List<(string De, string Para)>();
+
+        // 🔴 QUEM O APP NEGOU NAS DUAS FORMAS. Sai da lista no fim do lote, e é a ÚNICA coisa que sai
+        // dela sem ter recebido mensagem. Antes ninguém saía: um número inexistente voltava em todo lote
+        // futuro, abrindo conversa atrás de conversa contra ninguém — que é exatamente o padrão de bot
+        // enumerando números que o comentário do `tentados` diz querer evitar, só que espalhado ao longo
+        // de dias em vez de dentro de um lote.
+        // Falha de APARELHO não entra aqui, e essa é a linha que importa: tela travada numa terça não diz
+        // nada sobre o número na quarta, e tirar esses da lista jogaria fora gente boa em silêncio.
+        // Lista de CANDIDATOS: quem de fato sai é decidido no finally, contra o lote inteiro.
+        var candidatos = new List<ContatoSuspenso>();
 
         // A agenda NÃO confirmou que têm WhatsApp. Só são segurados com `segurar` ligado; por padrão a
         // lista existe pra medir o quanto o espelho erra, comparando com quem de fato entregou.
@@ -1684,6 +1845,7 @@ internal sealed class PhoneConsoleCommand(
                     // NÃO conta como enviado nem sai da lista: não há o que afirmar. Mas também não é
                     // uma falha comum, e chamá-la assim faria o operador reenviar achando que nada saiu.
                     falhas++;
+                    incertas++;
                     // Gasta cota mesmo assim: a conversa foi aberta e a mensagem pode ter saído.
                     cotaGasta++;
                     // Conta como falha de APARELHO: "toquei enviar e não consegui confirmar" fala da
@@ -1729,6 +1891,18 @@ internal sealed class PhoneConsoleCommand(
                         AnsiConsole.MarkupLine(
                             "[yellow]  ⚠ a agenda do aparelho diz que ESTE número É usuário do "
                             + "WhatsApp.[/] [grey]o app se contradisse: não é o número que está morto.[/]");
+                    }
+                    else
+                    {
+                        // 🔴 A CONTRADIÇÃO SALVA O CONTATO, e é por isso que a suspensão mora no `else`.
+                        // Quando o espelho da agenda diz que o número É usuário, a recusa do app não é
+                        // veredito sobre o número: é o app discordando de si mesmo, e a explicação mais
+                        // provável passa a ser a CONTA, não a lista. Tirar da fila quem foi contradito
+                        // seria condenar o inocente com a única prova que existe a favor dele em mãos.
+                        candidatos.Add(new ContatoSuspenso(
+                            numeroUsado, contato.Nome, r.Causa, DateTimeOffset.Now));
+                        AnsiConsole.MarkupLine(
+                            "[grey]  sai da lista no fim do lote. volta com[/] suspensos[grey].[/]");
                     }
                 }
                 else
@@ -1930,6 +2104,61 @@ internal sealed class PhoneConsoleCommand(
                     + $"restam {_contatos.Count} (os que falharam continuam, para tentar de novo).[/]");
             }
 
+            // 🔴 NO FINALLY, junto do resto: um Ctrl+C no meio do lote não pode deixar a suspensão pela
+            // metade. Os números já foram apurados contato a contato lá em cima; aqui só se aplica.
+            //
+            // 🔴 E AQUI, NÃO NA HORA, POR CAUSA DA GUARDA ABAIXO: a decisão de tirar um contato da lista
+            // depende do LOTE INTEIRO, não daquele contato. Aplicada contato a contato ela não teria como
+            // enxergar o padrão que a invalida.
+            diario.Corrigidos.AddRange(corrigidos.Select(c => new CorrecaoDeNumero(c.De, c.Para)));
+            diario.AgendaConfirmou = confirmados;
+            diario.AgendaNaoConfirmou = naoConfirmados.Count;
+
+            if (candidatos.Count > 0)
+            {
+                // 🔴 A GUARDA QUE IMPEDE A LISTA INTEIRA DE SUMIR. A regra mora no Core (FaxinaDaLista)
+                // porque é a única decisão DESTRUTIVA do console, e uma decisão dessas não pode viver
+                // como um `if` no meio de um laço que este projeto não tem como rodar em teste.
+                var tentativas = enviados + falhas;
+                if (!FaxinaDaLista.PodeSuspender(tentativas, semConta))
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[yellow]nenhum contato foi tirado da lista.[/] [grey]"
+                        + $"{FaxinaDaLista.MotivoDaRecusa(tentativas, semConta)} confira um deles à mão "
+                        + "no aparelho antes de disparar de novo.[/]");
+                }
+                else
+                {
+                    // Só AQUI o candidato vira suspenso de verdade, e é por isso que o diário é
+                    // preenchido neste ponto: a planilha tem que listar quem SAIU, não quem quase saiu.
+                    Suspender(candidatos);
+                    diario.Suspensos.AddRange(candidatos);
+                    Salvar(serial);
+                    AnsiConsole.MarkupLine(
+                        $"[yellow]{candidatos.Count} contato(s) SAÍRAM da lista.[/] [grey]o WhatsApp "
+                        + "negou estes números em todas as formas do 9º dígito que existem para eles. "
+                        + "insistir só abriria conversa contra número inexistente, lote após lote. eles "
+                        + "estão na planilha, em vermelho, com o motivo. para trazer de volta:[/] suspensos");
+                    MostrarAlguns(candidatos.Count, 10,
+                        i => $"  [red]{candidatos[i].Numero}[/] {(candidatos[i].Nome ?? "").EscapeMarkup()}");
+                }
+
+                // 🔴 O QUE FICOU É O QUE FALHOU MENOS O QUE SAIU, e não "falhas de aparelho". A conta
+                // por categoria esquecia dois grupos que também ficam: o incerto (pode ter recebido) e
+                // o contradito (o app negou, a agenda desmentiu). Contar por subtração não tem como
+                // esquecer categoria nenhuma, porque não enumera categoria.
+                // Conta contra o DIÁRIO e não contra os candidatos: quando a guarda acima segura a
+                // suspensão, ninguém saiu, e todos os que falharam continuam na lista.
+                var ficaram = falhas - diario.Suspensos.Count;
+                if (ficaram > 0)
+                {
+                    var recorte = incertas == 0 ? "" : $", {incertas} deles NÃO CONFIRMADO(s)";
+                    AnsiConsole.MarkupLine(
+                        $"[grey]{ficaram} contato(s) CONTINUAM na lista{recorte}: a falha não foi do "
+                        + "número, então vale tentar de novo.[/]");
+                }
+            }
+
             // 🔴 REPETE NO FIM o que já foi dito na hora. Entre uma entrega e a seguinte passam 150-360s
             // de espera, então a linha "corrija na origem" sai da tela muito antes de o lote acabar — e
             // ela é justamente a única que gera trabalho FORA daqui. Sem esta lista, a correção depende
@@ -1984,7 +2213,34 @@ internal sealed class PhoneConsoleCommand(
             }
         }
 
+        // Última linha do lote: daqui pra trás tudo passou, então ele NÃO foi interrompido. Ver o
+        // comentário do DiarioDoLote sobre por que a prova é positiva.
+        diario.Interrompido = false;
         return new ResumoDoLote(enviados, falhas, semConta, entregasConfirmadas);
+    }
+
+    /// <summary>Tira da fila e põe na quarentena, sem apagar.</summary>
+    /// <remarks>
+    /// Compara pelas DUAS formas do 9º dígito, igual ao resto do lote: o número suspenso é o que de fato
+    /// foi tentado, e a lista pode ter o irmão dele. Deixar o irmão na fila devolveria o mesmo contato
+    /// morto no lote seguinte, e a suspensão teria sido teatro.
+    /// </remarks>
+    private void Suspender(IReadOnlyList<ContatoSuspenso> mortos)
+    {
+        var alvos = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var m in mortos)
+        {
+            alvos.Add(m.Numero);
+            if (BrazilPhoneValidator.AlternateBrazilianForm(m.Numero) is { } irmao)
+            {
+                alvos.Add(irmao);
+            }
+        }
+
+        // Guarda o CONTATO que estava na lista (com o nome dele), e não o número solto: é ele que volta
+        // se o operador mandar devolver.
+        _suspensos.AddRange(_contatos.Where(c => alvos.Contains(c.Numero)));
+        _contatos.RemoveAll(c => alvos.Contains(c.Numero));
     }
 
     /// <summary>O histórico deste aparelho e o que ele sugere para hoje, antes do "confirmar".</summary>
@@ -2121,14 +2377,38 @@ internal sealed class PhoneConsoleCommand(
     /// aparecia.
     /// </remarks>
     private void AvisarRepeticao(
-        List<(Contato Contato, int Variante, string Texto)> plano, HashSet<string> jaReceberam)
+        List<(Contato Contato, int Variante, string Texto)> plano,
+        HashSet<string> jaReceberam,
+        HashSet<string> talvezReceberam)
     {
+        bool Consta(HashSet<string> conjunto, string numero) =>
+            conjunto.Contains(numero)
+            || (BrazilPhoneValidator.AlternateBrazilianForm(numero) is { } outra && conjunto.Contains(outra));
 
+        // 🔴 DOIS AVISOS, E O INCERTO SAI PRIMEIRO. Os dois conjuntos se sobrepõem (todo incerto também
+        // é "já enviado"), então o mesmo contato apareceria nas duas listas — e a genérica engoliria a
+        // específica, que é a única com ação clara. O incerto é tirado da lista da repetição de
+        // propósito.
+        var duvidosos = plano.Where(p => Consta(talvezReceberam, p.Contato.Numero)).ToList();
         var repetidos = plano
-            .Where(p => jaReceberam.Contains(p.Contato.Numero)
-                || (BrazilPhoneValidator.AlternateBrazilianForm(p.Contato.Numero) is { } outra
-                    && jaReceberam.Contains(outra)))
+            .Where(p => Consta(jaReceberam, p.Contato.Numero) && !Consta(talvezReceberam, p.Contato.Numero))
             .ToList();
+
+        if (duvidosos.Count > 0)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]atenção: {duvidosos.Count} número(s) desta lista ficaram NÃO CONFIRMADOS num "
+                + "lote anterior.[/] [grey]o toque em enviar aconteceu e ninguém conseguiu ler a tela, "
+                + "então a mensagem PODE ter saído.[/]");
+            MostrarAlguns(duvidosos.Count, 5,
+                i => $"  [yellow]{duvidosos[i].Contato.Numero}[/] "
+                     + $"{(duvidosos[i].Contato.Nome ?? "").EscapeMarkup()}");
+            AnsiConsole.MarkupLine(
+                "[yellow]abra estas conversas no aparelho antes de disparar.[/] [grey]é a única forma de "
+                + "saber, e mandar de novo pra quem já recebeu é o pior desfecho com contato frio. tire "
+                + "com[/] x [grey]quem já tiver recebido.[/]");
+        }
+
         if (repetidos.Count == 0)
         {
             return;
@@ -2588,7 +2868,10 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("[bold]bip[/]", "aviso sonoro por mensagem",
             _bip ? "[bold]ligado[/] [grey](acompanha de ouvido)[/]" : "[grey]desligado[/]");
         t.AddRow("[bold]4[/]", "contatos",
-            _contatos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_contatos.Count}[/] na lista");
+            (_contatos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_contatos.Count}[/] na lista")
+            // A quarentena aparece AQUI e não numa linha própria de propósito: quem lê "12 na lista"
+            // precisa saber, no mesmo lugar, que havia mais e que eles não sumiram.
+            + (_suspensos.Count == 0 ? "" : $" [grey]· {_suspensos.Count} suspenso(s)[/]"));
         t.AddRow("[bold]5[/]", "templates",
             _textos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_textos.Count}[/] template(s)");
         t.AddEmptyRow();
@@ -2617,6 +2900,55 @@ internal sealed class PhoneConsoleCommand(
 
         AnsiConsole.MarkupLine(
             "[grey]digite o número, [/]x[grey] para excluir um item, ou o comando ([/]comandos[grey] lista todos).[/]");
+    }
+
+    /// <summary>Mostra a quarentena e oferece devolver ou descartar.</summary>
+    /// <remarks>
+    /// 🔴 PERGUNTA, NÃO DECIDE. A suspensão automática já é a única coisa no console que tira contato da
+    /// fila sem ele ter recebido nada, e ela só se justifica porque é REVERSÍVEL aqui. Descartar
+    /// sozinho, ou devolver sozinho, tiraria a reversibilidade e transformaria a suspensão numa
+    /// exclusão com nome bonito.
+    /// <para>O caso que faz isso valer a pena: chip restrito nega TODO mundo, e o operador que descobrir
+    /// isso depois quer a lista inteira de volta com um comando, não recolada à mão.</para>
+    /// </remarks>
+    private void Suspensos()
+    {
+        if (_suspensos.Count == 0)
+        {
+            AnsiConsole.MarkupLine(
+                "[grey]nenhum contato suspenso.[/] [grey]eles aparecem aqui quando o WhatsApp afirma que "
+                + "o número não tem conta, nas duas formas do 9º dígito.[/]");
+            return;
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[yellow]{_suspensos.Count} contato(s) suspensos.[/] [grey]o app afirmou que estes números "
+            + "não têm conta, e por isso eles saíram da fila de envio.[/]");
+        MostrarAlguns(_suspensos.Count, 20,
+            i => $"  [red]{_suspensos[i].Numero}[/] {(_suspensos[i].Nome ?? "").EscapeMarkup()}");
+
+        AnsiConsole.Markup(
+            "[bold]1[/] devolver todos para a lista  ·  [bold]2[/] descartar de vez  ·  "
+            + "[bold]enter[/] deixar como está: ");
+        switch (Console.ReadLine()?.Trim())
+        {
+            case "1":
+                _contatos.AddRange(_suspensos);
+                AnsiConsole.MarkupLine(
+                    $"[green]{_suspensos.Count} devolvido(s).[/] [grey]a lista voltou a ter "
+                    + $"{_contatos.Count} contato(s). se o app negar de novo, eles saem de novo.[/]");
+                _suspensos.Clear();
+                break;
+            case "2":
+                AnsiConsole.MarkupLine(
+                    $"[grey]{_suspensos.Count} descartado(s). o log de envios continua guardando "
+                    + "cada tentativa deles.[/]");
+                _suspensos.Clear();
+                break;
+            default:
+                AnsiConsole.MarkupLine("[grey]nada mudou.[/]");
+                break;
+        }
     }
 
     /// <summary>Exclusão de UM item. Sem isto, um dígito errado num contato obriga a recolar a lista
@@ -2945,6 +3277,8 @@ internal sealed class PhoneConsoleCommand(
         t.AddRow("parar <n>", "falhas seguidas que interrompem o lote (default 0 = nunca interrompe)");
         t.AddRow("bip [grey]| som[/]", "liga/desliga o aviso sonoro (agudo = saiu, dois graves = não saiu)");
         t.AddRow("segurar", "liga/desliga NÃO enviar quando a agenda não confirma que o número tem WhatsApp");
+        t.AddRow("relatorio [grey]| planilha[/]", "gera o .xlsx com o histórico do aparelho e abre");
+        t.AddRow("suspensos", "quem saiu da lista por não ter conta; devolve ou descarta");
         t.AddRow("x [grey][[contato|texto]] [[n]][/]", "exclui UM item (pergunta se você não disser qual)");
         t.AddRow("limpar [grey][[contatos|textos|tudo]][/]", "esvazia o que você pedir");
         t.AddRow("ajuda", "o passo a passo explicado, o mesmo que aparece ao abrir");
@@ -3034,8 +3368,11 @@ internal sealed class PhoneConsoleCommand(
             }
             foreach (var linha in e.Contatos)
             {
-                var campos = linha.Split(';', 2);
-                _contatos.Add(new Contato(campos[0], campos.Length > 1 && campos[1].Length > 0 ? campos[1] : null));
+                _contatos.Add(Desserializar(linha));
+            }
+            foreach (var linha in e.Suspensos ?? [])
+            {
+                _suspensos.Add(Desserializar(linha));
             }
             _textos.AddRange(e.Textos);
             (_min, _max, _digitacaoHumana) = (e.MinDelay, e.MaxDelay, e.DigitacaoHumana);
@@ -3076,8 +3413,12 @@ internal sealed class PhoneConsoleCommand(
             }
             if (_contatos.Count > 0 || _textos.Count > 0)
             {
+                var quarentena = _suspensos.Count == 0
+                    ? ""
+                    : $", {_suspensos.Count} suspenso(s)";
                 AnsiConsole.MarkupLine(
-                    $"[grey]sessão anterior restaurada: {_contatos.Count} contato(s), {_textos.Count} template(s).[/]");
+                    $"[grey]sessão anterior restaurada: {_contatos.Count} contato(s), "
+                    + $"{_textos.Count} template(s){quarentena}.[/]");
             }
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
@@ -3087,13 +3428,28 @@ internal sealed class PhoneConsoleCommand(
         }
     }
 
+    /// <summary>Contato como uma linha só, "numero;nome". Usado pela lista e pela quarentena.</summary>
+    /// <remarks>
+    /// O nome NÃO é escapado, ao contrário do CSV: um nome com ';' embaralharia o round-trip. Fica como
+    /// estava porque o formato já é o da lista e mudá-lo agora invalidaria toda sessão gravada — mas o
+    /// par ida e volta mora aqui, junto, em vez de espalhado, pra o dia em que valer a pena consertar.
+    /// </remarks>
+    private static string Serializar(Contato c) => $"{c.Numero};{c.Nome ?? ""}";
+
+    private static Contato Desserializar(string linha)
+    {
+        var campos = linha.Split(';', 2);
+        return new Contato(campos[0], campos.Length > 1 && campos[1].Length > 0 ? campos[1] : null);
+    }
+
     private void Salvar(string serial)
     {
         try
         {
             var e = new Estado
             {
-                Contatos = [.. _contatos.Select(c => $"{c.Numero};{c.Nome ?? ""}")],
+                Contatos = [.. _contatos.Select(Serializar)],
+                Suspensos = [.. _suspensos.Select(Serializar)],
                 Textos = [.. _textos],
                 MinDelay = _min,
                 MaxDelay = _max,
@@ -3134,14 +3490,24 @@ internal sealed class PhoneConsoleCommand(
         }
     }
 
+    /// <summary>O CSV de envios deste aparelho. Um lugar só monta este caminho.</summary>
+    /// <remarks>
+    /// Três funções abrem o mesmo arquivo por perguntas diferentes (gravar, reler pro aquecimento, reler
+    /// pro relatório). Com o caminho montado à mão em cada uma, renomear o arquivo ou mudar a pasta
+    /// exigiria acertar as três, e acertar duas de três significa gravar num arquivo e ler de outro:
+    /// o console passaria a dizer que ninguém nunca recebeu nada.
+    /// </remarks>
+    private static string CaminhoDoLog(string serial) =>
+        Path.Combine(Pasta, $"envios-{Higienizar(serial)}.csv");
+
     private static string AbrirLog(string serial)
     {
-        var caminho = Path.Combine(Pasta, $"envios-{Higienizar(serial)}.csv");
+        var caminho = CaminhoDoLog(serial);
         if (!File.Exists(caminho))
         {
             File.WriteAllText(
                 caminho,
-                "quando;serial;numero;nome;variante;enviado;entrega;erro;texto;contradito;abertura\n",
+                "quando;serial;numero;nome;variante;enviado;entrega;erro;texto;contradito;abertura;causa\n",
                 Encoding.UTF8);
         }
         return caminho;
@@ -3177,7 +3543,11 @@ internal sealed class PhoneConsoleCommand(
                 Csv(serial), Csv(c.Numero), Csv(c.Nome ?? ""), variante.ToString(CultureInfo.InvariantCulture),
                 enviado, Csv(r.DeliveryStatus ?? ""), Csv(r.Error ?? ""), Csv(texto),
                 contradito ? "sim" : "",
-                r.AbertoPeloRegistro ? "registro" : "numero");
+                r.AbertoPeloRegistro ? "registro" : "numero",
+                // 🔴 O NOME DA CONSTANTE, não o número dela. Renumerar o enum um dia não pode reescrever
+                // o passado, e um log em que se lê "Timeout" vale mais que um em que se lê "10". A coluna
+                // `erro` ao lado continua sendo a frase para humano; esta é o dado para agrupar.
+                r.Causa.ToString());
             File.AppendAllText(caminho, linha + "\n", Encoding.UTF8);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -3187,7 +3557,13 @@ internal sealed class PhoneConsoleCommand(
     }
 
     /// <summary>Tudo que o pré-voo precisa saber do log, numa leitura só.</summary>
-    /// <param name="JaEnviados">Quem já recebeu deste aparelho, em qualquer dia.</param>
+    /// <param name="JaEnviados">Quem já recebeu deste aparelho, em qualquer dia. Inclui os incertos.</param>
+    /// <param name="TalvezReceberam">
+    /// Subconjunto de <paramref name="JaEnviados"/>: os que ficaram INCERTOS e nunca tiveram uma entrega
+    /// confirmada depois. São dois avisos diferentes. "já recebeu" pede uma decisão de campanha; "pode
+    /// ter recebido" pede que alguém abra a conversa NO APARELHO e olhe, e é a única das duas que tem um
+    /// jeito de virar certeza. Enquanto os dois saíam na mesma linha, a segunda nunca era feita.
+    /// </param>
     /// <param name="DiasAtivos">Dias distintos com disparo.</param>
     /// <param name="UltimoFechado">Resumo do último dia FECHADO. null = só há o dia de hoje.</param>
     /// <param name="EnviadasHoje">Quanto já saiu hoje, para descontar da sugestão.</param>
@@ -3195,6 +3571,7 @@ internal sealed class PhoneConsoleCommand(
     /// nenhuma (disparou ontem) dá 1; 0 significa que não há dia fechado.</param>
     private sealed record ResumoDoLog(
         HashSet<string> JaEnviados,
+        HashSet<string> TalvezReceberam,
         int DiasAtivos,
         DiaDoChip? UltimoFechado,
         int EnviadasHoje,
@@ -3220,14 +3597,15 @@ internal sealed class PhoneConsoleCommand(
     private static ResumoDoLog LerLog(string serial, string? chipDesde)
     {
         var numeros = new HashSet<string>(StringComparer.Ordinal);
+        var talvez = new HashSet<string>(StringComparer.Ordinal);
         var porDia = new Dictionary<string, (int Enviadas, int Recusadas, int Confirmadas)>(
             StringComparer.Ordinal);
         try
         {
-            var caminho = Path.Combine(Pasta, $"envios-{Higienizar(serial)}.csv");
+            var caminho = CaminhoDoLog(serial);
             if (!File.Exists(caminho))
             {
-                return new ResumoDoLog(numeros, 0, null, 0, 0);
+                return new ResumoDoLog(numeros, talvez, 0, null, 0, 0);
             }
             foreach (var linha in File.ReadLines(caminho).Skip(1))
             {
@@ -3243,6 +3621,19 @@ internal sealed class PhoneConsoleCommand(
                 if (saiu)
                 {
                     numeros.Add(campos[2]);
+                }
+                // 🔴 A DÚVIDA É REGISTRADA E TAMBÉM DESFEITA, e a ordem entre as duas coisas é o ponto.
+                // Um "sim" POSTERIOR ao incerto significa que a conversa foi reaberta e a mensagem saiu
+                // de verdade: a partir daí não há mais o que conferir no aparelho, e manter o aviso
+                // mandaria o operador procurar uma dúvida que já acabou. O log é lido em ordem
+                // cronológica, então basta remover aqui.
+                if (campos[5] == "incerto")
+                {
+                    talvez.Add(campos[2]);
+                }
+                else if (campos[5] == "sim")
+                {
+                    talvez.Remove(campos[2]);
                 }
 
                 // A coluna `quando` é ISO-8601, então os 10 primeiros caracteres já são a data —
@@ -3283,12 +3674,12 @@ internal sealed class PhoneConsoleCommand(
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Log ilegível não pode impedir o envio; no pior caso o aviso de repetição não aparece.
-            return new ResumoDoLog(numeros, 0, null, 0, 0);
+            return new ResumoDoLog(numeros, talvez, 0, null, 0, 0);
         }
 
         if (porDia.Count == 0)
         {
-            return new ResumoDoLog(numeros, 0, null, 0, 0);
+            return new ResumoDoLog(numeros, talvez, 0, null, 0, 0);
         }
 
         // 🔴 HOJE É SEPARADO DO ÚLTIMO DIA FECHADO, e a distinção não é cosmética. Rodando um SEGUNDO
@@ -3305,7 +3696,7 @@ internal sealed class PhoneConsoleCommand(
             .LastOrDefault();
         if (ultimo is not { } fechado)
         {
-            return new ResumoDoLog(numeros, porDia.Count, null, enviadasHoje, 0);
+            return new ResumoDoLog(numeros, talvez, porDia.Count, null, enviadasHoje, 0);
         }
 
         // 🔴 QUANTOS DIAS FAZ, e não só qual foi o dia. Sem esta conta, quem some por um mês e volta
@@ -3318,10 +3709,74 @@ internal sealed class PhoneConsoleCommand(
 
         return new ResumoDoLog(
             numeros,
+            talvez,
             porDia.Count,
             new DiaDoChip(fechado.Value.Enviadas, fechado.Value.Recusadas, fechado.Value.Confirmadas),
             enviadasHoje,
             lacuna);
+    }
+
+    /// <summary>O log inteiro deste aparelho, linha a linha, para o relatório.</summary>
+    /// <remarks>
+    /// 🔴 SEPARADO DO <see cref="LerLog"/> DE PROPÓSITO, apesar de os dois lerem o mesmo arquivo. O
+    /// LerLog roda em TODO envio e alimenta o teto automático e o aviso de repetição: é caminho quente,
+    /// e o que ele devolve decide quantas mensagens saem hoje. Este aqui só roda quando alguém pede
+    /// relatório, e devolve tudo em memória porque a planilha precisa de tudo.
+    ///
+    /// <para>Juntar os dois numa passada só economizaria uma leitura de arquivo por lote (uma, não uma
+    /// por mensagem) e em troca faria o caminho do aquecimento carregar a lista completa de envios de
+    /// todos os dias. Não vale.</para>
+    ///
+    /// <para>Linha malformada é PULADA, não interrompe: o CSV é append-only e escrito durante lotes de
+    /// horas, então uma linha truncada por queda de energia é resultado esperado, e ela não pode levar
+    /// junto os meses de histórico que vêm depois dela.</para>
+    /// </remarks>
+    private static List<LinhaDeEnvio> LerLinhas(string serial)
+    {
+        var linhas = new List<LinhaDeEnvio>();
+        var caminho = CaminhoDoLog(serial);
+        if (!File.Exists(caminho))
+        {
+            return linhas;
+        }
+
+        try
+        {
+            foreach (var bruta in File.ReadLines(caminho).Skip(1))
+            {
+                var campos = CamposCsv(bruta);
+                // O mesmo piso do LerLog: 7 colunas é o mínimo que dá pra interpretar. Acima disso cada
+                // coluna é lida por índice SÓ se existir, que é como um CSV de antes da coluna `causa`
+                // (11 colunas) continua abrindo ao lado de um de agora (12).
+                if (campos.Count < 7
+                    || RelatorioDeEnvios.Interpretar(campos[5]) is not { } resultado
+                    || !DateTimeOffset.TryParse(
+                        campos[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out var quando))
+                {
+                    continue;
+                }
+
+                linhas.Add(new LinhaDeEnvio(
+                    Quando: quando,
+                    Numero: campos[2],
+                    Nome: string.IsNullOrWhiteSpace(campos[3]) ? null : campos[3],
+                    Variante: int.TryParse(campos[4], CultureInfo.InvariantCulture, out var v) ? v : 0,
+                    Resultado: resultado,
+                    Entrega: string.IsNullOrWhiteSpace(campos[6]) ? null : campos[6],
+                    Erro: campos.Count > 7 && !string.IsNullOrWhiteSpace(campos[7]) ? campos[7] : null,
+                    Texto: campos.Count > 8 ? campos[8] : "",
+                    Contradito: campos.Count > 9 && campos[9] == "sim",
+                    Abertura: campos.Count > 10 ? campos[10] : "",
+                    Causa: RelatorioDeEnvios.LerCausa(campos.Count > 11 ? campos[11] : null)));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Mesma doutrina do LerLog: log ilegível não pode derrubar nada. No pior caso o relatório
+            // sai com o que deu pra ler antes do erro.
+            AnsiConsole.MarkupLine($"[grey]não deu pra ler o log inteiro: {ex.Message.EscapeMarkup()}[/]");
+        }
+        return linhas;
     }
 
     /// <summary>Separa por ';' respeitando aspas, senão um nome com ';' desloca todas as colunas.</summary>

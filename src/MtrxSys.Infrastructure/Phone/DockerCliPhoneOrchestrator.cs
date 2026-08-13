@@ -650,7 +650,7 @@ internal sealed class DockerCliPhoneOrchestrator(
         var digits = DigitsOf(phoneE164);
         if (digits.Length < 8)
         {
-            return WhatsAppSendResult.Fail("phone inválido");
+            return WhatsAppSendResult.Fail(FalhaCausa.EntradaInvalida, "phone inválido");
         }
         if (Opts.HumanTyping)
         {
@@ -659,7 +659,9 @@ internal sealed class DockerCliPhoneOrchestrator(
         var url = WhatsAppUi.DeepLink(digits, text);
         if (url.Contains('\'', System.StringComparison.Ordinal))
         {
-            return WhatsAppSendResult.Fail("texto gerou aspa simples (não esperado no URL-encode)."); // anti-injeção
+            return WhatsAppSendResult.Fail(
+                FalhaCausa.EntradaInvalida,
+                "texto gerou aspa simples (não esperado no URL-encode)."); // anti-injeção
         }
         // Um envio por vez por emulador (uiautomator dump não roda concorrente e usa arquivo fixo).
         await _uiLock.WaitAsync(ct);
@@ -677,14 +679,17 @@ internal sealed class DockerCliPhoneOrchestrator(
                 "adb", "shell", $"am start -a android.intent.action.VIEW -d '{url}'");
             if (rc != 0)
             {
-                return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
+                return WhatsAppSendResult.Fail(
+                    FalhaCausa.AdbFalhou, string.IsNullOrWhiteSpace(err) ? outp : err);
             }
             // 2) POLL o botão ENVIAR aparecer (id/send surge quando há texto no campo) — não um sleep fixo:
             //    chat lento (cold start / proxy) abriria depois dos 4s e o envio seria abortado à toa.
             var send = await PollNodeCenterAsync("com.whatsapp:id/send", Opts.WhatsAppOpenWaitMs, sct);
             if (send is null)
             {
-                return WhatsAppSendResult.Fail("botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
+                return WhatsAppSendResult.Fail(
+                    FalhaCausa.ConversaNaoAbriu,
+                    "botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
             }
             // 3) Toca enviar. Daqui pra frente nada é conclusivo: o toque não tem desfazer nem
             //    confirmação síncrona, então só cabe "confirmei que saiu" ou "não confirmei".
@@ -695,7 +700,8 @@ internal sealed class DockerCliPhoneOrchestrator(
                 send.Value.Y.ToString(System.Globalization.CultureInfo.InvariantCulture));
             if (tc != 0)
             {
-                return WhatsAppSendResult.Unconfirmed(string.IsNullOrWhiteSpace(te) ? to : te);
+                return WhatsAppSendResult.Unconfirmed(
+                    FalhaCausa.AdbFalhou, string.IsNullOrWhiteSpace(te) ? to : te);
             }
             // 4) CONFIRMA o envio: o campo de texto ESVAZIA quando a msg sai (correlação confiável — se o
             //    tap errou o botão, o texto fica no campo e sabemos que NÃO enviou).
@@ -704,8 +710,10 @@ internal sealed class DockerCliPhoneOrchestrator(
                 // 5) Status de ENTREGA (normalizado sent/delivered/read, locale-independente) — best-effort.
                 EstadoDoCampo.Vazio => WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct)),
                 EstadoDoCampo.ComTexto => WhatsAppSendResult.Fail(
+                    FalhaCausa.TextoContinuouNoCampo,
                     "toquei enviar e o texto CONTINUA no campo: a mensagem não saiu."),
                 _ => WhatsAppSendResult.Unconfirmed(
+                    FalhaCausa.ToqueNaoConfirmado,
                     "toquei enviar mas não consegui ler a tela pra confirmar; pode ter saído."),
             };
         }
@@ -714,8 +722,10 @@ internal sealed class DockerCliPhoneOrchestrator(
             // Estourou o teto TOTAL (não foi cancelamento do chamador): emulador lento/travado.
             const string motivo = "envio excedeu o tempo total (emulador lento/travado?).";
             return tocouEnviar
-                ? WhatsAppSendResult.Unconfirmed(motivo + " O toque em enviar JÁ tinha acontecido.")
-                : WhatsAppSendResult.Fail(motivo + " Estourou antes de tocar enviar, então nada saiu.");
+                ? WhatsAppSendResult.Unconfirmed(
+                    FalhaCausa.Timeout, motivo + " O toque em enviar JÁ tinha acontecido.")
+                : WhatsAppSendResult.Fail(
+                    FalhaCausa.Timeout, motivo + " Estourou antes de tocar enviar, então nada saiu.");
         }
         finally
         {
@@ -738,13 +748,14 @@ internal sealed class DockerCliPhoneOrchestrator(
     {
         if (text.Length == 0)
         {
-            return WhatsAppSendResult.Fail("texto vazio");
+            return WhatsAppSendResult.Fail(FalhaCausa.EntradaInvalida, "texto vazio");
         }
         if (await ResolveTypingChannelAsync(text, ct) is not { } typing)
         {
             // FALHA em vez de cair no deep link. Voltar pro caminho antigo em silêncio devolveria o
             // comportamento que se quis remover, e o log diria "enviado" do mesmo jeito.
             return WhatsAppSendResult.Fail(
+                FalhaCausa.DigitacaoFalhou,
                 $"digitação humana exigida mas indisponível: nem o teclado {Opts.TypingImePackage} está "
                 + "instalado/ativo, nem o texto é simples o bastante pro `input text` (acento e emoji "
                 + "quebram). Configure Phone__TypingImeApkUrl ou desligue Phone__HumanTyping.");
@@ -769,7 +780,8 @@ internal sealed class DockerCliPhoneOrchestrator(
                 "adb", "shell", $"am start -a android.intent.action.VIEW -d '{WhatsAppUi.DeepLinkEmpty(digits)}'");
             if (rc != 0)
             {
-                return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
+                return WhatsAppSendResult.Fail(
+                    FalhaCausa.AdbFalhou, string.IsNullOrWhiteSpace(err) ? outp : err);
             }
 
             // 2) Espera o campo de mensagem existir e toca nele (foco → teclado ativo → o app passa a
@@ -777,7 +789,9 @@ internal sealed class DockerCliPhoneOrchestrator(
             var entry = await PollNodeCenterAsync("com.whatsapp:id/entry", Opts.WhatsAppOpenWaitMs, sct);
             if (entry is null)
             {
-                return WhatsAppSendResult.Fail("campo de mensagem não apareceu (a conversa não abriu).");
+                return WhatsAppSendResult.Fail(
+                    FalhaCausa.ConversaNaoAbriu,
+                    "campo de mensagem não apareceu (a conversa não abriu).");
             }
             await TapAsync(entry.Value, sct);
 
@@ -795,7 +809,9 @@ internal sealed class DockerCliPhoneOrchestrator(
                 // embaralhados, e só não virou mensagem porque a conferência de tamanho barrou.
                 if (!await ClearEntryAsync(typing, sct))
                 {
-                    return WhatsAppSendResult.Fail("o campo de mensagem já tinha texto e não consegui limpar.");
+                    return WhatsAppSendResult.Fail(
+                        FalhaCausa.DigitacaoFalhou,
+                        "o campo de mensagem já tinha texto e não consegui limpar.");
                 }
                 await Task.Delay(System.Random.Shared.Next(900, 2600), sct);
 
@@ -804,7 +820,9 @@ internal sealed class DockerCliPhoneOrchestrator(
                     // Pode ter entrado texto PARCIAL. Não toca em enviar: metade de uma mensagem é pior
                     // que nenhuma, e o job volta pra fila inteiro.
                     await ClearEntryAsync(typing, sct);
-                    return WhatsAppSendResult.Fail("a digitação falhou no meio; campo limpo e envio abortado.");
+                    return WhatsAppSendResult.Fail(
+                        FalhaCausa.DigitacaoFalhou,
+                        "a digitação falhou no meio; campo limpo e envio abortado.");
                 }
                 started.Stop();
 
@@ -816,6 +834,7 @@ internal sealed class DockerCliPhoneOrchestrator(
                     var achou = typed?.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "nada";
                     await ClearEntryAsync(typing, sct);
                     return WhatsAppSendResult.Fail(
+                        FalhaCausa.DigitacaoFalhou,
                         $"campo ficou com {achou} caracteres, esperava ~{text.Length}; "
                         + "envio abortado pra não mandar truncado.");
                 }
@@ -831,7 +850,9 @@ internal sealed class DockerCliPhoneOrchestrator(
             if (send is null)
             {
                 await ClearEntryAsync(typing, sct);
-                return WhatsAppSendResult.Fail("botão enviar não apareceu mesmo com o campo preenchido.");
+                return WhatsAppSendResult.Fail(
+                    FalhaCausa.ConversaNaoAbriu,
+                    "botão enviar não apareceu mesmo com o campo preenchido.");
             }
 
             tocouEnviar = true;
@@ -841,8 +862,11 @@ internal sealed class DockerCliPhoneOrchestrator(
             if (confirmacao is not EstadoDoCampo.Vazio)
             {
                 return confirmacao is EstadoDoCampo.ComTexto
-                    ? WhatsAppSendResult.Fail("toquei enviar e o texto CONTINUA no campo: a mensagem não saiu.")
+                    ? WhatsAppSendResult.Fail(
+                        FalhaCausa.TextoContinuouNoCampo,
+                        "toquei enviar e o texto CONTINUA no campo: a mensagem não saiu.")
                     : WhatsAppSendResult.Unconfirmed(
+                        FalhaCausa.ToqueNaoConfirmado,
                         "toquei enviar mas não consegui ler a tela pra confirmar; pode ter saído.");
             }
             log.LogInformation(
@@ -857,8 +881,10 @@ internal sealed class DockerCliPhoneOrchestrator(
                 + $"digitação pra {text.Length} caracteres a {Opts.TypingCharsPerMinute} cpm) — emulador "
                 + "lento/travado?";
             return tocouEnviar
-                ? WhatsAppSendResult.Unconfirmed(motivo + " O toque em enviar JÁ tinha acontecido.")
-                : WhatsAppSendResult.Fail(motivo + " Estourou antes de tocar enviar, então nada saiu.");
+                ? WhatsAppSendResult.Unconfirmed(
+                    FalhaCausa.Timeout, motivo + " O toque em enviar JÁ tinha acontecido.")
+                : WhatsAppSendResult.Fail(
+                    FalhaCausa.Timeout, motivo + " Estourou antes de tocar enviar, então nada saiu.");
         }
         finally
         {

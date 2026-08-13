@@ -172,7 +172,8 @@ public interface IPhoneOrchestrator
     /// resource-id (uiautomator, robusto) e toca. Retorna resultado ESTRUTURADO (enviou? entrega? erro?).
     /// Default: não suportado.</summary>
     Task<WhatsAppSendResult> SendWhatsAppMessageAsync(string phoneE164, string text, CancellationToken ct) =>
-        Task.FromResult(WhatsAppSendResult.Fail("envio pela UI não suportado neste engine."));
+        Task.FromResult(WhatsAppSendResult.Fail(
+            FalhaCausa.NaoSuportado, "envio pela UI não suportado neste engine."));
 
     /// <summary>Marca ESTÁVEL da conta do WhatsApp registrada no aparelho. Muda quando outra conta passa
     /// a ser a registrada; null = não deu pra saber.</summary>
@@ -298,6 +299,68 @@ public sealed record WhatsAppAccountState(string State, string? Phone)
     }
 }
 
+/// <summary>Por que o envio não saiu, como DADO e não como frase.</summary>
+/// <remarks>
+/// 🔴 EXISTE PORQUE <c>Error</c> É TEXTO PARA HUMANO. O comentário do <see cref="WhatsAppSendResult.
+/// NoWhatsAppAccount"/> já dizia que quem consome não deveria reconhecer a causa por substring da
+/// mensagem, que muda quando alguém melhora a redação — mas até aqui só duas causas tinham lugar no
+/// tipo (número sem conta e conta restringida). Todo o resto chegava como "falha", e a pergunta que
+/// o operador faz olhando um lote de 23 fracassos ("é o aparelho, o chip ou os números?") não tinha
+/// como ser respondida sem ler 23 frases.
+///
+/// <para>Vai gravada no CSV pelo NOME da constante, e não pelo número: renumerar o enum não pode
+/// reescrever o passado, e um log em que se lê <c>Timeout</c> vale mais que um em que se lê <c>10</c>.
+/// Por isso também nada é removido daqui, só acrescentado no fim.</para>
+///
+/// <para>Os factories de falha EXIGEM a causa, de propósito. Com o parâmetro obrigatório o compilador
+/// varre todos os pontos de falha dos drivers e não deixa passar nenhum sem classificar; um parâmetro
+/// opcional com default deixaria o ponto novo nascer como "não sei" calado.</para>
+/// </remarks>
+public enum FalhaCausa
+{
+    /// <summary>Sucesso, ou falha vinda de um log antigo que não gravava causa.</summary>
+    Nenhuma = 0,
+
+    /// <summary>O app afirmou que ESTE número não tem conta. Falha do número.</summary>
+    NumeroSemConta,
+
+    /// <summary>O app declarou na tela que a CONTA está restringida. Falha do chip.</summary>
+    ContaRestringida,
+
+    /// <summary>A tela do aparelho está bloqueada e o desbloqueio automático não deu conta.</summary>
+    TelaBloqueada,
+
+    /// <summary>Havia texto pendente numa conversa e não deu pra sair dela sem arriscar mandar errado.</summary>
+    RascunhoPendente,
+
+    /// <summary>O deep link não levou à conversa: campo de mensagem ou botão enviar não apareceram.</summary>
+    ConversaNaoAbriu,
+
+    /// <summary>Uma tela não reconhecida estava na frente da conversa e não pôde ser fechada.</summary>
+    TelaInesperada,
+
+    /// <summary>A digitação falhou: teclado ausente, campo não limpou, ou o texto entrou truncado.</summary>
+    DigitacaoFalhou,
+
+    /// <summary>Toquei enviar e o texto CONTINUA no campo. Conclusivo: não saiu.</summary>
+    TextoContinuouNoCampo,
+
+    /// <summary>Toquei enviar e não consegui ler a tela pra confirmar. Pode ter saído.</summary>
+    ToqueNaoConfirmado,
+
+    /// <summary>Estourou o tempo do envio. Aparelho lento ou travado.</summary>
+    Timeout,
+
+    /// <summary>O adb devolveu erro cru. O texto do erro é a única pista.</summary>
+    AdbFalhou,
+
+    /// <summary>Número ou texto inválidos: nada chegou a ser tentado no aparelho.</summary>
+    EntradaInvalida,
+
+    /// <summary>Este engine não envia pela UI.</summary>
+    NaoSuportado,
+}
+
 /// <summary>Resultado do envio pela UI do WhatsApp (Caminho A). Contrato claro em vez de uma string
 /// que misturava status/ok/erro (que invertia o "ok" no sucesso).</summary>
 /// <param name="Sent">A mensagem SAIU (botão tocado + campo esvaziou). false = não enviou.</param>
@@ -365,19 +428,30 @@ public sealed record WhatsAppSendResult(bool Sent, string? DeliveryStatus, strin
     /// </remarks>
     public bool ContaRestringida { get; init; }
 
+    /// <summary>Por que não saiu, classificado. <see cref="FalhaCausa.Nenhuma"/> no sucesso.</summary>
+    /// <remarks>
+    /// Convive com <see cref="Error"/> em vez de substituí-lo, e os dois têm público diferente: a causa
+    /// é pra agrupar e decidir (o relatório responde "19 número morto, 4 tela travada"), o erro é a
+    /// frase que explica o caso concreto pra quem vai olhar o aparelho. Trocar um pelo outro perderia
+    /// metade da informação nas duas direções.
+    /// </remarks>
+    public FalhaCausa Causa { get; init; }
+
     /// <summary>O app declarou restrição na tela. Falha do CHIP, não do número nem do aparelho.</summary>
     public static WhatsAppSendResult Restringida(string error) =>
-        new(false, null, error) { ContaRestringida = true };
+        new(false, null, error) { ContaRestringida = true, Causa = FalhaCausa.ContaRestringida };
 
     public static WhatsAppSendResult Ok(string? deliveryStatus) => new(true, deliveryStatus, null);
 
     /// <summary>Falha CONCLUSIVA: nada saiu, e tentar de novo é seguro.</summary>
-    public static WhatsAppSendResult Fail(string error) => new(false, null, error);
+    public static WhatsAppSendResult Fail(FalhaCausa causa, string error) =>
+        new(false, null, error) { Causa = causa };
 
     /// <summary>Falha CONCLUSIVA e do NÚMERO: o app afirmou que não existe conta para ele.</summary>
     public static WhatsAppSendResult NoAccount(string error) =>
-        new(false, null, error) { NoWhatsAppAccount = true };
+        new(false, null, error) { NoWhatsAppAccount = true, Causa = FalhaCausa.NumeroSemConta };
 
     /// <summary>NÃO DEU PRA CONFIRMAR: a mensagem pode ter saído. Não tentar de novo sozinho.</summary>
-    public static WhatsAppSendResult Unconfirmed(string error) => new(false, null, error) { Uncertain = true };
+    public static WhatsAppSendResult Unconfirmed(FalhaCausa causa, string error) =>
+        new(false, null, error) { Uncertain = true, Causa = causa };
 }

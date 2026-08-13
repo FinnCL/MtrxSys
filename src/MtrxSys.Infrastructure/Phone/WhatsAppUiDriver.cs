@@ -41,7 +41,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         var digits = new string([.. (phoneE164 ?? string.Empty).Where(char.IsDigit)]);
         if (digits.Length < 8)
         {
-            return WhatsAppSendResult.Fail("phone inválido");
+            return WhatsAppSendResult.Fail(FalhaCausa.EntradaInvalida, "phone inválido");
         }
         // Normaliza a quebra de linha ANTES de qualquer medida: o \r do Windows não é digitável e
         // entraria na contagem de caracteres que confere o campo antes de enviar.
@@ -49,7 +49,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                                      .Replace('\r', '\n');
         if (text.Length == 0)
         {
-            return WhatsAppSendResult.Fail("texto vazio");
+            return WhatsAppSendResult.Fail(FalhaCausa.EntradaInvalida, "texto vazio");
         }
 
         // Sem digitação humana: o deep link entrega a mensagem pronta no campo e só resta tocar enviar.
@@ -93,6 +93,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         CancellationToken ct)
     {
         var generico = WhatsAppSendResult.Fail(
+            FalhaCausa.ConversaNaoAbriu,
             "botão enviar não apareceu (o chat não abriu ou o texto não preencheu).");
         var xml = await DumpUiAsync(ct);
         if (string.IsNullOrWhiteSpace(xml))
@@ -134,6 +135,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         if (TelaBloqueada(xml))
         {
             return (WhatsAppSendResult.Fail(
+                FalhaCausa.TelaBloqueada,
                 "o aparelho está com a TELA BLOQUEADA e o desbloqueio automático não deu conta, o que "
                 + "indica PIN, padrão ou biometria. Não é o número nem a conversa. No aparelho: tire o "
                 + "bloqueio de tela e ligue \"Permanecer ativo\" nas Opções do desenvolvedor (ou rode "
@@ -415,7 +417,8 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         var url = WhatsAppUi.DeepLink(digits, text);
         if (url.Contains('\'', StringComparison.Ordinal))
         {
-            return WhatsAppSendResult.Fail("texto gerou aspa simples (não esperado no URL-encode).");
+            return WhatsAppSendResult.Fail(
+                FalhaCausa.EntradaInvalida, "texto gerou aspa simples (não esperado no URL-encode).");
         }
 
         await _uiLock.WaitAsync(ct);
@@ -432,13 +435,14 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 
             if (await GarantirTelaSemRascunhoAsync(sct) is { } sujeira)
             {
-                return WhatsAppSendResult.Fail(sujeira);
+                return WhatsAppSendResult.Fail(FalhaCausa.RascunhoPendente, sujeira);
             }
 
             var (rc, outp, err) = await OpenChatAsync(url, sct);
             if (rc != 0)
             {
-                return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
+                return WhatsAppSendResult.Fail(
+                    FalhaCausa.AdbFalhou, string.IsNullOrWhiteSpace(err) ? outp : err);
             }
             var send = await PollNodeCenterAsync(SendNodeRx, _opts.WhatsAppOpenWaitMs, sct);
             if (send is null)
@@ -478,8 +482,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             {
                 EstadoDoCampo.Vazio => WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct)),
                 EstadoDoCampo.ComTexto => WhatsAppSendResult.Fail(
+                    FalhaCausa.TextoContinuouNoCampo,
                     "toquei enviar e o texto CONTINUA no campo: a mensagem não saiu."),
                 _ => WhatsAppSendResult.Unconfirmed(
+                    FalhaCausa.ToqueNaoConfirmado,
                     "toquei enviar mas não consegui ler a tela pra confirmar. Pode ter saído; não vou "
                     + "tentar de novo sozinho pra não mandar duas vezes."),
             };
@@ -488,9 +494,11 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         {
             const string motivo = "envio excedeu o tempo total (aparelho lento/travado?).";
             return tocouEnviar
-                ? WhatsAppSendResult.Unconfirmed(motivo + " O toque em enviar JÁ tinha acontecido, então "
-                    + "pode ter saído.")
-                : WhatsAppSendResult.Fail(motivo + " Estourou antes de tocar enviar, então nada saiu.");
+                ? WhatsAppSendResult.Unconfirmed(
+                    FalhaCausa.Timeout,
+                    motivo + " O toque em enviar JÁ tinha acontecido, então pode ter saído.")
+                : WhatsAppSendResult.Fail(
+                    FalhaCausa.Timeout, motivo + " Estourou antes de tocar enviar, então nada saiu.");
         }
         finally
         {
@@ -506,6 +514,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             // FALHA em vez de cair no deep link. Voltar ao caminho antigo em silêncio devolveria o
             // comportamento que se quis remover, e o log diria "enviado" do mesmo jeito.
             return WhatsAppSendResult.Fail(
+                FalhaCausa.DigitacaoFalhou,
                 $"digitação humana exigida mas indisponível: nem o teclado {_opts.TypingImePackage} está "
                 + "instalado/ativo, nem o texto é simples o bastante pro `input text` (acento e emoji "
                 + "quebram). Instale o IME no aparelho ou desligue Phone__HumanTyping.");
@@ -551,7 +560,8 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 var (rc, outp, err) = await OpenChatAsync(WhatsAppUi.DeepLinkEmpty(digits), sct);
                 if (rc != 0)
                 {
-                    return WhatsAppSendResult.Fail(string.IsNullOrWhiteSpace(err) ? outp : err);
+                    return WhatsAppSendResult.Fail(
+                        FalhaCausa.AdbFalhou, string.IsNullOrWhiteSpace(err) ? outp : err);
                 }
                 entry = await PollNodeCenterAsync(EntryNodeRx, _opts.WhatsAppOpenWaitMs, sct);
             }
@@ -574,7 +584,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                     EntryNodeRx, Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
                 if (entry is null)
                 {
+                    // A tela desconhecida, quando houve uma, é a causa mais específica: ela diz que algo
+                    // ESTAVA na frente da conversa, e não que a conversa simplesmente não veio.
                     return WhatsAppSendResult.Fail(
+                        evidencia is null ? FalhaCausa.ConversaNaoAbriu : FalhaCausa.TelaInesperada,
                         "campo de mensagem não apareceu (a conversa não abriu)." + evidencia);
                 }
             }
@@ -587,7 +600,9 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 // tentativa anterior entraria embaralhada com a nova (medido em 2026-07-27).
                 if (!await ClearEntryAsync(typing, sct))
                 {
-                    return WhatsAppSendResult.Fail("o campo de mensagem já tinha texto e não consegui limpar.");
+                    return WhatsAppSendResult.Fail(
+                        FalhaCausa.DigitacaoFalhou,
+                        "o campo de mensagem já tinha texto e não consegui limpar.");
                 }
                 await Task.Delay(Random.Shared.Next(900, 2600), sct);
 
@@ -601,8 +616,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                     // falha conclusiva fazia o console reabrir a conversa na outra forma do número e
                     // mandar de novo, somando uma segunda mensagem à metade que a pessoa já recebeu.
                     return jaSaiuAlgo
-                        ? WhatsAppSendResult.Unconfirmed($"digitação abortada, campo limpo. {motivo}")
-                        : WhatsAppSendResult.Fail($"digitação abortada, campo limpo. {motivo}");
+                        ? WhatsAppSendResult.Unconfirmed(
+                            FalhaCausa.ToqueNaoConfirmado, $"digitação abortada, campo limpo. {motivo}")
+                        : WhatsAppSendResult.Fail(
+                            FalhaCausa.DigitacaoFalhou, $"digitação abortada, campo limpo. {motivo}");
                 }
 
                 // Confere o TAMANHO antes de enviar: o IME pode engolir trecho em silêncio, e mensagem
@@ -613,6 +630,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                     var achou = typed?.Length.ToString(CultureInfo.InvariantCulture) ?? "nada";
                     await ClearEntryAsync(typing, sct);
                     return WhatsAppSendResult.Fail(
+                        FalhaCausa.DigitacaoFalhou,
                         $"campo ficou com {achou} caracteres, esperava ~{text.Length}; "
                         + "envio abortado pra não mandar truncado.");
                 }
@@ -627,7 +645,9 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             if (send is null)
             {
                 await ClearEntryAsync(typing, sct);
-                return WhatsAppSendResult.Fail("botão enviar não apareceu mesmo com o campo preenchido.");
+                return WhatsAppSendResult.Fail(
+                    FalhaCausa.ConversaNaoAbriu,
+                    "botão enviar não apareceu mesmo com o campo preenchido.");
             }
 
             // Ver a mesma marca no caminho do deep link: depois do toque não existe mais conclusão
@@ -640,8 +660,10 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 EstadoDoCampo.Vazio => WhatsAppSendResult.Ok(await ReadLastMessageStatusAsync(sct))
                     with { AbertoPeloRegistro = abertoPeloRegistro },
                 EstadoDoCampo.ComTexto => WhatsAppSendResult.Fail(
+                    FalhaCausa.TextoContinuouNoCampo,
                     "toquei enviar e o texto CONTINUA no campo: a mensagem não saiu."),
                 _ => WhatsAppSendResult.Unconfirmed(
+                    FalhaCausa.ToqueNaoConfirmado,
                     "toquei enviar mas não consegui ler a tela pra confirmar. Pode ter saído; não vou "
                     + "tentar de novo sozinho pra não mandar duas vezes."),
             };
@@ -651,9 +673,11 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             var motivo = $"envio excedeu o teto (base {_opts.WhatsAppSendTimeoutSeconds}s + orçamento de "
                 + $"digitação pra {text.Length} caracteres a {_opts.TypingCharsPerMinute} cpm).";
             return tocouEnviar
-                ? WhatsAppSendResult.Unconfirmed(motivo + " O toque em enviar JÁ tinha acontecido, então "
-                    + "pode ter saído.")
-                : WhatsAppSendResult.Fail(motivo + " Estourou antes de tocar enviar, então nada saiu.");
+                ? WhatsAppSendResult.Unconfirmed(
+                    FalhaCausa.Timeout,
+                    motivo + " O toque em enviar JÁ tinha acontecido, então pode ter saído.")
+                : WhatsAppSendResult.Fail(
+                    FalhaCausa.Timeout, motivo + " Estourou antes de tocar enviar, então nada saiu.");
         }
         finally
         {
