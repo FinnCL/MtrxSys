@@ -151,7 +151,13 @@ public static class PlanilhaDeEnvios
         ws.Column(2).Style.NumberFormat.Format = "@";
         // Na COLUNA e não célula a célula: com dezenas de milhares de linhas, atribuir estilo por célula
         // multiplica o trabalho por nada, já que o formato é o mesmo em todas.
-        ws.Column(1).Style.DateFormat.Format = "dd/MM/yyyy HH:mm";
+        //
+        // 🔴 COM SEGUNDOS. O ritmo normal entre envios é de 150 a 360s, então minuto bastaria — mas
+        // depois de uma FALHA a espera cai para 8 a 21s (ver FalhaEsperaMin no console), e aí várias
+        // linhas caem no mesmo minuto. Sem os segundos, a sequência de uma rajada de falhas fica
+        // impossível de reconstruir, que é justamente o momento em que alguém vai querer reconstruí-la.
+        // O CSV sempre guardou a precisão inteira; era só a exibição que a jogava fora.
+        ws.Column(1).Style.DateFormat.Format = "dd/MM/yyyy HH:mm:ss";
 
         var r = 1;
         foreach (var l in linhas)

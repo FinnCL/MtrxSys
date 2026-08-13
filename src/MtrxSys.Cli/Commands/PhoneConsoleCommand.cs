@@ -2821,15 +2821,23 @@ internal sealed class PhoneConsoleCommand(
     private void Limpar(string[] partes)
     {
         var alvo = partes.Length > 1 ? partes[1].ToLowerInvariant() : "tudo";
+        var quarentena = 0;
         if (alvo is "contatos" or "tudo")
         {
             _contatos.Clear();
+            // 🔴 A QUARENTENA VAI JUNTO, e é dito em voz alta. Ela guarda CONTATOS, então deixá-la de pé
+            // depois de "limpar tudo" faria a mensagem mentir: a sessão continuaria com 23 números
+            // dentro, invisíveis fora do menu, prontos pra reaparecer no `suspensos` de outro dia e
+            // parecerem lixo de origem desconhecida.
+            quarentena = _suspensos.Count;
+            _suspensos.Clear();
         }
         if (alvo is "textos" or "tudo")
         {
             _textos.Clear();
         }
-        AnsiConsole.MarkupLine($"limpo: [bold]{alvo.EscapeMarkup()}[/].");
+        var recorte = quarentena == 0 ? "" : $" [grey](inclusive {quarentena} suspenso(s))[/]";
+        AnsiConsole.MarkupLine($"limpo: [bold]{alvo.EscapeMarkup()}[/].{recorte}");
     }
 
     /// <summary>O menu, com o VALOR ATUAL de cada ajuste ao lado. Redesenhado antes de cada escolha,
@@ -2877,6 +2885,15 @@ internal sealed class PhoneConsoleCommand(
         t.AddEmptyRow();
         // Letras porque os dígitos acabaram, e renumerar 1..9 quebraria a memória de quem já usa.
         t.AddRow("[bold]g[/]", "gravar", "[grey]grava a lista na agenda do aparelho, sem enviar[/]");
+        t.AddEmptyRow();
+        // 🔴 O `relatorio` e o `suspensos` entram AQUI, e não só no `comandos`. É a regra escrita no
+        // remarks acima, e eu tinha acabado de quebrá-la: comando que não está neste painel, na prática,
+        // não existe — a ajuda rola pra fora da tela e o `comandos` exige já saber que ele existe.
+        t.AddRow("[bold]suspensos[/]", "quarentena",
+            _suspensos.Count == 0
+                ? "[grey]vazia (quem o app negou sai da lista e para aqui)[/]"
+                : $"[bold]{_suspensos.Count}[/] [grey]guardado(s); devolve ou descarta[/]");
+        t.AddRow("[bold]relatorio[/]", "planilha", "[grey]gera o .xlsx do aparelho e abre (sai sozinho no fim do lote)[/]");
         t.AddEmptyRow();
         t.AddRow("[bold]6[/]", "ver", "[grey]confere o que está carregado[/]");
         t.AddRow("[bold]c[/]", "conferir", "[grey]a forma de cada número: celular, legado ou fixo[/]");

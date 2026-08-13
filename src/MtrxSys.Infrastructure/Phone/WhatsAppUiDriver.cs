@@ -465,9 +465,18 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                     // diagnóstico descreveria a tela que eu mesmo criei, não a que causou a falha.
                     // A evidência da tela desconhecida vem ANEXADA, não no lugar: ela descreve o que
                     // bloqueou, enquanto o diagnóstico diz o que o envio concluiu.
+                    // A causa sobe de genérica para TelaInesperada quando houve evidência, igual ao
+                    // caminho da digitação: mesma situação real, mesma causa gravada no log, senão o
+                    // relatório agruparia o mesmo defeito em dois baldes conforme um toggle de config.
                     return evidencia is null
                         ? diagnostico
-                        : diagnostico with { Error = diagnostico.Error + evidencia };
+                        : diagnostico with
+                        {
+                            Error = diagnostico.Error + evidencia,
+                            Causa = diagnostico.Causa is FalhaCausa.ConversaNaoAbriu
+                                ? FalhaCausa.TelaInesperada
+                                : diagnostico.Causa,
+                        };
                 }
             }
 
@@ -584,6 +593,29 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                     EntryNodeRx, Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
                 if (entry is null)
                 {
+                    // 🔴 O DIAGNÓSTICO SÓ PODE SER DESCARTADO QUANDO ELE É O GENÉRICO.
+                    //
+                    // Este bloco jogava o `diagnostico` fora SEMPRE e devolvia uma falha nova. Quando a
+                    // tela dizia "Sua conta foi restringida", o veredito nascia certo ali em cima e
+                    // morria aqui: o console recebia "a conversa não abriu", ou seja falha de APARELHO.
+                    //
+                    // O custo disso é o pior que este projeto tem. `ContaRestringida` é a única condição
+                    // que autoriza PARAR o lote, e é ela que cancela a segunda chance. Sem o flag, o
+                    // lote seguia contra um chip restrito, cada contato ainda pagando a tentativa extra
+                    // — que é exatamente o que foi medido em 2026-08-10 (22 dos 23 fracassos daquele
+                    // lote pagaram a segunda chance à toa), e é o que transforma restrição temporária
+                    // em banimento.
+                    //
+                    // E passava despercebido porque o caminho do deep link (SendByDeepLinkAsync)
+                    // devolve o diagnóstico inteiro, e é ele que o teste de restrição exercitava. Este
+                    // aqui, o que roda com digitação humana LIGADA e portanto o DEFAULT, era o quebrado.
+                    if (diagnostico.Causa is not FalhaCausa.ConversaNaoAbriu)
+                    {
+                        return evidencia is null
+                            ? diagnostico
+                            : diagnostico with { Error = diagnostico.Error + evidencia };
+                    }
+
                     // A tela desconhecida, quando houve uma, é a causa mais específica: ela diz que algo
                     // ESTAVA na frente da conversa, e não que a conversa simplesmente não veio.
                     return WhatsAppSendResult.Fail(
@@ -645,6 +677,20 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             if (send is null)
             {
                 await ClearEntryAsync(typing, sct);
+
+                // 🔴 PERGUNTA À TELA ANTES DE CULPAR O APARELHO. A cascata de abertura usa um contato
+                // que o app JÁ reconhece, então ela abre a conversa mesmo com a conta restrita — e aí
+                // a restrição só se manifesta AQUI, no botão de enviar que não aparece. Sem esta
+                // pergunta, o único caso em que a cascata funciona é justamente o que esconde o motivo.
+                //
+                // SÓ a restrição é promovida. "Número sem conta" seria absurdo neste ponto: a conversa
+                // abriu e o texto foi digitado, então o número resolveu. Custa um dump, e só na falha.
+                var (diagnostico, _) = await DiagnosticarChatNaoAbertoAsync(sct);
+                if (diagnostico.ContaRestringida)
+                {
+                    return diagnostico;
+                }
+
                 return WhatsAppSendResult.Fail(
                     FalhaCausa.ConversaNaoAbriu,
                     "botão enviar não apareceu mesmo com o campo preenchido.");

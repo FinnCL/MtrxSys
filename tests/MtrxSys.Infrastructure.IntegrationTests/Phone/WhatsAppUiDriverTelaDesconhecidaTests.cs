@@ -219,6 +219,69 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
         r.Error.Should().Contain("restringida");
     }
 
+    /// <summary>A MESMA restrição, no caminho que roda em produção.</summary>
+    /// <remarks>
+    /// 🔴 O TESTE ACIMA PASSAVA E O SISTEMA ESTAVA QUEBRADO, e a razão é o <c>HumanTyping = false</c> do
+    /// <see cref="Opts"/>: ele exercita o caminho do DEEP LINK, que devolve o diagnóstico inteiro. Com a
+    /// digitação humana LIGADA, que é o default de <c>PhoneOptions</c> e o que o console usa, o envio vai
+    /// por <c>SendByTypingAsync</c> — e lá o diagnóstico era calculado e jogado fora, virando "a conversa
+    /// não abriu".
+    ///
+    /// <para>O efeito é o pior possível: <c>ContaRestringida</c> é a ÚNICA condição que autoriza parar o
+    /// lote e a única que cancela a segunda chance. Sem o flag, o lote seguia contra um chip restrito,
+    /// contato após contato, que é como restrição temporária vira banimento.</para>
+    ///
+    /// <para>Por isso este teste existe em DUPLICATA do de cima, mudando só o toggle: uma garantia que
+    /// vale num caminho e não no outro não é garantia, e nada no tipo de retorno denunciava a diferença.</para>
+    /// </remarks>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Conta_restringida_e_reconhecida_nos_DOIS_caminhos_de_envio(bool digitacaoHumana)
+    {
+        const string TelaDeRestricao =
+            """
+            <node text="As mensagens e ligações são protegidas" clickable="true" bounds="[0,100][1080,200]"/>
+            <node text="Sua conta foi restringida. Você não pode enviar mensagens" clickable="true" bounds="[0,300][1080,400]"/>
+            """;
+        var adb = new AdbDeUmaTela(TelaDeRestricao);
+        var opts = Opts;
+        opts.HumanTyping = digitacaoHumana;
+        using var driver = new WhatsAppUiDriver(adb, opts);
+
+        var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
+
+        r.ContaRestringida.Should().BeTrue(
+            "é o único veredito que manda parar o lote, e ele não pode depender de um toggle de config");
+        r.Causa.Should().Be(FalhaCausa.ContaRestringida);
+        r.NoWhatsAppAccount.Should().BeFalse("a culpa não é do número");
+        r.Error.Should().Contain("restringida");
+    }
+
+    /// <summary>A conversa ABRE, e a restrição só aparece no botão de enviar que não vem.</summary>
+    /// <remarks>
+    /// A cascata de abertura usa um contato que o app JÁ reconhece, então ela vence mesmo com a conta
+    /// restrita. Nesse caso o campo de mensagem existe, o texto é digitado, e a restrição se manifesta
+    /// só na ausência do botão — o único cenário em que a cascata funcionando ESCONDIA o motivo.
+    /// </remarks>
+    [Fact]
+    public async Task Restricao_e_reconhecida_quando_a_conversa_abre_mas_o_enviar_nao_aparece()
+    {
+        const string TelaComCampoSemEnviar =
+            """
+            <node resource-id="com.whatsapp:id/entry" bounds="[100,1800][900,1900]"/>
+            <node text="Sua conta foi restringida. Você não pode enviar mensagens" clickable="true" bounds="[0,300][1080,400]"/>
+            """;
+        var adb = new AdbDeUmaTela(TelaComCampoSemEnviar);
+        var opts = Opts;
+        opts.HumanTyping = true;
+        using var driver = new WhatsAppUiDriver(adb, opts);
+
+        var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
+
+        r.ContaRestringida.Should().BeTrue("o app declarou a restrição na tela, e ela explica o resto");
+    }
+
     [Fact]
     public async Task Tela_de_recurso_com_PEDIR_ANALISE_tambem_conta_como_restricao()
     {
