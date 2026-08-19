@@ -103,18 +103,6 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             return (generico, null);
         }
 
-        // Trechos estáveis do aviso, sem acento e em minúsculas, pra sobreviver a variação de texto.
-        // ⚠️ SÓ pistas inequívocas. "convidar para o WhatsApp" foi tirado de propósito: essa palavra
-        // aparece em outras telas do app, e um falso positivo aqui afirma a causa errada COM
-        // CONFIANÇA — que é o defeito que este método existe pra corrigir. O diálogo de número sem
-        // conta sempre traz alguma variação de "não está no WhatsApp"; isso basta.
-        string[] pistas =
-        [
-            "nao esta no whatsapp", "não está no whatsapp",
-            "nao existe no whatsapp", "não existe no whatsapp",
-            "isn't on whatsapp", "is not on whatsapp", "not on whatsapp",
-        ];
-
         // 🔴 A CONTA DECLARADA RESTRITA VEM PRIMEIRO, antes de qualquer outra leitura. É a única
         // condição de CERTEZA sobre o chip que existe aqui, e ela explica TODAS as outras: com a conta
         // restrita o campo de mensagem some, o botão de enviar não aparece, e o número parece morto.
@@ -142,8 +130,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 + "tools\\preparar-aparelho.cmd, que já faz isso)."), xml);
         }
 
-        var tela = xml.ToLowerInvariant();
-        if (!pistas.Any(p => tela.Contains(p, StringComparison.Ordinal)))
+        if (!NumeroSemConta(xml))
         {
             return (generico, xml);
         }
@@ -151,8 +138,8 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         // 🔴 GUARDA A TELA TAMBÉM AQUI, e não só no caminho da tela desconhecida.
         //
         // Este veredito é o mais FORTE que o driver emite: ele encerra o contato, culpa o número e
-        // manda o operador conferir a lista. E ele nasce de uma BUSCA POR TEXTO — o mesmo comentário
-        // logo acima já registra que uma pista mal escolhida afirma a causa errada com confiança.
+        // manda o operador conferir a lista. E ele nasce de uma BUSCA POR TEXTO — o NumeroSemConta
+        // registra ali por que uma pista mal escolhida afirma a causa errada com confiança.
         //
         // Descartar a tela deixava a afirmação INAUDITÁVEL: um lote inteiro podia sair marcando gente
         // boa como inexistente e não haveria com que discordar. MEDIDO operando em 2026-08-10: dois
@@ -200,9 +187,20 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     {
         if (xml is not null)
         {
+            // Aqui NÃO se exige botão de verdade nem aviso por cima, ao contrário do
+            // FecharAvisoSobreAConversaAsync: um aviso em tela cheia pode muito bem fechar por um
+            // TextView clicável, e exigir `class` de botão perderia esse caso.
+            //
+            // ⚠️ O QUE SEGURA ISSO É A PRÉ-CONDIÇÃO DE QUEM CHAMA: só se chega aqui com o diagnóstico
+            // GENÉRICO, ou seja, sem campo de mensagem E sem a tela ter se explicado. A conta
+            // restringida, que é o caso em que a lista de mensagens fica à mostra sem o campo, sai
+            // antes e não passa por aqui. Sobra um resíduo conhecido: tela que esconde o campo e
+            // mantém as mensagens por outro motivo (removido do grupo, canal só de leitura). Fechar
+            // esse resíduo pede um resource-id da lista de mensagens MEDIDO em aparelho, e id chutado
+            // aqui é o mesmo erro que este arquivo já pagou duas vezes.
             foreach (var (rotulo, centro) in Clicaveis(xml))
             {
-                if (centro is { } ponto && BotoesQueSoFecham.Contains(rotulo.ToLowerInvariant()))
+                if (centro is { } ponto && RotuloSoFecha(rotulo))
                 {
                     await TapAsync(ponto, ct);
                     await Task.Delay(600, ct);
@@ -217,6 +215,368 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         await Task.Delay(600, ct);
         return evidencia;
     }
+
+    /// <summary>Fecha um aviso que o WhatsApp abre POR CIMA de uma conversa que JÁ abriu, pra o toque
+    /// voltar a chegar no campo de mensagem.</summary>
+    /// <remarks>
+    /// 🔴 O CASO, relatado operando em 2026-08-18: conversa com MENSAGENS TEMPORÁRIAS ligadas mostra um
+    /// aviso com "OK" na frente do chat. Enquanto ele está lá o toque morre nele, a digitação não entra
+    /// em lugar nenhum e o contato falha.
+    ///
+    /// <para>Já existia recuperação pra aviso na frente da conversa, o
+    /// <see cref="TentarDesbloquearTelaAsync"/>. Ela nunca alcançava ESTE caso porque só roda quando o
+    /// campo de mensagem NÃO foi encontrado, e este aviso não tira o campo da árvore: o
+    /// <c>uiautomator dump</c> traz a Activity inteira, então o <c>id/entry</c> continua lá atrás. O
+    /// driver conclui que a conversa abriu, digita contra um toque bloqueado, e a falha chega ao
+    /// console como "campo ficou com nada caracteres", que culpa o teclado.</para>
+    ///
+    /// <para>⚠️ SÓ TOCA EM BOTÃO DE VERDADE (ver <see cref="EhBotao"/>). Rótulo neutro não basta com a
+    /// conversa aberta: a bolha de mensagem é clicável e o rótulo dela é o texto da pessoa, então
+    /// alguém que respondeu "ok" viraria alvo de toque.</para>
+    ///
+    /// <para>⚠️ E NÃO TEM BACK COMO PLANO B, também ao contrário do outro método. Lá a conversa já tinha
+    /// falhado e o BACK não custava nada. Aqui ela está aberta e na esmagadora maioria das vezes
+    /// funcionando: um BACK disparado por engano sairia dela e quebraria um envio que ia dar certo. Sem
+    /// botão reconhecido, não faz nada e o caminho de sempre segue.</para>
+    ///
+    /// <para>⚠️ SÓ CHAMAR COM O CAMPO (ou o botão de enviar) JÁ ENCONTRADO. Com a conversa fechada, o
+    /// que está na tela pode ser o diálogo de "este número não está no WhatsApp", que também tem um
+    /// "OK": fechá-lo aqui apagaria a prova de que a causa é o NÚMERO, e a falha voltaria a ser
+    /// classificada como problema de aparelho. Esse caso é do
+    /// <see cref="DiagnosticarChatNaoAbertoAsync"/>, que lê antes de dispensar.</para>
+    /// </remarks>
+    /// <returns>true quando tocou em algo: a tela mudou e as coordenadas de antes viraram pó.</returns>
+    /// <param name="telaJaLida">A tela que quem chama ACABOU de ler, quando existe. A primeira volta
+    /// usa ela em vez de dumpar de novo: seria outro processo `adb` no caminho mais repetido do driver,
+    /// e uma tela diferente daquela em que o campo foi encontrado.</param>
+    private async Task<bool> FecharAvisoSobreAConversaAsync(string? telaJaLida, CancellationToken ct)
+    {
+        var fechouAlgum = false;
+        var tela = telaJaLida;
+        // 🔴 MAIS DE UMA VOLTA, mas com teto. Os avisos do WhatsApp vêm EMPILHADOS (mensagens
+        // temporárias e, atrás dele, o de criptografia ou o de conta comercial), e um deles pode entrar
+        // na tela um instante DEPOIS de o campo aparecer, ou seja, depois da primeira leitura. Uma
+        // passada só fechava o primeiro e deixava o lote parado no segundo, com o mesmo sintoma.
+        //
+        // O teto existe porque um aviso que NÃO fecha pelo próprio botão giraria em laço dentro do
+        // envio. Três voltas e segue: o que sobrar vira falha COM a tela guardada, que é o que ensina
+        // o rótulo novo.
+        for (var volta = 0; volta < MaxAvisosPorEnvio; volta++)
+        {
+            tela ??= await DumpUiAsync(ct);
+            if (tela is not { } xml || LerAvisoSobreOCampo(xml) is not ({ }, { } ponto))
+            {
+                return fechouAlgum;
+            }
+
+            // 🔴 TELA QUE JÁ SE EXPLICOU NÃO SE FECHA. O diálogo de "não está no WhatsApp" e a tela de
+            // conta restringida também são outra janela do app, e o primeiro tem um botão OK. A regra
+            // de só rodar com o campo encontrado deveria bastar, mas ela supõe que o campo achado é o
+            // da conversa PEDIDA — e quando o aparelho ignora os BACK do
+            // SairDaConversaAnteriorAsync, o campo na tela é o da conversa ANTERIOR e o diálogo está
+            // por cima dela. Fechar aqui apagaria a única prova de que a causa é o NÚMERO ou o CHIP, e
+            // esses dois vereditos valem mais que fechar um aviso: um tira o contato da lista, o outro
+            // PARA o lote. Na dúvida não fecha, e o diagnóstico lê a tela intacta logo adiante.
+            if (TelaJaSeExplicou(xml))
+            {
+                return fechouAlgum;
+            }
+
+            // Guarda a tela ANTES do toque. É o dump REAL do aviso, o dado que faltava pra manter
+            // BotoesQueSoFecham medida em vez de adivinhada, e a única prova de que o aviso existiu:
+            // depois do toque ele não volta pro mesmo contato.
+            GuardarAvisoAberto(xml);
+            await TapAsync(ponto, ct);
+            await Task.Delay(600, ct);
+            fechouAlgum = true;
+            tela = null; // o toque mexeu na tela: a volta seguinte tem que ler de novo
+        }
+        return fechouAlgum;
+    }
+
+    /// <summary>Fecha o que estiver na frente e reencontra o alvo, porque a tela mexeu.</summary>
+    /// <remarks>
+    /// Os dois caminhos de envio faziam exatamente isto, um com o campo de mensagem e o outro com o
+    /// botão de enviar. Eram cinco linhas iguais em dois lugares, e o risco de duas cópias não é o
+    /// tamanho: é uma delas receber o próximo ajuste sozinha, e o mesmo defeito real passar a sair no
+    /// relatório em dois baldes conforme um toggle de configuração.
+    /// </remarks>
+    private async Task<(int X, int Y)?> ReencontrarSemAvisoAsync(
+        Regex alvo, (int X, int Y)? achado, string? tela, CancellationToken ct)
+    {
+        if (achado is null || !await FecharAvisoSobreAConversaAsync(tela, ct))
+        {
+            return achado;
+        }
+        // As coordenadas de antes viraram pó: com o aviso fora, a conversa reflui.
+        return await PollNodeCenterAsync(alvo, Math.Min(_opts.WhatsAppOpenWaitMs, 3000), ct);
+    }
+
+    /// <summary>Quantos avisos empilhados o driver tenta fechar antes de desistir e falhar com a tela
+    /// guardada.</summary>
+    private const int MaxAvisosPorEnvio = 3;
+
+    /// <summary>Guarda a tela de um aviso que FOI fechado, e só as primeiras deste processo.</summary>
+    /// <remarks>
+    /// 🔴 O TETO EXISTE PORQUE A DEDUP NÃO SALVA ESTE CASO. <see cref="GuardarTela"/> deduplica pelo
+    /// hash do XML INTEIRO, e o XML inteiro inclui a conversa que está atrás do aviso — que muda a cada
+    /// contato. Ou seja: o mesmo aviso, nos 87 contatos do lote, grava 87 arquivos diferentes, e a
+    /// rotação (<see cref="PhoneOptions.UiDumpKeep"/>, 20 por padrão) apaga as telas mais antigas para
+    /// caberem. As mais antigas são justamente as telas DESCONHECIDAS, que são o dado raro: aviso
+    /// fechado com sucesso a gente já sabe fechar.
+    ///
+    /// <para>Duas cópias bastam pro que esta captura serve: confirmar o rótulo do botão e as medidas da
+    /// tela. A partir daí ela só empurra dado melhor pra fora da pasta.</para>
+    /// </remarks>
+    private void GuardarAvisoAberto(string xml)
+    {
+        if (_avisosGuardados >= MaxAvisosGuardados)
+        {
+            return;
+        }
+        _avisosGuardados++;
+        GuardarTela(xml);
+    }
+
+    /// <inheritdoc cref="GuardarAvisoAberto"/>
+    private int _avisosGuardados;
+
+    /// <inheritdoc cref="GuardarAvisoAberto"/>
+    private const int MaxAvisosGuardados = 2;
+
+    /// <summary>Lê a tela procurando um aviso na frente do campo de mensagem: se tem alguma coisa
+    /// cobrindo o campo, e qual botão fecharia ela.</summary>
+    /// <remarks>
+    /// 🔴 O PERIGO QUE ESTE MÉTODO EXISTE PRA EVITAR não é o aviso: é o toque errado. Dentro de uma
+    /// conversa existem botões de VERDADE que não fecham nada. Mensagem de template traz botões de
+    /// RESPOSTA RÁPIDA, e o rótulo deles é escolhido por quem mandou: "OK" e "Continuar" são os mais
+    /// comuns que existem. Tocar num deles MANDA UMA MENSAGEM para o contato. Seria o disparo
+    /// escrevendo por conta própria na conversa de outra pessoa, irreversível, e sem ninguém por perto.
+    ///
+    /// <para>Por isso o rótulo neutro e a `class` de botão NÃO BASTAM. Exige-se também a prova de que
+    /// existe um aviso, e ela sai da JANELA (ver abaixo). Botão de resposta rápida mora DENTRO da lista
+    /// de mensagens, na MESMA janela da conversa e antes do campo: nenhuma das duas fontes o alcança.</para>
+    ///
+    /// <para>🔴 A PROVA SAI DA JANELA, E NÃO DA ORDEM DOS NÓS. Diálogo e bottom sheet são OUTRA JANELA
+    /// do app, e o `uiautomator dump` concatena as janelas da tela: os filhos diretos de
+    /// <c>&lt;hierarchy&gt;</c> são as RAÍZES delas (ver <see cref="RaizesDeJanela"/>). A primeira
+    /// versão disto olhava só o trecho POSTERIOR ao campo, apoiada em "quem desenha por cima aparece
+    /// depois" — o que vale DENTRO de uma janela, onde o dump é varredura em profundidade, e NÃO entre
+    /// janelas, cuja ordem depende de qual delas está ativa. O `uiautomator` serializa a janela ATIVA
+    /// primeiro, e a janela ativa é justamente o modal: pela regra antiga a varredura nunca o
+    /// alcançava, e o fechamento era um no-op silencioso no caso exato que o motivou. Pior, um falso
+    /// que emitisse o aviso depois da conversa daria o teste por verde.</para>
+    ///
+    /// <para>Duas fontes, e a ordem entre janelas não decide nenhuma:</para>
+    /// <para>A) OUTRA RAIZ, com o mesmo <c>package</c> do campo e sem campo próprio. É um diálogo,
+    /// bottom sheet ou popup do WhatsApp, e uma janela dessas é modal: o toque não chega no campo nem
+    /// quando ela NÃO o cobre geometricamente, que é o caso do diálogo centralizado com o campo no
+    /// rodapé. A regra velha, que exigia cobertura do centro do campo, errava esse caso por inteiro.
+    /// O tamanho mínimo tira popup miúdo do caminho; a exigência de não ter <c>id/entry</c> próprio
+    /// evita confundir com a PRÓPRIA conversa, caso o dump liste a mesma janela duas vezes.</para>
+    /// <para>B) MESMA raiz do campo, nó POSTERIOR a ele cobrindo o centro do campo. É o aviso desenhado
+    /// dentro da própria conversa (bottom sheet de layout, scrim). Aqui a ordem vale, porque é ordem
+    /// DENTRO de uma janela, e é ela que exclui os ancestrais do campo: pai vem antes do filho.</para>
+    ///
+    /// <para>⚠️ O BOTÃO TEM QUE SER DO AVISO. Ele é procurado DENTRO dele: dentro da raiz, no caso A;
+    /// dentro do retângulo do nó que cobre, no caso B. As duas perguntas eram independentes antes, e
+    /// isso deixava o argumento de segurança valendo por coincidência: bastavam algo cobrindo o campo
+    /// e um "OK" em qualquer canto da árvore para o toque sair, sem que um tivesse relação com o outro.</para>
+    ///
+    /// <para>⚠️ CONSEQUÊNCIA ACEITA: aviso cujo botão não é reconhecível não é fechado. Isso é falha COM
+    /// tela guardada e rótulos no erro (ver <see cref="EvidenciaDeCampoQueNaoRecebeu"/>), que é
+    /// recuperável na próxima versão. Um toque errado numa conversa real não é.</para>
+    /// </remarks>
+    /// <returns><c>Motivo</c>: a frase que descreve o que está na frente da conversa, ou null quando
+    /// não há nada. <c>BotaoQueFecha</c>: onde tocar, quando dá pra reconhecer. Só é seguro tocar com
+    /// os DOIS presentes, e é por isso que saem juntos: são uma leitura só da mesma tela, e separá-las
+    /// deixaria o diagnóstico afirmando uma coisa enquanto a ação decide por outra regra.</returns>
+    private static (string? Motivo, (int X, int Y)? BotaoQueFecha) LerAvisoSobreOCampo(string xml)
+    {
+        // Sem campo na tela não é este o caso: quem trata é o TentarDesbloquearTelaAsync.
+        if (EntryNodeRx.Match(xml) is not { Success: true } campo
+            || RetanguloDe(campo.Value) is not { } r)
+        {
+            return (null, null);
+        }
+        // O dobro da área do campo, e o dobro não é preciosismo: sem ele um filho do próprio campo (a
+        // dica de texto) contaria como aviso no caso B, porque filho também vem depois do pai. Painel,
+        // scrim e janela de diálogo são grandes por natureza; o que pertence ao campo, não.
+        var areaMinima = Math.Max(1L, AreaDe(r)) * 2;
+
+        var raizes = RaizesDeJanela(xml);
+        var daConversa = raizes.FindIndex(z => campo.Index >= z.Start && campo.Index < z.End);
+        var pacote = AtributoDe(PacoteRx, campo.Value);
+
+        // O primeiro aviso VISTO, que nem sempre é o primeiro com botão reconhecível. Guardar o motivo
+        // e seguir procurando é o que faz avisos EMPILHADOS funcionarem: parar na primeira janela
+        // candidata devolvia "tem aviso, não sei fechar" mesmo com o botão à mão na janela seguinte.
+        string? motivo = null;
+
+        // ── A: outra JANELA do próprio app ──
+        // Sem package legível não dá pra afirmar que a outra janela é do app, e afirmar errado aqui
+        // autoriza um toque. Nesse caso sobra o caso B, que não depende disso.
+        if (daConversa >= 0 && pacote.Length > 0)
+        {
+            for (var i = 0; i < raizes.Count; i++)
+            {
+                var (inicio, fim) = raizes[i];
+                if (i == daConversa
+                    || NoRx.Match(xml, inicio) is not { Success: true } cabeca
+                    || AtributoDe(PacoteRx, cabeca.Value) != pacote
+                    || RetanguloDe(cabeca.Value) is not { } janela
+                    || AreaDe(janela) < areaMinima
+                    || TemNoTrecho(EntryNodeRx, xml, inicio, fim))
+                {
+                    continue;
+                }
+                motivo ??= AvisoEmOutraJanela;
+                if (BotaoQueFechaEm(xml, inicio, fim, null) is { } botao)
+                {
+                    return (AvisoEmOutraJanela, botao);
+                }
+            }
+        }
+
+        // ── B: mesma janela, nó posterior ao campo ──
+        var limite = daConversa >= 0 ? raizes[daConversa].End : xml.Length;
+        var centroX = (r.X1 + r.X2) / 2;
+        var centroY = (r.Y1 + r.Y2) / 2;
+        for (var no = NoRx.Match(xml, campo.Index + campo.Length);
+             no.Success && no.Index < limite;
+             no = no.NextMatch())
+        {
+            if (RetanguloDe(no.Value) is not { } c || !Cobre(c, centroX, centroY, areaMinima))
+            {
+                continue;
+            }
+            motivo ??= AvisoCobrindoOCampo;
+            if (BotaoQueFechaEm(xml, no.Index, limite, c) is { } botao)
+            {
+                return (AvisoCobrindoOCampo, botao);
+            }
+        }
+        return (motivo, null);
+    }
+
+    /// <inheritdoc cref="LerAvisoSobreOCampo"/>
+    private const string AvisoEmOutraJanela =
+        " Havia OUTRA JANELA do WhatsApp na frente da conversa (um aviso ou diálogo do app): o texto "
+        + "não entrou porque o toque não chegou no campo, e não porque o teclado falhou.";
+
+    /// <inheritdoc cref="LerAvisoSobreOCampo"/>
+    private const string AvisoCobrindoOCampo =
+        " Havia ALGO POR CIMA do campo de mensagem: o texto não entrou porque o toque não chegou "
+        + "no campo, e não porque o teclado falhou.";
+
+    /// <summary>As RAÍZES DE JANELA do dump: onde cada uma começa e termina no XML.</summary>
+    /// <remarks>
+    /// 🔴 O `uiautomator dump` não despeja UMA árvore: ele despeja as janelas da tela, uma atrás da
+    /// outra, como filhas diretas de <c>&lt;hierarchy&gt;</c>. A conversa é uma; o diálogo por cima
+    /// dela é outra; a barra de status e o teclado são outras. Saber onde cada uma começa é o que
+    /// permite perguntar "o campo e este botão estão na MESMA janela?", que é a pergunta que separa um
+    /// aviso do conteúdo da conversa — e é a única que não depende da ordem em que elas saíram.
+    /// <para>Conta profundidade em vez de casar aninhamento: <c>&lt;node ...&gt;</c> abre,
+    /// <c>&lt;/node&gt;</c> fecha e <c>&lt;node ... /&gt;</c> é folha. Regex não faz aninhamento, e um
+    /// parser de XML de verdade custaria caro no caminho mais repetido do driver, para responder uma
+    /// pergunta que a contagem já responde.</para>
+    /// <para>Árvore truncada (dump cortado no meio) devolve o resto como uma raiz só: sem isso o trecho
+    /// final ficaria fora de qualquer janela e o campo pareceria não ter janela nenhuma.</para>
+    /// <para>Percorre com <c>EnumerateMatches</c> e não com <c>Matches</c>: isto varre o dump INTEIRO,
+    /// que passa de 100 KB numa conversa cheia, e roda em todo envio. A versão com <c>Match</c> alocava
+    /// um objeto por nó, ou seja, milhares de objetos por contato para responder uma pergunta que só
+    /// precisa de dois índices.</para>
+    /// </remarks>
+    private static List<(int Start, int End)> RaizesDeJanela(string xml)
+    {
+        var raizes = new List<(int Start, int End)>();
+        var profundidade = 0;
+        var inicio = -1;
+        foreach (var tag in TagRx.EnumerateMatches(xml))
+        {
+            if (xml[tag.Index + 1] == '/')
+            {
+                if (profundidade > 0 && --profundidade == 0 && inicio >= 0)
+                {
+                    raizes.Add((inicio, tag.Index + tag.Length));
+                    inicio = -1;
+                }
+                continue;
+            }
+            var folha = xml[tag.Index + tag.Length - 2] == '/';
+            if (profundidade > 0)
+            {
+                if (!folha)
+                {
+                    profundidade++;
+                }
+            }
+            else if (folha)
+            {
+                raizes.Add((tag.Index, tag.Index + tag.Length));
+            }
+            else
+            {
+                inicio = tag.Index;
+                profundidade = 1;
+            }
+        }
+        if (inicio >= 0)
+        {
+            raizes.Add((inicio, xml.Length));
+        }
+        return raizes;
+    }
+
+    /// <summary>O trecho [inicio, fim) do XML tem algum nó que casa com este padrão?</summary>
+    private static bool TemNoTrecho(Regex rx, string xml, int inicio, int fim) =>
+        rx.Match(xml, inicio) is { Success: true } m && m.Index < fim;
+
+    /// <summary>O primeiro botão que só FECHA um aviso dentro do trecho [inicio, fim), opcionalmente
+    /// exigindo que ele caiba dentro de um retângulo. null = não há um reconhecível.</summary>
+    private static (int X, int Y)? BotaoQueFechaEm(
+        string xml, int inicio, int fim, (int X1, int Y1, int X2, int Y2)? dentroDe)
+    {
+        for (var no = NoRx.Match(xml, inicio); no.Success && no.Index < fim; no = no.NextMatch())
+        {
+            if (BotaoQueSoFecha(no.Value) is not { } ponto)
+            {
+                continue;
+            }
+            if (dentroDe is { } limite
+                && (RetanguloDe(no.Value) is not { } b || !Dentro(limite, b)))
+            {
+                continue;
+            }
+            return ponto;
+        }
+        return null;
+    }
+
+    /// <summary>Este retângulo passa POR CIMA do centro do campo de mensagem, e é grande o bastante
+    /// para ser um painel em vez de um pedaço do próprio campo?</summary>
+    private static bool Cobre((int X1, int Y1, int X2, int Y2) c, int x, int y, long areaMinima) =>
+        x >= c.X1 && x <= c.X2 && y >= c.Y1 && y <= c.Y2 && AreaDe(c) >= areaMinima;
+
+    /// <summary>O retângulo <paramref name="dentro"/> cabe inteiro em <paramref name="fora"/>?</summary>
+    private static bool Dentro(
+        (int X1, int Y1, int X2, int Y2) fora, (int X1, int Y1, int X2, int Y2) dentro) =>
+        dentro.X1 >= fora.X1 && dentro.Y1 >= fora.Y1 && dentro.X2 <= fora.X2 && dentro.Y2 <= fora.Y2;
+
+    private static long AreaDe((int X1, int Y1, int X2, int Y2) r) =>
+        (long)(r.X2 - r.X1) * (r.Y2 - r.Y1);
+
+    /// <summary>O valor de um atributo do nó. "" = ausente.</summary>
+    private static string AtributoDe(Regex rx, string no) =>
+        rx.Match(no) is { Success: true } m ? m.Groups[1].Value : "";
+
+    /// <summary>O ponto pra tocar, se este nó for um botão que só FECHA um aviso. null = não é.</summary>
+    private static (int X, int Y)? BotaoQueSoFecha(string no) =>
+        no.Contains("clickable=\"true\"", StringComparison.Ordinal)
+        && EhBotao(no)
+        && RotuloSoFecha(RotuloDe(no))
+            ? CentroDe(no)
+            : null;
 
     /// <summary>Os nós CLICÁVEIS da tela: o rótulo e, quando dá pra ler, o centro para tocar.</summary>
     /// <remarks>
@@ -236,9 +596,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             {
                 continue;
             }
-            var texto = TextoRx.Match(no.Value) is { Success: true } t && t.Groups[1].Value.Trim().Length > 0
-                ? t.Groups[1].Value.Trim()
-                : DescRx.Match(no.Value) is { Success: true } d ? d.Groups[1].Value.Trim() : "";
+            var texto = RotuloDe(no.Value);
             if (texto.Length == 0)
             {
                 continue;
@@ -247,8 +605,42 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
         }
     }
 
-    /// <summary>Centro do nó a partir do atributo <c>bounds</c>. null = não deu pra ler.</summary>
-    private static (int X, int Y)? CentroDe(string no)
+    /// <summary>O rótulo do nó: o <c>text</c> e, na falta dele, o <c>content-desc</c>. "" = nenhum.</summary>
+    /// <remarks>Extraído porque a definição de "rótulo" é usada em DOIS lugares (a listagem de
+    /// clicáveis e o reconhecimento do botão que fecha um aviso), e duas cópias divergiriam no primeiro
+    /// ajuste. É a mesma razão que já tinha juntado as duas varreduras em <see cref="Clicaveis"/>.</remarks>
+    private static string RotuloDe(string no) =>
+        AtributoDe(TextoRx, no).Trim() is { Length: > 0 } texto ? texto : AtributoDe(DescRx, no).Trim();
+
+    /// <summary>Este rótulo é de um botão que apenas FECHA um aviso?</summary>
+    /// <remarks>Um lugar só, porque a pergunta é feita nos dois caminhos de recuperação e com regras de
+    /// segurança diferentes em volta. O que NÃO pode divergir é a lista.</remarks>
+    private static bool RotuloSoFecha(string rotulo) => BotoesQueSoFecham.Contains(rotulo);
+
+    /// <summary>O nó é um CONTROLE (botão) e não conteúdo da conversa?</summary>
+    /// <remarks>
+    /// Dois sinais, porque nenhum sozinho cobre o app: a <c>class</c> termina em "Button" (o caso
+    /// normal, inclusive dos botões Material, que se declaram <c>android.widget.Button</c>), ou o
+    /// resource-id é de botão (<c>android:id/button1</c> do diálogo do sistema, <c>id/..._btn</c> do
+    /// próprio WhatsApp) para o caso de o aviso usar um TextView clicável no lugar de um botão.
+    /// <para>Bolha de mensagem não passa por nenhum dos dois: ela é ViewGroup/TextView com id de
+    /// conversa. É exatamente essa a separação que este método existe pra fazer.</para>
+    /// </remarks>
+    private static bool EhBotao(string no)
+    {
+        if (ClasseRx.Match(no) is { Success: true } c
+            && c.Groups[1].Value.EndsWith("Button", StringComparison.Ordinal))
+        {
+            return true;
+        }
+        var id = IdRx.Match(no);
+        return id.Success
+            && (id.Groups[1].Value.Contains("button", StringComparison.OrdinalIgnoreCase)
+                || id.Groups[1].Value.Contains("_btn", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>O retângulo do nó a partir do atributo <c>bounds</c>. null = não deu pra ler.</summary>
+    private static (int X1, int Y1, int X2, int Y2)? RetanguloDe(string no)
     {
         var b = BoundsRx.Match(no);
         return b.Success
@@ -256,9 +648,13 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             && int.TryParse(b.Groups[2].Value, out var y1)
             && int.TryParse(b.Groups[3].Value, out var x2)
             && int.TryParse(b.Groups[4].Value, out var y2)
-                ? ((x1 + x2) / 2, (y1 + y2) / 2)
+                ? (x1, y1, x2, y2)
                 : null;
     }
+
+    /// <summary>Centro do nó a partir do atributo <c>bounds</c>. null = não deu pra ler.</summary>
+    private static (int X, int Y)? CentroDe(string no) =>
+        RetanguloDe(no) is { } r ? ((r.X1 + r.X2) / 2, (r.Y1 + r.Y2) / 2) : null;
 
     /// <summary>Apura o que dava pra saber de uma tela que bloqueou o envio e não foi reconhecida:
     /// os rótulos clicáveis dela, e o XML inteiro guardado em disco.</summary>
@@ -287,6 +683,34 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             : string.Join(" | ", rotulos.Take(12));
         return " Uma tela NÃO RECONHECIDA estava na frente da conversa e o aviso não pôde ser fechado "
             + $"pelo botão (só por BACK, que sai do chat). Botões visíveis: {lista}."
+            + (arquivo is null ? "" : $" Tela salva em {arquivo}.");
+    }
+
+    /// <summary>O que dava pra apurar da tela quando a digitação não chegou no campo.</summary>
+    /// <remarks>
+    /// 🔴 "Campo ficou com nada caracteres" descreve o SINTOMA e esconde as duas causas, que têm
+    /// consertos opostos: ou o teclado falhou, ou alguma coisa estava por cima da conversa comendo o
+    /// toque. O <see cref="FecharAvisoSobreAConversaAsync"/> fecha os avisos cujo botão o driver
+    /// reconhece; quando ele não reconhece, esta linha é o que sobra pra alguém descobrir o rótulo novo
+    /// sem precisar estar olhando o aparelho na hora exata.
+    /// <para>Lista de botões CURTA de propósito: isto vai pra uma coluna de CSV, ao lado das outras
+    /// falhas do lote, e a tela inteira já está no arquivo pra quem quiser o resto.</para>
+    /// </remarks>
+    private string EvidenciaDeCampoQueNaoRecebeu(string? xml)
+    {
+        if (xml is null)
+        {
+            return "";
+        }
+        var rotulos = RotulosClicaveis(xml);
+        var arquivo = GuardarTela(xml);
+        // A causa provável vem PRIMEIRO e afirmada, quando a tela permite afirmar. "Tinha algo na
+        // frente" manda mexer no aviso; a lista de botões sozinha manda adivinhar.
+        var naFrente = LerAvisoSobreOCampo(xml).Motivo ?? "";
+        return naFrente
+            + " Botões na tela nesse instante: "
+            + (rotulos.Count == 0 ? "nenhum com texto legível" : string.Join(" | ", rotulos.Take(8)))
+            + ". Se um deles fecha o aviso, o rótulo dele precisa entrar na lista de botões neutros."
             + (arquivo is null ? "" : $" Tela salva em {arquivo}.");
     }
 
@@ -375,6 +799,54 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 #pragma warning restore CA1031
     }
 
+    /// <summary>Fecha a conversa que ficou aberta do envio anterior, para "achei o campo de mensagem"
+    /// voltar a significar "a conversa que EU pedi abriu".</summary>
+    /// <remarks>
+    /// 🔴 O RISCO É MANDAR PARA A PESSOA ERRADA, e ele nasce de dois fatos que só juntos fazem estrago.
+    /// Primeiro: no SUCESSO o driver deixa a conversa aberta de propósito, então o aparelho começa o
+    /// próximo envio DENTRO da conversa do contato anterior. Segundo: `am start` devolver 0 significa
+    /// que a intent foi despachada, não que o app trocou de tela (app ocupado, cold start, URI de
+    /// contato que não resolve mais).
+    ///
+    /// <para>Junte os dois no caminho da DIGITAÇÃO: a abertura "dá certo", o poll acha o
+    /// <c>id/entry</c> — que é o da conversa ANTERIOR, ainda na tela —, o driver digita ali e toca
+    /// enviar. O contato anterior recebe uma segunda mensagem, o atual não recebe nada, e o console
+    /// grava SUCESSO para o atual. Falha silenciosa, e das caras: dobra mensagem em quem já recebeu,
+    /// que é o comportamento que queima número.</para>
+    ///
+    /// <para>O caminho do deep link não precisa disto porque o texto vai NA URL: sem navegação o campo
+    /// fica vazio, o botão de enviar não existe e o envio falha limpo. Quem digita não tem essa
+    /// proteção de graça, porque é o próprio driver que põe o texto no campo que estiver na tela. Era a
+    /// metade da defesa que faltava, e justamente no caminho que roda por padrão.</para>
+    ///
+    /// <para>⚠️ BEST-EFFORT DE PROPÓSITO, e esta decisão custou uma tentativa. A primeira versão FALHAVA
+    /// o envio quando não conseguia sair, seguindo o <see cref="GarantirTelaSemRascunhoAsync"/> — e isso
+    /// atropelava diagnósticos que valem mais que ela. Numa conversa de conta RESTRINGIDA o campo fica
+    /// na tela o tempo todo; um aparelho que não respondesse aos BACK devolveria "não consegui sair"
+    /// no lugar de <c>ContaRestringida</c>, que é o ÚNICO veredito que manda parar o lote. Trocar o
+    /// aviso de "pare, o chip está restrito" por "confira o aparelho" é o caminho do banimento.
+    ///
+    /// <para>Então: quando os BACK funcionam (o caso normal), a proteção é total, porque achar o campo
+    /// depois disso só pode significar que a conversa pedida abriu. Quando não funcionam, o
+    /// comportamento é o de antes desta mudança, sem nada novo quebrado, e o resto do driver segue
+    /// diagnosticando. Proteção que não atrapalha vale mais que proteção que atropela.</para>
+    ///
+    /// <para>Tela ILEGÍVEL também não barra nada: sem leitura de tela os polls seguintes falham
+    /// sozinhos, então o envio morre sem tocar em coisa nenhuma.</para>
+    /// </remarks>
+    private async Task SairDaConversaAnteriorAsync(CancellationToken ct)
+    {
+        for (var tentativa = 0; tentativa < 3; tentativa++)
+        {
+            if (await DumpUiAsync(ct) is not { } xml || !EntryNodeRx.IsMatch(xml))
+            {
+                return;
+            }
+            await _adb.ShellAsync("input keyevent KEYCODE_BACK", ct);
+            await Task.Delay(500, ct);
+        }
+    }
+
     /// <summary>Garante que a tela NÃO tem texto pendente no campo antes de abrir a próxima conversa.
     /// null = pode seguir; string = motivo pra não enviar.</summary>
     /// <remarks>
@@ -444,14 +916,21 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 return WhatsAppSendResult.Fail(
                     FalhaCausa.AdbFalhou, string.IsNullOrWhiteSpace(err) ? outp : err);
             }
-            var send = await PollNodeCenterAsync(SendNodeRx, _opts.WhatsAppOpenWaitMs, sct);
+            var achado = await PollNoAsync(SendNodeRx, _opts.WhatsAppOpenWaitMs, sct);
+
+            // Mesmo aviso por cima da conversa do caminho da digitação: aqui ele bloquearia o toque em
+            // ENVIAR, e a falha sairia como "o texto continua no campo". Só com o botão já encontrado,
+            // pelo motivo descrito no método.
+            var send = await ReencontrarSemAvisoAsync(
+                SendNodeRx, achado?.Centro, achado?.Xml, sct);
+
             if (send is null)
             {
                 // 🔴 DIAGNOSTICA ANTES DE LIMPAR. O diálogo de "não está no WhatsApp" também tem um
                 // botão OK, então dispensar primeiro apagaria a única prova de que a causa é o NÚMERO,
                 // e a falha voltaria a ser classificada como problema de aparelho.
                 var (diagnostico, tela) = await DiagnosticarChatNaoAbertoAsync(sct);
-                if (diagnostico.NoWhatsAppAccount)
+                if (diagnostico.Causa is not FalhaCausa.ConversaNaoAbriu)
                 {
                     return diagnostico;
                 }
@@ -473,9 +952,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                         : diagnostico with
                         {
                             Error = diagnostico.Error + evidencia,
-                            Causa = diagnostico.Causa is FalhaCausa.ConversaNaoAbriu
-                                ? FalhaCausa.TelaInesperada
-                                : diagnostico.Causa,
+                            Causa = FalhaCausa.TelaInesperada,
                         };
                 }
             }
@@ -545,6 +1022,8 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
             // aparelho dormindo e falha como se a conversa não tivesse aberto.
             await AcordarAparelhoAsync(sct);
 
+            await SairDaConversaAnteriorAsync(sct);
+
             // 🔴 CASCATA DE ABERTURA. O deep link por número exige que o app RESOLVA o número no
             // servidor, e é exatamente aí que ele nega gente que TEM WhatsApp: quando a conta guarda o
             // número na outra forma do 9º dígito, e quando a conta está restringida. Os dois primeiros
@@ -564,6 +1043,9 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 abertoPeloRegistro = entry is not null;
             }
 
+            // A tela em que o campo foi encontrado, quando quem achou soube devolvê-la. Os níveis
+            // alternativos da cascata devolvem só o ponto, e aí o fechamento lê a tela por conta.
+            string? telaDoCampo = null;
             if (entry is null)
             {
                 var (rc, outp, err) = await OpenChatAsync(WhatsAppUi.DeepLinkEmpty(digits), sct);
@@ -572,8 +1054,15 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                     return WhatsAppSendResult.Fail(
                         FalhaCausa.AdbFalhou, string.IsNullOrWhiteSpace(err) ? outp : err);
                 }
-                entry = await PollNodeCenterAsync(EntryNodeRx, _opts.WhatsAppOpenWaitMs, sct);
+                var achado = await PollNoAsync(EntryNodeRx, _opts.WhatsAppOpenWaitMs, sct);
+                entry = achado?.Centro;
+                telaDoCampo = achado?.Xml;
             }
+
+            // 🔴 CAMPO ENCONTRADO NÃO É CAMPO ALCANÇÁVEL: um aviso por cima da conversa deixa o
+            // `id/entry` na árvore e rouba o toque. Ver FecharAvisoSobreAConversaAsync, inclusive por
+            // que isto roda SÓ com o campo já encontrado.
+            entry = await ReencontrarSemAvisoAsync(EntryNodeRx, entry, telaDoCampo, sct);
 
             if (entry is null)
             {
@@ -583,7 +1072,24 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 // ou seja, entrava no contador de falha de APARELHO e disparava o alerta de celular
                 // travado com o celular perfeito.
                 var (diagnostico, tela) = await DiagnosticarChatNaoAbertoAsync(sct);
-                if (diagnostico.NoWhatsAppAccount)
+
+                // 🔴 O DIAGNÓSTICO CONCLUSIVO ENCERRA AQUI, SEM TENTAR DESBLOQUEAR NADA.
+                //
+                // Duas razões, e as duas custaram caro. A primeira: este bloco já jogou o `diagnostico`
+                // fora uma vez. Quando a tela dizia "Sua conta foi restringida", o veredito nascia certo
+                // ali em cima e morria aqui, e o console recebia "a conversa não abriu", ou seja falha
+                // de APARELHO. `ContaRestringida` é a única condição que autoriza PARAR o lote, e é ela
+                // que cancela a segunda chance: sem o flag, o lote seguia contra um chip restrito com
+                // cada contato pagando a tentativa extra — medido em 2026-08-10, 22 dos 23 fracassos
+                // daquele lote —, que é o que transforma restrição temporária em banimento.
+                //
+                // A segunda: o TentarDesbloquearTelaAsync TOCA por rótulo, sem exigir botão de verdade,
+                // e a premissa dele é que a conversa não está na tela. Numa conta restringida ela ESTÁ:
+                // o app tira o campo de mensagem e deixa a lista de mensagens à mostra. Se alguma delas
+                // for template com botão de RESPOSTA RÁPIDA (rótulo escolhido por quem mandou, "OK" é o
+                // mais comum), o desbloqueio tocaria nele e MANDARIA uma mensagem na conversa da pessoa.
+                // Tela que já se explicou não tem o que desbloquear, então nem se tenta.
+                if (diagnostico.Causa is not FalhaCausa.ConversaNaoAbriu)
                 {
                     return diagnostico;
                 }
@@ -593,29 +1099,6 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                     EntryNodeRx, Math.Min(_opts.WhatsAppOpenWaitMs, 3000), sct);
                 if (entry is null)
                 {
-                    // 🔴 O DIAGNÓSTICO SÓ PODE SER DESCARTADO QUANDO ELE É O GENÉRICO.
-                    //
-                    // Este bloco jogava o `diagnostico` fora SEMPRE e devolvia uma falha nova. Quando a
-                    // tela dizia "Sua conta foi restringida", o veredito nascia certo ali em cima e
-                    // morria aqui: o console recebia "a conversa não abriu", ou seja falha de APARELHO.
-                    //
-                    // O custo disso é o pior que este projeto tem. `ContaRestringida` é a única condição
-                    // que autoriza PARAR o lote, e é ela que cancela a segunda chance. Sem o flag, o
-                    // lote seguia contra um chip restrito, cada contato ainda pagando a tentativa extra
-                    // — que é exatamente o que foi medido em 2026-08-10 (22 dos 23 fracassos daquele
-                    // lote pagaram a segunda chance à toa), e é o que transforma restrição temporária
-                    // em banimento.
-                    //
-                    // E passava despercebido porque o caminho do deep link (SendByDeepLinkAsync)
-                    // devolve o diagnóstico inteiro, e é ele que o teste de restrição exercitava. Este
-                    // aqui, o que roda com digitação humana LIGADA e portanto o DEFAULT, era o quebrado.
-                    if (diagnostico.Causa is not FalhaCausa.ConversaNaoAbriu)
-                    {
-                        return evidencia is null
-                            ? diagnostico
-                            : diagnostico with { Error = diagnostico.Error + evidencia };
-                    }
-
                     // A tela desconhecida, quando houve uma, é a causa mais específica: ela diz que algo
                     // ESTAVA na frente da conversa, e não que a conversa simplesmente não veio.
                     return WhatsAppSendResult.Fail(
@@ -656,7 +1139,11 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 
                 // Confere o TAMANHO antes de enviar: o IME pode engolir trecho em silêncio, e mensagem
                 // truncada é pior que mensagem nenhuma.
-                var typed = await ReadEntryTextAsync(sct);
+                // Uma leitura só, e o XML fica: quando o campo não recebeu o texto, a MESMA tela é a
+                // prova do porquê. Reler depois traria outra tela, e dumpar duas vezes no caminho de
+                // falha custa outro processo `adb`.
+                var telaDigitada = await DumpUiAsync(sct);
+                var typed = EntryTextFrom(telaDigitada);
                 if (typed is null || Math.Abs(typed.Length - text.Length) > Math.Max(4, text.Length / 20))
                 {
                     var achou = typed?.Length.ToString(CultureInfo.InvariantCulture) ?? "nada";
@@ -664,7 +1151,8 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                     return WhatsAppSendResult.Fail(
                         FalhaCausa.DigitacaoFalhou,
                         $"campo ficou com {achou} caracteres, esperava ~{text.Length}; "
-                        + "envio abortado pra não mandar truncado.");
+                        + "envio abortado pra não mandar truncado."
+                        + EvidenciaDeCampoQueNaoRecebeu(telaDigitada));
                 }
             }
             finally
@@ -973,17 +1461,49 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// texto exato muda com a versão. "pedir analise" entra porque, quando o app vai para a tela de
     /// recurso, a frase da restrição some e sobra só o botão.</para>
     /// </remarks>
-    private static bool ContaRestrita(string xml)
+    private static bool ContaRestrita(string xml) => CasaPista(xml.ToLowerInvariant(), PistasDeRestricao);
+
+    /// <inheritdoc cref="ContaRestrita"/>
+    private static readonly string[] PistasDeRestricao =
+    [
+        "conta foi restringida", "sua conta foi restringida",
+        "pedir analise", "pedir análise",
+        "account has been restricted", "request a review",
+    ];
+
+    /// <summary>O app está DECLARANDO na tela que este número não tem conta?</summary>
+    /// <remarks>
+    /// ⚠️ SÓ pistas inequívocas. "convidar para o WhatsApp" foi tirado de propósito: essa palavra
+    /// aparece em outras telas do app, e um falso positivo aqui afirma a causa errada COM CONFIANÇA,
+    /// que é o defeito que o <see cref="DiagnosticarChatNaoAbertoAsync"/> existe pra corrigir. O
+    /// diálogo de número sem conta sempre traz alguma variação de "não está no WhatsApp"; isso basta.
+    /// <para>Compare com <see cref="OfereceConvite"/>, cuja lista é GENEROSA de propósito: lá o falso
+    /// positivo custa desistir de um nível de abertura, e o falso negativo dispara um convite por SMS.
+    /// Aqui é o contrário, e por isso as duas listas não são a mesma.</para>
+    /// </remarks>
+    private static bool NumeroSemConta(string xml) => CasaPista(xml.ToLowerInvariant(), PistasSemConta);
+
+    /// <inheritdoc cref="NumeroSemConta"/>
+    private static readonly string[] PistasSemConta =
+    [
+        "nao esta no whatsapp", "não está no whatsapp",
+        "nao existe no whatsapp", "não existe no whatsapp",
+        "isn't on whatsapp", "is not on whatsapp", "not on whatsapp",
+    ];
+
+    /// <summary>A tela já declarou uma causa que vale mais do que fechar um aviso?</summary>
+    /// <remarks>Uma passada só de <c>ToLowerInvariant</c>: o dump passa de 100 KB, e isto roda no
+    /// momento em que o driver está prestes a TOCAR na tela.</remarks>
+    private static bool TelaJaSeExplicou(string xml)
     {
         var tela = xml.ToLowerInvariant();
-        string[] pistas =
-        [
-            "conta foi restringida", "sua conta foi restringida",
-            "pedir analise", "pedir análise",
-            "account has been restricted", "request a review",
-        ];
-        return pistas.Any(p => tela.Contains(p, StringComparison.Ordinal));
+        return CasaPista(tela, PistasDeRestricao) || CasaPista(tela, PistasSemConta);
     }
+
+    /// <summary>Casa por TRECHO, sem acento e em minúsculas, porque o texto exato muda com a versão do
+    /// app e com o idioma do aparelho, e um casamento exato quebraria em silêncio na atualização.</summary>
+    private static bool CasaPista(string telaMinuscula, string[] pistas) =>
+        pistas.Any(p => telaMinuscula.Contains(p, StringComparison.Ordinal));
 
     private static bool TelaBloqueada(string xml) =>
         xml.Contains("com.android.systemui:id/keyguard", StringComparison.OrdinalIgnoreCase)
@@ -1023,10 +1543,24 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
 
     private static readonly Regex NoRx = new("<node[^>]*>", RegexOptions.Compiled);
 
+    /// <summary>Abertura, folha e FECHAMENTO de nó, que é o que permite contar profundidade.</summary>
+    /// <inheritdoc cref="RaizesDeJanela"/>
+    private static readonly Regex TagRx = new("<node[^>]*>|</node>", RegexOptions.Compiled);
+
+    /// <summary>O app dono do nó. É o que separa uma janela do WhatsApp da barra de status e do
+    /// teclado, que são de outros pacotes e não são aviso nenhum.</summary>
+    private static readonly Regex PacoteRx = new("package=\"([^\"]*)\"", RegexOptions.Compiled);
+
     private static readonly Regex TextoRx = new("text=\"([^\"]*)\"", RegexOptions.Compiled);
 
     /// <summary>content-desc do nó: o rótulo de acessibilidade, único texto de botão só com ícone.</summary>
     private static readonly Regex DescRx = new("content-desc=\"([^\"]*)\"", RegexOptions.Compiled);
+
+    /// <inheritdoc cref="EhBotao"/>
+    private static readonly Regex ClasseRx = new("class=\"([^\"]*)\"", RegexOptions.Compiled);
+
+    /// <inheritdoc cref="EhBotao"/>
+    private static readonly Regex IdRx = new("resource-id=\"([^\"]*)\"", RegexOptions.Compiled);
 
     /// <summary>Rótulos de botão que apenas FECHAM um aviso, sem confirmar nada.</summary>
     /// <remarks>
@@ -1034,9 +1568,11 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// ter "Bloquear", "Denunciar", "Sair do grupo". Um aviso mal dispensado é um aviso que volta; um
     /// botão errado tocado é irreversível e pode custar o contato ou a conta. Na dúvida, não toca:
     /// existe o BACK como saída, e ele não confirma nada.
+    /// <para>Conjunto e não vetor, comparando sem caixa: o rótulo vem do dump em qualquer caixa, e a
+    /// versão anterior chamava <c>ToLowerInvariant</c> em cada candidato só pra poder comparar.</para>
     /// </remarks>
-    private static readonly string[] BotoesQueSoFecham =
-        ["ok", "continuar", "entendi", "fechar", "agora não", "agora nao", "got it", "continue", "close"];
+    private static readonly HashSet<string> BotoesQueSoFecham = new(StringComparer.OrdinalIgnoreCase)
+        { "ok", "continuar", "entendi", "fechar", "agora não", "agora nao", "got it", "continue", "close" };
 
     /// <summary>Nó do botão "enviar" e nó do campo de texto, os dois únicos que o driver procura.</summary>
     /// <remarks>
@@ -1059,7 +1595,20 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
     /// <summary>Centro do nó procurado, com POLL até o timeout. null = não apareceu.</summary>
     /// <remarks>Poll e não sleep fixo: chat lento (cold start, rede ruim) abriria depois da espera e o
     /// envio seria abortado à toa.</remarks>
-    private async Task<(int X, int Y)?> PollNodeCenterAsync(Regex no, int timeoutMs, CancellationToken ct)
+    private async Task<(int X, int Y)?> PollNodeCenterAsync(Regex no, int timeoutMs, CancellationToken ct) =>
+        await PollNoAsync(no, timeoutMs, ct) is { } achado ? achado.Centro : null;
+
+    /// <summary>O mesmo poll, devolvendo TAMBÉM a tela em que o nó foi encontrado.</summary>
+    /// <remarks>
+    /// 🔴 A TELA SAI JUNTO PELO MESMO MOTIVO DO <see cref="DiagnosticarChatNaoAbertoAsync"/>: quem
+    /// achou o campo costuma precisar responder outra pergunta sobre a MESMA tela, e dumpar de novo
+    /// custa outro processo `adb` e pode ler uma tela DIFERENTE — decidindo sobre uma e agindo sobre
+    /// outra. Aqui isso valia um dump inteiro por envio: o poll achava o campo, e o
+    /// <see cref="FecharAvisoSobreAConversaAsync"/> logo em seguida lia a tela outra vez pra perguntar
+    /// se havia aviso na frente. Ler a tela é a operação mais cara e mais repetida deste driver.
+    /// </remarks>
+    private async Task<((int X, int Y) Centro, string Xml)?> PollNoAsync(
+        Regex no, int timeoutMs, CancellationToken ct)
     {
         var attempts = Math.Max(1, timeoutMs / 500);
         for (var i = 0; i <= attempts; i++)
@@ -1068,7 +1617,7 @@ internal sealed class WhatsAppUiDriver(IAdbRunner adb, PhoneOptions opts) : IDis
                 && no.Match(xml) is { Success: true } achado
                 && CentroDe(achado.Value) is { } centro)
             {
-                return centro;
+                return (centro, xml);
             }
             if (i < attempts)
             {

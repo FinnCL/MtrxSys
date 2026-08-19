@@ -64,6 +64,37 @@ internal sealed class AndroidFalso : IAdbRunner
     /// <summary>O aviso está na tela AGORA (foi aberto e ainda não dispensado).</summary>
     public bool AvisoNaTela { get; private set; }
 
+    /// <summary>Conversas que abrem com o aviso DESENHADO POR CIMA do chat, sem tirá-lo da tela.</summary>
+    /// <remarks>
+    /// 🔴 A diferença pro <see cref="ComAvisoTemporaria"/> NÃO é cosmética, é a que faltava modelar. O
+    /// `uiautomator dump` despeja a Activity INTEIRA, então um aviso desenhado sobre a conversa não
+    /// apaga o `com.whatsapp:id/entry` da árvore: o driver continua achando o campo, conclui que a
+    /// conversa abriu e digita contra um toque que morre no aviso. O sintoma chega ao console como
+    /// "campo ficou com nada caracteres", que acusa o teclado.
+    /// <para>Enquanto o falso só sabia esconder o campo, esse caminho inteiro ficava sem teste: os dois
+    /// avisos parecem o mesmo defeito pro operador e são estados diferentes pro código. Relatado
+    /// operando em 2026-08-18.</para>
+    /// </remarks>
+    public HashSet<string> ComAvisoSobreposto { get; } = new(StringComparer.Ordinal);
+
+    /// <inheritdoc cref="ComAvisoSobreposto"/>
+    public bool AvisoSobrepostoNaTela { get; private set; }
+
+    /// <summary>O dump lista a janela do aviso ANTES da janela da conversa.</summary>
+    /// <remarks>
+    /// 🔴 EXISTE PORQUE A ORDEM É PALPITE, E PALPITE FIXO NO FALSO VIRA TESTE QUE PROVA A SI MESMO. O
+    /// `uiautomator dump` não despeja uma árvore só: despeja as JANELAS da tela, uma atrás da outra,
+    /// como filhas de `&lt;hierarchy&gt;`. Um diálogo é outra janela, e quem decide a ordem entre elas é
+    /// o `uiautomator`, que serializa a ATIVA primeiro — e a ativa é justamente o modal.
+    ///
+    /// <para>A primeira versão do falso emitia o aviso DEPOIS da conversa porque era o que a primeira
+    /// versão do driver sabia ler. Os dois compartilhavam a mesma suposição, então o verde não dizia
+    /// nada sobre o aparelho: dizia que o falso concordava com o driver. Com o padrão invertido para
+    /// ANTES (a ordem provável de verdade) e um teste em cada valor, a leitura passa a não depender de
+    /// ordem nenhuma, que é a única garantia que sobrevive a não ter o dump real em mãos.</para>
+    /// </remarks>
+    public bool AvisoAntesDaConversa { get; set; } = true;
+
     private const int AvisoOkX1 = 400;
     private const int AvisoOkY1 = 1200;
     private const int AvisoOkX2 = 600;
@@ -381,6 +412,21 @@ internal sealed class AndroidFalso : IAdbRunner
             return (0, "Starting: Intent", "");
         }
 
+        // NÍVEL 1 da cascata: abre pelo registro do contato na agenda, sem número pra resolver. Modelar
+        // isto é o que permite testar a abertura que o console usa PRIMEIRO; enquanto o falso só
+        // conhecia o `whatsapp://send`, esse nível caía sempre no nível seguinte e nunca era exercido.
+        if (Regex.Match(cmd, @"content://com\.android\.contacts/data/(\d+)") is { Success: true } perfil)
+        {
+            var dataId = int.Parse(perfil.Groups[1].Value, CultureInfo.InvariantCulture);
+            var dono = _agenda.Values.FirstOrDefault(c => PerfilDe(c.Id) == dataId);
+            if (dono?.Telefone is null || !ContasExistentes.Contains(SoDigitos(dono.Telefone)))
+            {
+                return (1, "", "Error: Activity not started");
+            }
+            AbrirConversa(SoDigitos(dono.Telefone));
+            return (0, "Starting: Intent", "");
+        }
+
         var m = Regex.Match(cmd, @"whatsapp://send\?phone=(\d+)(?:&text=([^']*))?");
         if (!m.Success)
         {
@@ -394,13 +440,7 @@ internal sealed class AndroidFalso : IAdbRunner
             _dialogoSemConta = true;
             return (0, "Starting: Intent", "");
         }
-        _dialogoSemConta = false;
-        _conversaAberta = alvo;
-        // O aviso reaparece a cada abertura da conversa até ser dispensado uma vez.
-        if (ComAvisoTemporaria.Contains(alvo))
-        {
-            AvisoNaTela = true;
-        }
+        AbrirConversa(alvo);
         if (m.Groups[2].Success)
         {
             // Com `text=` o campo nasce com o texto do link, substituindo o rascunho.
@@ -409,19 +449,38 @@ internal sealed class AndroidFalso : IAdbRunner
         return (0, "Starting: Intent", "");
     }
 
+    /// <summary>Põe a conversa na tela, com os avisos que ela ainda deve mostrar.</summary>
+    /// <remarks>Os dois níveis de abertura (registro do contato e deep link por número) chegam AQUI: o
+    /// aparelho não distingue por onde a conversa foi aberta, e o falso também não pode distinguir sem
+    /// virar uma ficção conveniente.</remarks>
+    private void AbrirConversa(string alvo)
+    {
+        _dialogoSemConta = false;
+        _conversaAberta = alvo;
+        // O aviso reaparece a cada abertura da conversa até ser dispensado uma vez.
+        if (ComAvisoTemporaria.Contains(alvo))
+        {
+            AvisoNaTela = true;
+        }
+        if (ComAvisoSobreposto.Contains(alvo))
+        {
+            AvisoSobrepostoNaTela = true;
+        }
+    }
+
     private (int, string, string) Tap(string cmd)
     {
         var m = Regex.Match(cmd, @"input tap (\d+) (\d+)");
         var x = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
         var y = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
-        if (AvisoNaTela)
+        if (AvisoNaTela || AvisoSobrepostoNaTela)
         {
             // Com o aviso na tela, o único toque que faz algo é o do botão dele. Qualquer outro cai no
-            // vazio, que é como o Android se comporta com um modal por cima.
+            // vazio, que é como o Android se comporta com um modal por cima. Vale para os DOIS avisos:
+            // o que esconde a conversa e o que só a cobre. Do lado de cá do vidro eles são iguais.
             if (x >= AvisoOkX1 && x <= AvisoOkX2 && y >= AvisoOkY1 && y <= AvisoOkY2)
             {
-                AvisoNaTela = false;
-                ComAvisoTemporaria.Remove(_conversaAberta ?? "");
+                DispensarAviso();
             }
             return (0, "", "");
         }
@@ -434,12 +493,21 @@ internal sealed class AndroidFalso : IAdbRunner
         return (0, "", "");
     }
 
+    /// <summary>Tira o aviso da frente e não deixa ele voltar nesta conversa, como o app faz depois de
+    /// mostrá-lo uma vez.</summary>
+    private void DispensarAviso()
+    {
+        AvisoNaTela = false;
+        AvisoSobrepostoNaTela = false;
+        ComAvisoTemporaria.Remove(_conversaAberta ?? "");
+        ComAvisoSobreposto.Remove(_conversaAberta ?? "");
+    }
+
     private (int, string, string) Back()
     {
-        if (AvisoNaTela)
+        if (AvisoNaTela || AvisoSobrepostoNaTela)
         {
-            AvisoNaTela = false;
-            ComAvisoTemporaria.Remove(_conversaAberta ?? "");
+            DispensarAviso();
         }
         else if (_dialogoSemConta)
         {
@@ -465,46 +533,94 @@ internal sealed class AndroidFalso : IAdbRunner
         {
             return (1, "", "java.lang.NullPointerException");
         }
+        if (AvisoNaTela || AvisoSobrepostoNaTela)
+        {
+            // 🔴 Com um aviso por cima, o campo de mensagem NÃO tem o foco: o texto não entra em lugar
+            // nenhum e o `input text` devolve 0 do mesmo jeito. Modelar isso é o que faz o teste
+            // enxergar o defeito. Um falso que aceitasse a digitação atrás do aviso validaria uma
+            // ficção, que é o mesmo erro já corrigido no PhoneLookup e no ContactData.
+            return (0, "", "");
+        }
         _rascunhos[_conversaAberta] = _rascunhos.GetValueOrDefault(_conversaAberta, "") + trecho;
         return (0, "", "");
     }
 
+    /// <summary>A tela como o `uiautomator dump` a entrega: as JANELAS, uma atrás da outra.</summary>
+    /// <remarks>Ver <see cref="DumpFalso"/> para por que a forma importa.</remarks>
     private string RenderizarTela()
     {
         var sb = new System.Text.StringBuilder("<hierarchy rotation=\"0\">");
         if (_dialogoSemConta)
         {
-            sb.Append("<node text=\"O número não está no WhatsApp\" bounds=\"[100,700][900,900]\"/>");
+            sb.Append(DumpFalso.Janela("<node text=\"O número não está no WhatsApp\" "
+                + "package=\"com.whatsapp\" bounds=\"[100,700][900,900]\"/>"));
         }
         if (AvisoNaTela)
         {
             // Modal por cima: enquanto ele está lá, o campo e o botão de enviar NÃO existem na árvore.
             // É exatamente isso que fazia o envio falhar com "a conversa não abriu".
-            sb.Append("<node text=\"Mensagens temporárias\" clickable=\"false\" bounds=\"[100,900][900,1100]\"/>");
-            sb.Append(CultureInfo.InvariantCulture,
-                $"<node text=\"OK\" clickable=\"true\" bounds=\"[{AvisoOkX1},{AvisoOkY1}][{AvisoOkX2},{AvisoOkY2}]\"/>");
+            // Sem `class` de botão de propósito: aviso em tela cheia às vezes fecha por um TextView
+            // clicável, e é esse caso que o TentarDesbloquearTelaAsync existe pra cobrir.
+            sb.Append(DumpFalso.Janela(
+                "<node text=\"Mensagens temporárias\" package=\"com.whatsapp\" clickable=\"false\" "
+                + "bounds=\"[100,900][900,1100]\"/>"
+                + string.Create(CultureInfo.InvariantCulture,
+                    $"<node text=\"OK\" package=\"com.whatsapp\" clickable=\"true\" "
+                    + $"bounds=\"[{AvisoOkX1},{AvisoOkY1}][{AvisoOkX2},{AvisoOkY2}]\"/>")));
             return sb.Append("</hierarchy>").ToString();
+        }
+        if (AvisoSobrepostoNaTela && AvisoAntesDaConversa)
+        {
+            sb.Append(JanelaDoAviso());
         }
         if (_conversaAberta is { } conversa)
         {
-            var rascunho = _rascunhos.GetValueOrDefault(conversa, "");
-            // ⚠️ Campo vazio devolve a DICA, não string vazia. É o comportamento medido nos dois
-            // aparelhos, e a razão de o sinal confiável ser o botão de enviar.
-            var mostrado = rascunho.Length == 0 ? "Mensagem" : Escapar(rascunho);
-            sb.Append(CultureInfo.InvariantCulture,
-                $"<node text=\"{mostrado}\" resource-id=\"com.whatsapp:id/entry\" bounds=\"[50,1800][880,1900]\"/>");
-            if (rascunho.Length > 0)
-            {
-                sb.Append(CultureInfo.InvariantCulture,
-                    $"<node resource-id=\"com.whatsapp:id/send\" bounds=\"[{SendX1},{SendY1}][{SendX2},{SendY2}]\"/>");
-            }
-            foreach (var _ in Entregues.Where(e => e.Conversa == conversa))
-            {
-                sb.Append("<node resource-id=\"com.whatsapp:id/status\" content-desc=\"Entregue\" bounds=\"[820,1700][860,1740]\"/>");
-            }
+            sb.Append(JanelaDaConversa(conversa));
+        }
+        if (AvisoSobrepostoNaTela && !AvisoAntesDaConversa)
+        {
+            sb.Append(JanelaDoAviso());
         }
         return sb.Append("</hierarchy>").ToString();
     }
+
+    private string JanelaDaConversa(string conversa)
+    {
+        var sb = new System.Text.StringBuilder();
+        var rascunho = _rascunhos.GetValueOrDefault(conversa, "");
+        sb.Append(DumpFalso.CampoDeMensagem(rascunho.Length == 0 ? "Mensagem" : Escapar(rascunho)));
+        if (rascunho.Length > 0)
+        {
+            sb.Append(CultureInfo.InvariantCulture,
+                $"<node resource-id=\"com.whatsapp:id/send\" package=\"com.whatsapp\" "
+                + $"bounds=\"[{SendX1},{SendY1}][{SendX2},{SendY2}]\"/>");
+        }
+        foreach (var _ in Entregues.Where(e => e.Conversa == conversa))
+        {
+            sb.Append("<node resource-id=\"com.whatsapp:id/status\" package=\"com.whatsapp\" "
+                + "content-desc=\"Entregue\" bounds=\"[820,1700][860,1740]\"/>");
+        }
+        return DumpFalso.Janela(sb.ToString());
+    }
+
+    /// <summary>A janela do aviso que cobre a conversa sem apagá-la da árvore.</summary>
+    /// <remarks>
+    /// O botão sai com `class` de botão porque é o que o dump traz, e é o que separa um CONTROLE de uma
+    /// bolha de mensagem clicável com o mesmo texto.
+    /// <para>O nó que come o toque de fora vem junto: todo modal tem um (o `touch_outside` do bottom
+    /// sheet, o decor do diálogo). Ele não é mais o que PROVA o aviso pro driver, que agora decide pela
+    /// janela, mas continua aqui porque está no dump de verdade e sumir com ele seria simplificar o
+    /// falso na direção do código, que é como se fabrica um teste que não pega nada.</para>
+    /// </remarks>
+    private static string JanelaDoAviso() =>
+        DumpFalso.Janela(
+            "<node resource-id=\"android:id/touch_outside\" package=\"com.whatsapp\" "
+            + "bounds=\"[0,0][1080,2400]\"/>"
+            + "<node text=\"Mensagens temporárias\" package=\"com.whatsapp\" clickable=\"false\" "
+            + "bounds=\"[100,900][900,1100]\"/>"
+            + string.Create(CultureInfo.InvariantCulture,
+                $"<node text=\"OK\" class=\"android.widget.Button\" package=\"com.whatsapp\" "
+                + $"clickable=\"true\" bounds=\"[{AvisoOkX1},{AvisoOkY1}][{AvisoOkX2},{AvisoOkY2}]\"/>"));
 
     private static string Escapar(string s) =>
         System.Net.WebUtility.HtmlEncode(s).Replace("\n", "&#10;", StringComparison.Ordinal);

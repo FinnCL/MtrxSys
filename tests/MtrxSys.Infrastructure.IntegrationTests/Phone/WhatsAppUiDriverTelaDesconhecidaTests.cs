@@ -43,30 +43,6 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
         }
     }
 
-    /// <summary>Adb falso: todo dump devolve a mesma tela, que é como um modal se comporta.</summary>
-    private sealed class AdbDeUmaTela(string tela) : IAdbRunner
-    {
-        public List<string> Comandos { get; } = [];
-
-        public Task<(int Code, string Out, string Err)> ShellAsync(string command, CancellationToken ct)
-        {
-            Comandos.Add(command);
-            // `rm -f`, dump e `cat` chegam numa linha só (ver DumpUiAsync).
-            if (command.Contains("uiautomator dump", StringComparison.Ordinal))
-            {
-                return Task.FromResult((0, $"<hierarchy>{tela}</hierarchy>", ""));
-            }
-            return Task.FromResult((0, "ok", ""));
-        }
-
-        public Task<(int Code, string Out, string Err)> RawAsync(CancellationToken ct, params string[] args) =>
-            Task.FromResult((0, "", ""));
-
-        public bool SupportsRoot => false;
-
-        public string Target => "falso";
-    }
-
     private PhoneOptions Opts => new()
     {
         HumanTyping = false,
@@ -76,9 +52,9 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
         UiDumpDir = _pasta,
     };
 
-    private async Task<(WhatsAppSendResult Resultado, AdbDeUmaTela Adb)> EnviarAsync()
+    private async Task<(WhatsAppSendResult Resultado, AdbDeTelaFixa Adb)> EnviarAsync()
     {
-        var adb = new AdbDeUmaTela(TelaDoAviso);
+        var adb = new AdbDeTelaFixa(TelaDoAviso);
         using var driver = new WhatsAppUiDriver(adb, Opts);
         return (await driver.SendAsync(Numero, Texto, CancellationToken.None), adb);
     }
@@ -150,7 +126,7 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
         // causa é outra e o conserto é outro: essa confusão custa o lote inteiro toda madrugada.
         const string TelaDeCadeado =
             """<node resource-id="com.android.systemui:id/keyguard_indication_area" clickable="false" bounds="[0,0][1080,2400]"/>""";
-        var adb = new AdbDeUmaTela(TelaDeCadeado);
+        var adb = new AdbDeTelaFixa(TelaDeCadeado);
         using var driver = new WhatsAppUiDriver(adb, Opts);
 
         var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
@@ -169,7 +145,7 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
         // causa real seguiria intocada. Por isso o marcador exige o pacote do systemui.
         const string TelaComCadeadoDoApp =
             """<node resource-id="com.whatsapp:id/lock_icon_view" text="Conversa bloqueada" clickable="true" bounds="[0,0][100,100]"/>""";
-        var adb = new AdbDeUmaTela(TelaComCadeadoDoApp);
+        var adb = new AdbDeTelaFixa(TelaComCadeadoDoApp);
         using var driver = new WhatsAppUiDriver(adb, Opts);
 
         var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
@@ -186,7 +162,7 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
         // boa como inexistente e não sobra com que discordar. Motivado por operação em 2026-08-10.
         const string TelaSemConta =
             """<node text="O número não está no WhatsApp" clickable="false" bounds="[0,0][1080,600]"/>""";
-        var adb = new AdbDeUmaTela(TelaSemConta);
+        var adb = new AdbDeTelaFixa(TelaSemConta);
         using var driver = new WhatsAppUiDriver(adb, Opts);
 
         var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
@@ -209,7 +185,7 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
             <node text="As mensagens e ligações são protegidas" clickable="true" bounds="[0,100][1080,200]"/>
             <node text="Sua conta foi restringida. Você não pode enviar mensagens" clickable="true" bounds="[0,300][1080,400]"/>
             """;
-        var adb = new AdbDeUmaTela(TelaDeRestricao);
+        var adb = new AdbDeTelaFixa(TelaDeRestricao);
         using var driver = new WhatsAppUiDriver(adb, Opts);
 
         var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);
@@ -244,7 +220,7 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
             <node text="As mensagens e ligações são protegidas" clickable="true" bounds="[0,100][1080,200]"/>
             <node text="Sua conta foi restringida. Você não pode enviar mensagens" clickable="true" bounds="[0,300][1080,400]"/>
             """;
-        var adb = new AdbDeUmaTela(TelaDeRestricao);
+        var adb = new AdbDeTelaFixa(TelaDeRestricao);
         var opts = Opts;
         opts.HumanTyping = digitacaoHumana;
         using var driver = new WhatsAppUiDriver(adb, opts);
@@ -272,7 +248,7 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
             <node resource-id="com.whatsapp:id/entry" bounds="[100,1800][900,1900]"/>
             <node text="Sua conta foi restringida. Você não pode enviar mensagens" clickable="true" bounds="[0,300][1080,400]"/>
             """;
-        var adb = new AdbDeUmaTela(TelaComCampoSemEnviar);
+        var adb = new AdbDeTelaFixa(TelaComCampoSemEnviar);
         var opts = Opts;
         opts.HumanTyping = true;
         using var driver = new WhatsAppUiDriver(adb, opts);
@@ -292,7 +268,7 @@ public sealed class WhatsAppUiDriverTelaDesconhecidaTests : IDisposable
             <node text="Mais opções" clickable="true" bounds="[0,0][100,100]"/>
             <node text="PEDIR ANÁLISE" clickable="true" bounds="[300,900][800,1000]"/>
             """;
-        var adb = new AdbDeUmaTela(TelaDeRecurso);
+        var adb = new AdbDeTelaFixa(TelaDeRecurso);
         using var driver = new WhatsAppUiDriver(adb, Opts);
 
         var r = await driver.SendAsync(Numero, Texto, CancellationToken.None);

@@ -209,6 +209,49 @@ public sealed class EnvioPontaAPontaTests
         envio.Sent.Should().BeFalse("não houve envio, e afirmar que houve tirava o contato da lista");
     }
 
+    /// <summary>Digitação humana: a conversa que ficou aberta do envio anterior não pode receber a
+    /// mensagem do contato da vez.</summary>
+    /// <remarks>
+    /// 🔴 O IRMÃO ESCONDIDO do teste acima, e mais perigoso, porque a defesa que cobre o deep link NÃO
+    /// cobre este caminho. Lá o texto vai na URL: sem navegação o campo fica vazio, não há botão de
+    /// enviar e o envio morre limpo. Aqui é o DRIVER que digita, então ele escreve no campo que estiver
+    /// na tela, e no sucesso o driver DEIXA a conversa anterior aberta de propósito.
+    ///
+    /// <para>Resultado sem a proteção: o contato anterior recebe uma SEGUNDA mensagem, o da vez não
+    /// recebe nada, e o console grava sucesso pro da vez. É a falha mais cara possível neste projeto,
+    /// porque dobra mensagem em quem já recebeu e ninguém fica sabendo.</para>
+    /// <para>E repare que a conversa anterior está SEM rascunho, que é o estado que o próprio sucesso
+    /// deixa: a pré-condição de "tela sem texto pendente" passa direto por ele.</para>
+    /// </remarks>
+    [Fact]
+    public async Task Com_digitacao_humana_abertura_que_nao_navega_NAO_digita_na_conversa_anterior()
+    {
+        const string outroContato = "5511999998888";
+        var android = new AndroidFalso();
+        android.ContasExistentes.Add(Com9);
+        android.ContasExistentes.Add(outroContato);
+
+        var agenda = new WhatsAppContactsReader(android);
+        await agenda.SaveContactAsync("+" + Com9, "Fulano", CancellationToken.None);
+        var uri = await agenda.WhatsAppChatUriAsync("+" + Com9, CancellationToken.None);
+        uri.Should().NotBeNull("o teste precisa exercitar o NÍVEL 1 da cascata, que é o que roda antes");
+
+        // Conversa anterior aberta e com o campo vazio: exatamente como um envio bem-sucedido deixa.
+        android.DeixarRascunhoAberto(outroContato, "");
+        // Nenhuma abertura navega: o `am start` responde 0 e a tela continua na conversa de antes.
+        android.NavegacoesIgnoradas = 9;
+
+        var opts = Opts;
+        opts.HumanTyping = true; // o default do produto, e o caminho sem a proteção do texto na URL
+        using var driver = new WhatsAppUiDriver(android, opts);
+
+        var envio = await driver.SendAsync("+" + Com9, Texto, CancellationToken.None, uri);
+
+        android.Entregues.Should().BeEmpty(
+            "a mensagem do contato da vez não pode sair na conversa de outra pessoa");
+        envio.Sent.Should().BeFalse("e afirmar que saiu tiraria o contato da lista sem ele ter recebido");
+    }
+
     [Fact]
     public async Task Rascunho_de_outra_conversa_nao_e_confundido_com_o_texto_da_vez()
     {
