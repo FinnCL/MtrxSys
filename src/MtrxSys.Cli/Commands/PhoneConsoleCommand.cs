@@ -310,8 +310,8 @@ internal sealed class PhoneConsoleCommand(
     private int _horaFim = 24;
 
 
-    /// <summary>SEGURAR o contato quando a agenda não confirma que ele tem WhatsApp. LIGADO por padrão
-    /// desde 2026-08-20, por decisão do operador: não gastar disparo em número morto.</summary>
+    /// <summary>SEGURAR o contato quando a agenda não confirma que ele tem WhatsApp. DESLIGADO por
+    /// padrão: a consulta roda e é reportada, mas não muda o que sai.</summary>
     /// <remarks>
     /// 🔴 O PEDIDO QUE ORIGINOU foi "não quero gastar disparos para que falhe", e o espelho da agenda
     /// responde de graça o que a conversa responderia caro. Nasceu ligado, e o operador barrou na
@@ -326,9 +326,21 @@ internal sealed class PhoneConsoleCommand(
     /// e volta a ser tentado assim que o `4` for desligado ou o espelho sincronizar. O desperdício que
     /// ele evita é irreversível; o dele é reversível com uma tecla.</para>
     ///
-    /// <para>Quando desconfiar do espelho: desligue no `4`, rode um lote e compare "quantos o espelho
-    /// confirmou" com "quantos de fato entregaram". Se os dois números não andarem juntos, o espelho é
-    /// fraco naquele aparelho e a economia de disparo tem que vir de outro lugar.</para>
+    /// <para>🔴 LIGADO POR PADRÃO EM 2026-08-20 E REVERTIDO NO MESMO DIA, com dado de operação. O
+    /// pedido foi "não gastar disparo em número morto", e o efeito medido foi outro: em três lotes
+    /// seguidos, 20 contatos, o espelho não confirmou quase ninguém e NADA saiu. A causa não era a
+    /// lista, era o RELÓGIO. O sync do WhatsApp publica o espelho minutos depois do `gravar`, e o fluxo
+    /// real do operador é colar, gravar e disparar em seguida: nesse fluxo o espelho nunca chegou a
+    /// tempo, e "não sei" virou "não" para o lote inteiro.</para>
+    ///
+    /// <para>Medido no aparelho RQ8WB048RFW: dos 5 primeiros contatos, 4 tinham espelho MINUTOS DEPOIS
+    /// do lote que os segurou; dos 10 seguintes, recém-gravados, só 1 tinha. O mesmo código que segurou
+    /// os 4 os confirma hoje. Ou seja, ligado por padrão ele não protege de número morto: ele adia
+    /// TODO lote de contato novo, que é o caso comum aqui.</para>
+    ///
+    /// <para>Continua disponível no menu para quem opera lista grande e fria, onde a economia de
+    /// tentativa compensa esperar o sync. Quando ligar: grave, espere o espelho aparecer, e só então
+    /// dispare.</para>
     /// </remarks>
     private bool _segurarNaoConfirmados = true;
 
@@ -1494,6 +1506,12 @@ internal sealed class PhoneConsoleCommand(
         AvisarRepeticao(plano, resumoDoLog.JaEnviados, resumoDoLog.TalvezReceberam);
         AvisarFormaSuspeita(plano);
 
+        var segurarNesteLote = await SegurarValeNesteLoteAsync(plano, ct);
+        if (segurarNesteLote is null)
+        {
+            return;   // o operador escolheu esperar o sync
+        }
+
         // Estimativa sobre o ALCANCE (a cota), não sobre a lista: com cota, o lote termina na cota.
         var estimativa = EsperaDe(alcance, minEfetivo, maxEfetivo);
 
@@ -1549,8 +1567,10 @@ internal sealed class PhoneConsoleCommand(
         try
         {
             var resumo = _agenda.Count == 0
-                ? await DispararAsync(plano, log, serial, tetoEfetivo, minEfetivo, maxEfetivo, diario, ct)
-                : await DispararAgendaAsync(log, serial, minEfetivo, maxEfetivo, diario, ct);
+                ? await DispararAsync(
+                    plano, log, serial, tetoEfetivo, minEfetivo, maxEfetivo, segurarNesteLote.Value, diario, ct)
+                : await DispararAgendaAsync(
+                    log, serial, minEfetivo, maxEfetivo, segurarNesteLote.Value, diario, ct);
 
             // O recorte de "sem conta" sai NO FECHO porque é a linha que sobra na tela e a que o
             // operador lê de manhã. Sem ele, "0 enviada(s), 87 falha(s)" some com a informação que
@@ -1658,6 +1678,80 @@ internal sealed class PhoneConsoleCommand(
     /// <param name="cota">Quantos ENVIOS esta execução pode fazer. 0 = sem cota.</param>
     /// <param name="intervaloMin">Intervalo mínimo DESTA execução; pode diferir de <c>_min</c> quando o
     /// teto automático preencheu um intervalo que o operador nunca escolheu.</param>
+    /// <summary>O `segurar` é confiável NESTE lote? Sonda a agenda antes de gastar o disparo.</summary>
+    /// <returns>true = segurar; false = disparar sem segurar; null = o operador cancelou.</returns>
+    /// <remarks>
+    /// 🔴 NASCEU DE UM LOTE PERDIDO, em 2026-08-20. O `segurar` pergunta à agenda "este número tem
+    /// WhatsApp?" e ela responde "sim" ou "NÃO SEI", nunca "não". Ligado, ele trata "não sei" como
+    /// "não", e isso está certo enquanto o espelho do app existe. Só que o espelho é publicado pelo
+    /// sync do WhatsApp MINUTOS depois do `gravar`, e o fluxo real é colar, gravar e disparar: o
+    /// operador rodou três lotes, 20 contatos, e nenhum saiu. Nenhum deles era número morto: medido no
+    /// aparelho, 4 dos 5 primeiros tinham espelho MINUTOS DEPOIS do lote que os segurou.
+    ///
+    /// <para>A correção não é desligar o `segurar`, é parar de confiar nele quando a resposta é
+    /// uniforme. O próprio <c>WhatsAppContactsReader</c> já registra a regra: "negativo em 100% de um
+    /// lote não é o mundo real, é uma consulta olhando para o lugar errado". Aqui essa regra sai do
+    /// comentário e vira decisão, ANTES de gastar o lote.</para>
+    ///
+    /// <para>SAI NA PRIMEIRA CONFIRMAÇÃO, e é o que torna a sondagem barata: se o espelho está
+    /// funcionando, o primeiro ou o segundo número já respondem "sim" e a sondagem custa segundos. Ela
+    /// só percorre a amostra inteira no caso em que isso vale a pena, que é justamente aquele em que o
+    /// lote inteiro seria segurado.</para>
+    /// </remarks>
+    private async Task<bool?> SegurarValeNesteLoteAsync(
+        List<(Contato Contato, int Variante, string Texto)> plano, CancellationToken ct)
+    {
+        if (!_segurarNaoConfirmados || plano.Count == 0)
+        {
+            return _segurarNaoConfirmados;
+        }
+
+        // Amostra, não a lista toda: cada pergunta é uma ida ao aparelho, e o que se quer saber aqui é
+        // se o espelho RESPONDE, não quem exatamente ele confirma. Doze é o bastante para distinguir
+        // "espelho vazio" de "lista com alguns mortos", e o laço já para na primeira confirmação.
+        var amostra = Math.Min(plano.Count, 12);
+        AnsiConsole.Markup($"[grey]conferindo o espelho da agenda em até {amostra} contato(s)…[/] ");
+        var confirmados = 0;
+        for (var i = 0; i < amostra && confirmados == 0; i++)
+        {
+            if (await phone.IsOnWhatsAppAsync(plano[i].Contato.Numero, ct) is true)
+            {
+                confirmados++;
+            }
+        }
+
+        if (confirmados > 0)
+        {
+            AnsiConsole.MarkupLine("[green]o espelho está respondendo.[/]");
+            return true;
+        }
+
+        AnsiConsole.MarkupLine($"[yellow]nenhum dos {amostra} foi confirmado.[/]");
+        AnsiConsole.MarkupLine(
+            "[grey]isso quase nunca é lista morta: o espelho do WhatsApp só aparece MINUTOS depois do[/] "
+            + "[bold]2[/] [grey](gravar), e sem ele a agenda responde \"não sei\" para todo mundo. com o[/] "
+            + "[bold]10[/] [grey]ligado, \"não sei\" segura, e o lote inteiro ficaria parado sem nada "
+            + "sair.[/]");
+        AnsiConsole.MarkupLine("  [bold]1[/] [grey]disparar agora, SEM segurar neste lote (o ajuste do 10 fica como está)[/]");
+        AnsiConsole.MarkupLine("  [bold]2[/] [grey]cancelar e esperar o espelho sincronizar[/]");
+        AnsiConsole.Markup("[grey]escolha (Enter cancela):[/] ");
+
+        if (Console.ReadLine()?.Trim() == "1")
+        {
+            AnsiConsole.MarkupLine(
+                "[grey]só neste lote: o console vai tentar todo mundo e descobrir abrindo a conversa. "
+                + "quem não tiver conta aparece com o motivo, e o[/] [bold]10[/] [grey]continua ligado "
+                + "para o próximo.[/]");
+            return false;
+        }
+
+        AnsiConsole.MarkupLine(
+            "[grey]cancelado, nada foi enviado. rode o[/] [bold]2[/] [grey]se ainda não gravou, espere "
+            + "alguns minutos e dispare de novo: quando o espelho chegar, esta conferência passa "
+            + "direto.[/]");
+        return null;
+    }
+
     /// <summary>O lote em ETAPAS: espera a hora de cada uma e dispara a cota dela.</summary>
     /// <remarks>
     /// 🔴 CHAMA O MESMO <see cref="DispararAsync"/> uma vez por etapa, em vez de ensinar o laço de
@@ -1675,6 +1769,7 @@ internal sealed class PhoneConsoleCommand(
         string serial,
         int intervaloMin,
         int intervaloMax,
+        bool segurar,
         DiarioDoLote diario,
         CancellationToken ct)
     {
@@ -1716,7 +1811,7 @@ internal sealed class PhoneConsoleCommand(
                 + $"{etapa.Quantos} envio(s)").LeftJustified());
 
             var r = await DispararAsync(
-                plano, log, serial, etapa.Quantos, intervaloMin, intervaloMax, diario, ct);
+                plano, log, serial, etapa.Quantos, intervaloMin, intervaloMax, segurar, diario, ct);
             enviados += r.Enviados;
             falhas += r.Falhas;
             semConta += r.SemConta;
@@ -1754,6 +1849,9 @@ internal sealed class PhoneConsoleCommand(
         Console.Write("\r" + new string(' ', 48) + "\r");
     }
 
+    /// <param name="segurar">Vale para ESTE lote, e por isso é parâmetro em vez de ler o campo direto.
+    /// O ajuste do operador (o <c>10</c>) diz o que ele QUER; este parâmetro diz o que é confiável
+    /// agora, depois da sondagem do espelho. Ver <see cref="SegurarValeNesteLoteAsync"/>.</param>
     private async Task<ResumoDoLote> DispararAsync(
         List<(Contato Contato, int Variante, string Texto)> plano,
         string log,
@@ -1761,6 +1859,7 @@ internal sealed class PhoneConsoleCommand(
         int cota,
         int intervaloMin,
         int intervaloMax,
+        bool segurar,
         DiarioDoLote diario,
         CancellationToken ct)
     {
@@ -1915,7 +2014,7 @@ internal sealed class PhoneConsoleCommand(
                 else
                 {
                     naoConfirmados.Add(contato.Numero);
-                    if (_segurarNaoConfirmados)
+                    if (segurar)
                     {
                         AnsiConsole.MarkupLine(
                             $"[grey]({i + 1}/{plano.Count}) segurado[/] {contato.Numero} "
@@ -3195,11 +3294,16 @@ internal sealed class PhoneConsoleCommand(
         // console que tira contato da fila sem ele ter recebido nada, e ela só se justifica por ser
         // reversível. Por isso esta opção pergunta, logo depois de gerar o arquivo.
         Secao("depois do lote");
-        Opcao("12", "planilha",
-            "[grey]gera o .xlsx e abre (sai sozinho no fim do lote)[/]"
-            + (_suspensos.Count == 0
-                ? ""
-                : $" [yellow]· {_suspensos.Count} em quarentena: devolve ou descarta aqui[/]"));
+        // 🔴 O RÓTULO ANUNCIAVA A PARTE REDUNDANTE. Ele dizia "gera o .xlsx e abre", que é exatamente o
+        // que o fim do lote já faz sozinho, e o operador perguntou (com razão) para que serve a opção.
+        // O que só existe aqui são duas coisas: DEVOLVER OU DESCARTAR a quarentena, que a geração
+        // automática não pode perguntar porque roda no finally, inclusive depois de um Ctrl+C; e gerar
+        // o relatório FORA de um lote, para quem abriu o console só pra olhar o histórico.
+        Opcao("12", "planilha e quarentena",
+            _suspensos.Count == 0
+                ? "[grey]o .xlsx do aparelho, sem precisar disparar (no fim do lote ele sai sozinho)[/]"
+                : $"[yellow]{_suspensos.Count} em quarentena: devolve ou descarta aqui[/]"
+                  + " [grey]· gera o .xlsx junto[/]");
         Opcao("0", "sair", "[grey]fecha (tudo fica salvo)[/]");
 
         AnsiConsole.Write(new Rule($"[bold]menu[/]  ·  aparelho [bold]{serial.EscapeMarkup()}[/]").LeftJustified());
@@ -4082,6 +4186,7 @@ internal sealed class PhoneConsoleCommand(
                     + "LIGADO. os três continuam em[/] [bold]9[/][grey],[/] [bold]10[/] [grey]e[/] "
                     + "[bold]11[/][grey], e a sua escolha a partir de agora manda.[/]");
             }
+
 
             // 🔴 O RITMO NOVO SÓ ALCANÇA QUEM NUNCA ESCOLHEU UM, e o teste de "nunca escolheu" é o valor
             // ser exatamente o padrão anterior. É a mesma ideia que o console já usa para o preenchimento
