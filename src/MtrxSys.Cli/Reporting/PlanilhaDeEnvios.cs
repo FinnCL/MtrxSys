@@ -94,12 +94,15 @@ public static class PlanilhaDeEnvios
     /// <paramref name="historico"/>.</param>
     /// <param name="historico">Tudo que o log daquele aparelho guarda, do mais antigo ao mais novo.</param>
     /// <param name="lote">null quando o relatório é pedido fora de um lote (comando `relatorio`).</param>
+    /// <param name="suspensos">A quarentena do console no momento da geração: quem saiu da fila por o
+    /// app afirmar que o número não tem conta. Vazia é estado normal.</param>
     public static string Gerar(
         string serial,
         IReadOnlyList<LinhaDeEnvio> historico,
         ContextoDoLote? lote,
         string pasta,
-        DateTimeOffset agora)
+        DateTimeOffset agora,
+        IReadOnlyList<(string Numero, string? Nome)>? suspensos = null)
     {
         ArgumentNullException.ThrowIfNull(historico);
 
@@ -125,6 +128,12 @@ public static class PlanilhaDeEnvios
             : historico.Skip(historico.Count - TetoDoHistorico).ToList();
         Tabela(wb.Worksheets.Add("Histórico"), recentes, historico.Count - recentes.Count);
 
+        // A quarentena vira ABA em vez de tela separada no console: ela é o outro lado do histórico
+        // (quem NÃO foi tentado, e por quê), e ler as duas metades em lugares diferentes obrigava a
+        // juntar de cabeça. Sempre presente, inclusive vazia: aba que aparece e some faz quem procura
+        // concluir que o dado se perdeu.
+        Suspensos(wb.Worksheets.Add("Suspensos"), suspensos ?? [], historico);
+
         // Com SEGUNDOS, e não só até o minuto: dois lotes curtos terminando no mesmo minuto cairiam no
         // mesmo nome, e o `SaveAs` sobrescreve calado. Perder o relatório do lote anterior sem avisar é
         // exatamente o tipo de coisa que só se descobre no dia em que ele fazia falta.
@@ -133,6 +142,69 @@ public static class PlanilhaDeEnvios
             $"relatorio-{serial}-{agora.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}.xlsx");
         wb.SaveAs(arquivo);
         return arquivo;
+    }
+
+    /// <summary>A quarentena: quem saiu da fila sem ter recebido nada, com o que o log sabe sobre cada
+    /// um.</summary>
+    /// <remarks>
+    /// 🔴 CRUZA COM O HISTÓRICO em vez de listar número e nome. "Este número foi suspenso" sozinho não
+    /// deixa ninguém decidir se devolve ou descarta; "suspenso, 4 tentativas, a última em 12/08" deixa.
+    /// O cruzamento é por número exato: o log guarda a forma que foi TENTADA, e é ela que interessa.
+    /// </remarks>
+    private static void Suspensos(
+        IXLWorksheet ws,
+        IReadOnlyList<(string Numero, string? Nome)> suspensos,
+        IReadOnlyList<LinhaDeEnvio> historico)
+    {
+        (string Nome, double Largura)[] colunas =
+        [
+            ("número", 16), ("nome", 22), ("última tentativa", 17), ("tentativas no log", 16),
+            ("por que saiu da fila", 70),
+        ];
+        for (var c = 0; c < colunas.Length; c++)
+        {
+            ws.Cell(1, c + 1).Value = colunas[c].Nome;
+            ws.Column(c + 1).Width = colunas[c].Largura;
+        }
+        Pintar(ws.Range(1, 1, 1, colunas.Length), FundoTitulo, TextoTitulo, negrito: true);
+        ws.Column(1).Style.NumberFormat.Format = "@"; // 13 dígitos viram notação científica sem isto
+        ws.Column(3).Style.DateFormat.Format = "dd/MM/yyyy HH:mm:ss";
+
+        // 🔴 UM ÍNDICE, e não uma varredura por suspenso. O `historico` chega com até 50 mil linhas (é o
+        // teto da aba Histórico) e a quarentena pode ter dezenas de números: varrer a lista inteira por
+        // contato é 50 mil comparações de string VEZES o número de suspensos, e isso roda no fim de um
+        // lote de horas, junto com a geração do arquivo. O agrupamento é uma passada só, e a busca por
+        // número passa a ser direta.
+        var porNumero = historico.ToLookup(l => l.Numero, StringComparer.Ordinal);
+
+        var r = 1;
+        foreach (var (numero, nome) in suspensos)
+        {
+            var tentativas = porNumero[numero].ToList();
+            r++;
+            ws.Cell(r, 1).Value = numero;
+            ws.Cell(r, 2).Value = nome ?? "";
+            if (tentativas.Count > 0)
+            {
+                ws.Cell(r, 3).Value = tentativas[^1].Quando.DateTime;
+            }
+            ws.Cell(r, 4).Value = tentativas.Count;
+            ws.Cell(r, 5).Value =
+                "o WhatsApp afirmou que o número não tem conta, nas duas formas do 9º dígito";
+            Pintar(ws.Range(r, 1, r, colunas.Length), FundoIncerto, TextoIncerto);
+        }
+
+        ws.SheetView.FreezeRows(1);
+        if (r > 1)
+        {
+            ws.Range(1, 1, r, colunas.Length).SetAutoFilter();
+        }
+        else
+        {
+            // Aba vazia diz por que está vazia. Sem esta linha, ela se lê como "o relatório não trouxe
+            // esse dado", que é a leitura errada de um estado que é bom.
+            ws.Cell(2, 1).Value = "nenhum contato em quarentena neste aparelho.";
+        }
     }
 
     /// <summary>Uma linha por tentativa, pintada pelo desfecho.</summary>

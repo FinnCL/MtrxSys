@@ -27,6 +27,35 @@ param(
 $ErrorActionPreference = 'Stop'
 $raiz = Split-Path -Parent $PSScriptRoot
 
+function Fechar {
+    param([int] $Codigo)
+
+    # A CAIXA DE ERRO MORA AQUI desde 2026-08-20, e nao mais no .cmd que chamava este script.
+    #
+    # O .cmd ficava rodando o tempo todo esperando o console terminar, e QUALQUER Ctrl+C fazia o
+    # cmd.exe perguntar "Deseja finalizar o arquivo em lotes (S/N)?". Essa pergunta e do interpretador
+    # de lote do Windows, nao nossa, e o texto dela nao da para trocar: S mata o .cmd na hora e N faz o
+    # .cmd continuar de onde parou. Nenhuma das duas coisas interessa a quem so queria sair do console,
+    # e a pergunta aparecia DEPOIS de o console ja ter salvado tudo e encerrado, ou seja, decidindo
+    # sobre um programa que nem estava mais vivo.
+    #
+    # Agora o .cmd abre a janela e morre no mesmo instante. Sem lote rodando, o Windows nao tem o que
+    # perguntar. O preco e que a caixa de "nao abriu" precisa de alguem para segurar a janela aberta,
+    # porque o PowerShell fecha assim que o script acaba. Esse alguem e esta funcao.
+    #
+    # 130 e "interrompido pelo operador" (Ctrl+C), e NAO e falha: nao mostra caixa de erro nenhuma.
+    if ($Codigo -ne 0 -and $Codigo -ne 130) {
+        Write-Host ''
+        Write-Host '============================================================' -ForegroundColor Red
+        Write-Host " O CONSOLE NAO ABRIU (codigo $Codigo)." -ForegroundColor Red
+        Write-Host ' O motivo esta na mensagem ACIMA desta caixa.' -ForegroundColor Red
+        Write-Host '============================================================' -ForegroundColor Red
+        Write-Host ''
+        Read-Host 'Enter fecha esta janela' | Out-Null
+    }
+    exit $Codigo
+}
+
 function Resolver-Adb {
     param([string] $Informado)
 
@@ -153,7 +182,7 @@ function Resolver-Mtrx {
         Write-Host 'Se insistir, apague a pasta src\MtrxSys.Cli\bin antes de compilar.'
         # Sai daqui em vez de devolver $null: quem chama trata $null como "nao compilou ainda" e
         # imprimiria por cima um recado diferente do problema real.
-        exit 1
+        Fechar 1
     }
 
     # Cair num build mais antigo porque o mais novo esta quebrado nao pode ser silencioso: e assim que
@@ -320,7 +349,7 @@ $adb = Resolver-Adb -Informado $AdbPath
 if (-not $adb) {
     Write-Host 'adb nao encontrado.' -ForegroundColor Red
     Write-Host 'Instale o platform-tools do Android SDK e rode de novo com -AdbPath "C:\...\adb.exe".'
-    exit 1
+    Fechar 1
 }
 Write-Host "adb: $adb" -ForegroundColor DarkGray
 
@@ -330,7 +359,7 @@ if (-not $mtrx) {
     Write-Host 'mtrx.exe nao encontrado (bin/ e gitignored, entao o clone nao traz o executavel).' -ForegroundColor Red
     Write-Host 'Compile antes:' -ForegroundColor Yellow
     Write-Host '  dotnet build MtrxSys.slnx -c Release'
-    exit 1
+    Fechar 1
 }
 
 # ── aparelhos ────────────────────────────────────────────────────────────────────────────────────
@@ -347,7 +376,7 @@ if ($aparelhos.Count -eq 0) {
     Write-Host '  2. plugado direto no PC, sem hub no meio'
     Write-Host '  3. tela desbloqueada, e Depuracao USB ligada nas Opcoes do desenvolvedor'
     Write-Host '  4. na notificacao de USB do celular, escolher Transferencia de arquivos'
-    exit 1
+    Fechar 1
 }
 
 $livres = @($aparelhos | Where-Object { -not $_.EmUso })
@@ -357,17 +386,17 @@ if ($Serial) {
     $escolhido = $aparelhos | Where-Object { $_.Serial -eq $Serial } | Select-Object -First 1
     if (-not $escolhido) {
         Write-Host "Serial $Serial nao esta plugado agora." -ForegroundColor Red
-        exit 1
+        Fechar 1
     }
     if ($escolhido.EmUso) {
         Write-Host "O aparelho $Serial ja esta aberto em outro console." -ForegroundColor Red
-        exit 1
+        Fechar 1
     }
 }
 elseif ($livres.Count -eq 0) {
     Write-Host 'Todos os aparelhos plugados ja estao abertos em outro console.' -ForegroundColor Red
     Write-Host 'Feche uma das janelas, ou plugue outro celular.'
-    exit 1
+    Fechar 1
 }
 elseif ($livres.Count -eq 1) {
     # Escolhe sozinho entre os LIVRES, nao entre os plugados: com dois celulares e um ja em uso, a
@@ -392,12 +421,12 @@ else {
     $indice = 0
     if (-not [int]::TryParse($resposta, [ref] $indice) -or $indice -lt 1 -or $indice -gt $aparelhos.Count) {
         Write-Host 'Escolha invalida.' -ForegroundColor Red
-        exit 1
+        Fechar 1
     }
     $escolhido = $aparelhos[$indice - 1]
     if ($escolhido.EmUso) {
         Write-Host "O aparelho $($escolhido.Serial) ja esta aberto em outro console." -ForegroundColor Red
-        exit 1
+        Fechar 1
     }
 }
 
@@ -406,7 +435,7 @@ if ($escolhido.Estado -ne 'device') {
     if ($escolhido.Estado -eq 'unauthorized') {
         Write-Host 'Aceite "Permitir depuracao USB?" na tela do celular, marcando "Sempre permitir deste computador".'
     }
-    exit 1
+    Fechar 1
 }
 
 # ── sobe o console preso a esse serial ───────────────────────────────────────────────────────────
@@ -420,4 +449,4 @@ try { $host.UI.RawUI.WindowTitle = "mtrx phone console - $($escolhido.Serial) $(
 
 Write-Host ''
 & $mtrx phone console @args
-exit $LASTEXITCODE
+Fechar $LASTEXITCODE

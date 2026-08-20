@@ -55,13 +55,20 @@ internal sealed class PhoneConsoleCommand(
         /// é o default, então "não passei" e "passei 0" chegavam idênticos aqui.
         /// </remarks>
         [CommandOption("--teto <N>")]
-        [Description("Cota por execução, em ENVIOS. 0 = sem teto: manda a lista inteira.")]
+        [Description("Cota por execução, em ENVIOS. 0 = sem limite: manda a lista inteira.")]
         public int? Teto { get; init; }
     }
 
     /// <param name="Numero">Só dígitos, já validado em 12 ou 13 (55 + DDD + número).</param>
     /// <param name="Nome">Opcional; alimenta o token <c>{nome}</c> nos textos.</param>
     private sealed record Contato(string Numero, string? Nome);
+
+    /// <summary>Uma etapa da agenda: a que horas começa e quantos envios ela gasta.</summary>
+    /// <param name="Hora">Hora do dia. Sem data de propósito: a agenda é o dia de operação, e o
+    /// console não sobrevive a uma noite (ver a janela no laço de disparo).</param>
+    /// <param name="Quantos">Envios desta etapa, não contatos percorridos. Mesma moeda da cota: falha
+    /// e contato segurado não gastam.</param>
+    private sealed record Agendamento(TimeOnly Hora, int Quantos);
 
     /// <summary>O que o lote produziu.</summary>
     /// <param name="SemConta">Subconjunto de <paramref name="Falhas"/>: os recusados pelo app.</param>
@@ -132,7 +139,20 @@ internal sealed class PhoneConsoleCommand(
         // nos 53 contatos, gastando duas chamadas adb por contato pra confirmar o óbvio. Quem grava é o
         // `gravar`, com tempo pra sincronizar.
         public bool Agenda { get; init; } = true;
-        public bool DigitacaoHumana { get; init; } = true;
+        public bool DigitacaoHumana { get; init; }
+
+        /// <summary>Versão dos PADRÕES que este arquivo já viu. null = gravado antes de 2026-08-20.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 EXISTE PORQUE "MUDEI O PADRÃO" NÃO CHEGA EM QUEM JÁ TEM SESSÃO. Todo aparelho que já
+        /// operou tem os três toggles gravados, e o <c>Carregar</c> os aplica por cima do padrão novo.
+        /// Sem esta marca, trocar o default só valeria para aparelho novo, ou seja, para ninguém.
+        /// <para>Não dá pra distinguir "o operador escolheu ligada" de "veio ligada por default" nos
+        /// arquivos antigos: o campo é <c>bool</c> e sempre foi gravado. Por isso a correção é de UMA
+        /// VEZ e AVISADA na tela: os três voltam ao padrão novo, a marca é gravada, e daí em diante
+        /// escolha explícita manda.</para>
+        /// </remarks>
+        public int? Versao { get; init; }
 
         // Anulável pelo mesmo motivo do Bloco: false é escolha legítima. Sessão anterior ao campo tem
         // null e cai no default LIGADO; quem desligou continua desligado.
@@ -158,9 +178,21 @@ internal sealed class PhoneConsoleCommand(
         /// <c>Contato</c>, e um formato só significa um lugar só pra errar o escape.</para>
         /// </remarks>
         public List<string>? Suspensos { get; init; }
+
+        /// <summary>As etapas do dia, no formato "HH:mm;quantos".</summary>
+        /// <remarks>Texto e não um record próprio pelo mesmo motivo dos contatos: o arquivo é lido por
+        /// gente quando algo dá errado, e "08:00;50" se entende sem manual.
+        /// <para>O nome não é só <c>Agenda</c> porque esse já foi gasto pelo toggle aposentado logo
+        /// acima, e reusá-lo faria uma sessão antiga desserializar <c>true</c> dentro de uma lista.
+        /// </para></remarks>
+        public List<string>? AgendaDeEnvios { get; init; }
     }
 
     private const string TokenNome = "{nome}";
+
+    /// <summary>Sobe quando um PADRÃO muda e precisa alcançar quem já tem sessão gravada.
+    /// Ver <see cref="Estado.Versao"/>.</summary>
+    private const int VersaoDosPadroes = 3;
 
     /// <summary>Falhas SEGUIDAS que interrompem o lote. ZERO = nunca interrompe, que é o padrão.</summary>
     /// <remarks>
@@ -204,17 +236,32 @@ internal sealed class PhoneConsoleCommand(
     private readonly List<Contato> _suspensos = [];
 
     private readonly List<string> _textos = [];
+
+    /// <summary>As etapas do dia, ordenadas pela hora. VAZIA é o estado normal: sem agenda, o lote sai
+    /// quando o operador manda e para na cota.</summary>
+    /// <remarks>
+    /// 🔴 QUANDO TEM ETAPA, ELA MANDA NA COTA. Duas fontes para "quantos saem agora" seriam duas
+    /// respostas para a mesma pergunta, e a que perde a disputa é sempre a que o operador acabou de
+    /// configurar. O pré-voo diz qual está valendo, em vez de deixar descobrir pelo resultado.
+    /// </remarks>
+    private readonly List<Agendamento> _agenda = [];
     /// <summary>Intervalo de fábrica. Nomeado porque é COMPARADO, não só atribuído.</summary>
     /// <remarks>
     /// 🔴 É assim que o console distingue "o operador escolheu" de "ninguém mexeu", sem guardar um flag
     /// a mais. O flag pareceria mais explícito e seria pior: ele teria que ser persistido, e sessão
     /// antiga voltaria sem ele, indistinguível de escolha. O valor em si já responde a pergunta, e quem
     /// digitar exatamente o padrão só perde o preenchimento automático, que é inofensivo.
-    /// <para>Estes dois números são o ritmo de 120 mensagens em 8 horas, ou seja o ajuste de um chip no
-    /// PLATÔ. Ver ChipHistory.IntervaloPara.</para>
+    /// <para>Guardados em SEGUNDOS porque é o que o laço de disparo usa; a tela toda fala em minutos.
+    /// 150 e 300 são 2,5 e 5 min, escolhidos pelo operador em 2026-08-20. Na média (3,75 min) isso dá
+    /// ~128 mensagens numa janela de 8 horas, que continua sendo o PLATÔ da curva de aquecimento. Ver
+    /// ChipHistory.IntervaloPara.</para>
     /// </remarks>
     private const int MinPadrao = 150;
-    private const int MaxPadrao = 360;
+    private const int MaxPadrao = 300;
+
+    /// <summary>O máximo de fábrica ANTERIOR (6 min). Serve só para reconhecer, na sessão gravada, quem
+    /// nunca escolheu um ritmo e por isso deve receber o padrão novo.</summary>
+    private const int MaxPadraoAntigo = 360;
 
     private int _min = MinPadrao;
     private int _max = MaxPadrao;
@@ -225,41 +272,21 @@ internal sealed class PhoneConsoleCommand(
     /// saídas ruins: subir o teto para o tamanho da lista, que é a rajada que ele existia para impedir,
     /// ou recortar a lista à mão a cada execução.
     ///
-    /// <para>O freio deixou de ser o teto e passou a ser o RITMO: blocos com pausa sorteada entre eles
-    /// (ver <see cref="_bloco"/>), que é o que de fato desmancha o padrão de máquina. Teto continua
-    /// disponível para quem quiser fatiar por dia, e o Ctrl+C interrompe a qualquer momento com o que
-    /// já saiu registrado no CSV.</para>
+    /// <para>O freio deixou de ser o teto e passou a ser o RITMO entre mensagens, e o Ctrl+C interrompe
+    /// a qualquer momento com o que já saiu registrado no CSV.</para>
+    ///
+    /// <para>🔴 SÓ VALE SEM AGENDA. Com etapas marcadas, a cota da execução é a soma delas, e este
+    /// número fica de fora; o menu mostra "sem efeito" na linha em vez de deixar descobrir pelo
+    /// resultado.</para>
     /// </remarks>
     private int _teto;
 
-    /// <summary>Mensagens por BLOCO antes de uma pausa longa. Zero = sem blocos.</summary>
-    /// <remarks>
-    /// 🔴 O que pesa contra o chip é PADRÃO, não volume. O comentário da curva do <c>WarmupManager</c>
-    /// registra quatro chips perdidos em quatro dias, dois deles com DUAS mensagens e um com ZERO: o
-    /// que restringiu foi a assinatura de máquina, não a quantidade. Fluxo contínuo, hora após hora,
-    /// no mesmo intervalo, é assinatura de máquina; gente manda um punhado, some, volta depois.
-    ///
-    /// <para>15 e 30 min não são chute: com o intervalo padrão de 150-360s, um bloco de 15 leva ~1h, e
-    /// 1h + 30min = 1h30 por bloco. Num dia útil de 12h isso dá 8 blocos, ou seja 120 mensagens, que é
-    /// exatamente o PLATÔ da curva de aquecimento do motor. Os dois caminhos, o automático e o manual,
-    /// chegam ao mesmo teto diário sem que ninguém precise decorar dois números.</para>
-    /// </remarks>
-    private int _bloco = 15;
-
-    /// <summary>Minutos de pausa entre um bloco e o próximo.</summary>
-    private int _pausaMin = 30;
-
-    /// <summary>Folga sorteada em torno do bloco e da pausa configurados.</summary>
-    /// <remarks>
-    /// 🔴 O CENTRO É O QUE VOCÊ CONFIGURA; O QUE SAI É SORTEADO EM VOLTA. Um loop de exatamente 15
-    /// mensagens e exatamente 30 minutos é um carimbo perfeito no eixo do tempo: os intervalos entre
-    /// mensagens já eram sorteados (150-360s), e a pausa cravada seria a ÚNICA regularidade da série,
-    /// ou seja, exatamente a assinatura que o bloco existe para desmanchar. Com a folga, "15 e 30" na
-    /// prática são 12 a 18 mensagens e 22 a 38 minutos.
-    /// </remarks>
-    private const double JitterBloco = 0.20;
-
-    private const double JitterPausa = 0.25;
+    // 🔴 BLOCOS E PAUSA FORAM REMOVIDOS em 2026-08-20, por decisão do operador ("sem pausas"). Eles
+    // mandavam ~15 mensagens, sumiam ~30 min e voltavam, para o lote não ter a regularidade de máquina
+    // que o comentário da curva do WarmupManager associa a chip restringido. O trabalho não ficou sem
+    // dono: a AGENDA faz o mesmo desenho (punhado, silêncio longo, punhado) com as horas escolhidas por
+    // quem opera, em vez de sorteadas pelo programa. O que se perde é a proteção AUTOMÁTICA de quem
+    // dispara sem agenda: ali sobra o ritmo entre mensagens, e ele passou a ser a única defesa.
 
     /// <summary>Janela em que é permitido enviar (hora local). Fora dela a execução encerra.</summary>
     /// <remarks>
@@ -283,25 +310,27 @@ internal sealed class PhoneConsoleCommand(
     private int _horaFim = 24;
 
 
-    /// <summary>SEGURAR o contato quando a agenda não confirma que ele tem WhatsApp. DESLIGADO por
-    /// padrão: a consulta sempre roda e é reportada, mas não muda o que sai.</summary>
+    /// <summary>SEGURAR o contato quando a agenda não confirma que ele tem WhatsApp. LIGADO por padrão
+    /// desde 2026-08-20, por decisão do operador: não gastar disparo em número morto.</summary>
     /// <remarks>
     /// 🔴 O PEDIDO QUE ORIGINOU foi "não quero gastar disparos para que falhe", e o espelho da agenda
-    /// responde de graça o que a conversa responderia caro. Eu implementei segurando por padrão, e o
-    /// operador barrou com dado de operação: EXISTEM MUITOS NÚMEROS COM WHATSAPP QUE O ESPELHO NÃO
-    /// CONFIRMA. Com o padrão errado, o lote seguraria contato bom em massa — pior que o desperdício
-    /// que ele tentava evitar.
+    /// responde de graça o que a conversa responderia caro. Nasceu ligado, e o operador barrou na
+    /// primeira versão com dado de operação: EXISTEM NÚMEROS COM WHATSAPP QUE O ESPELHO NÃO CONFIRMA.
+    /// Ficou em MODO OBSERVAÇÃO (roda, conta, reporta, não segura ninguém) até os lotes dizerem se o
+    /// espelho acerta neste parque de aparelhos.
     ///
-    /// <para>Então a consulta entra em MODO OBSERVAÇÃO: roda em todo contato, é contada e reportada no
-    /// fim, e NÃO segura ninguém. Depois de alguns lotes o operador compara "quantos o espelho
-    /// confirmou" com "quantos de fato entregaram". Se os dois números andarem juntos, a agenda é
-    /// confiável naquele aparelho e vale ligar o `segurar`. Se não andarem, o espelho é fraco demais
-    /// pra decidir e a economia de disparo tem que vir de outro lugar.</para>
+    /// <para>🔴 EM 2026-08-20 O MESMO OPERADOR PEDIU O PADRÃO LIGADO, com os lotes já rodados na mão.
+    /// Fica registrado o que isso troca: quem a agenda não confirmar NÃO recebe neste lote. O risco de
+    /// antes continua existindo (espelho fraco segura contato bom), e a razão de ele ser aceitável é
+    /// que SEGURAR NÃO DESCARTA: o contato continua na lista, aparece como "segurado" na linha do lote,
+    /// e volta a ser tentado assim que o `4` for desligado ou o espelho sincronizar. O desperdício que
+    /// ele evita é irreversível; o dele é reversível com uma tecla.</para>
     ///
-    /// <para>Mesma disciplina do detector de contradição: sinal novo não ganha o volante antes de
-    /// mostrar que acerta.</para>
+    /// <para>Quando desconfiar do espelho: desligue no `4`, rode um lote e compare "quantos o espelho
+    /// confirmou" com "quantos de fato entregaram". Se os dois números não andarem juntos, o espelho é
+    /// fraco naquele aparelho e a economia de disparo tem que vir de outro lugar.</para>
     /// </remarks>
-    private bool _segurarNaoConfirmados;
+    private bool _segurarNaoConfirmados = true;
 
     /// <summary>Bip a cada mensagem, para acompanhar o lote de ouvido.</summary>
     /// <remarks>
@@ -319,13 +348,18 @@ internal sealed class PhoneConsoleCommand(
     private bool _bip = true;
 
     /// <summary>Digitar caractere a caractere (ligada) ou entregar o texto pronto pelo deep link
-    /// (desligada). Espelha <see cref="PhoneOptions.HumanTyping"/>, que o driver lê a cada envio.</summary>
+    /// (desligada). Espelha <see cref="PhoneOptions.HumanTyping"/>, que o driver lê a cada envio.
+    /// DESLIGADA por padrão no console desde 2026-08-20, por decisão do operador.</summary>
     /// <remarks>
     /// Vira botão do console porque a escolha é de OPERAÇÃO, não de instalação: ligada, só sai ASCII
     /// (o `input text` não digita acento nem emoji); desligada, sai qualquer caractere, mas o campo
     /// nasce preenchido e o destinatário nunca vê "digitando…".
+    /// <para>🔴 O PADRÃO DO CONSOLE NÃO É MAIS O DE <see cref="PhoneOptions.HumanTyping"/>, que segue
+    /// ligado para o dispatcher e o `phone send`. Aqui o texto é COLADO por uma pessoa, e texto colado
+    /// por brasileiro vem com acento: com a digitação ligada, o pré-voo barrava o lote e a saída era
+    /// tirar os acentos da mensagem. O console prefere a mensagem certa à animação de "digitando…".</para>
     /// </remarks>
-    private bool _digitacaoHumana = true;
+    private bool _digitacaoHumana;
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings s)
     {
@@ -333,7 +367,9 @@ internal sealed class PhoneConsoleCommand(
 
         var opts = options.Value;
         var serial = string.IsNullOrWhiteSpace(opts.AdbSerial) ? "(sem serial)" : opts.AdbSerial;
-        _digitacaoHumana = opts.HumanTyping;
+        // NÃO herda mais o Phone__HumanTyping: o console tem o próprio padrão (desligada) e ele é quem
+        // manda em opts logo abaixo. Herdar aqui só fazia o padrão do produto vazar para uma tela que
+        // tem botão próprio para isso, e o operador via "ligada" sem ter ligado.
 
         AnsiConsole.Write(new Rule($"[bold]mtrx phone console[/]  ·  engine [bold]{opts.Engine.EscapeMarkup()}[/]  ·  aparelho [bold]{serial.EscapeMarkup()}[/]").LeftJustified());
 
@@ -373,18 +409,21 @@ internal sealed class PhoneConsoleCommand(
             _tetoAuto = false;
             AnsiConsole.MarkupLine(
                 $"[grey]--teto {_teto} veio da linha de comando e vale para esta sessão"
-                + (_teto == 0 ? " (sem teto)" : "") + ".[/]");
+                + (_teto == 0 ? " (sem limite)" : "") + ".[/]");
         }
 
         // O que a sessão gravou manda no que o driver faz: PhoneOptions é singleton e o driver relê
         // HumanTyping a cada envio, então escrever aqui basta.
         opts.HumanTyping = _digitacaoHumana;
 
-        // A ajuda abre SOZINHA. Um console cujo primeiro passo é adivinhar o nome de um comando é um
-        // console que só serve pra quem escreveu. O custo é uma tela a mais; o ganho é não precisar
-        // de ninguém do lado explicando.
-        Ajuda();
-
+        // 🔴 A TELA DE AJUDA FOI REMOVIDA em 2026-08-20, por decisão do operador. Ela era um tutorial de
+        // 8 passos impresso a cada abertura, e existia porque o menu antigo não contava a ordem das
+        // coisas: 1 e 2 eram ajustes, contatos era o 4, e a sequência real só estava escrita ali.
+        // Com o menu reordenado pelo fluxo (cola, grava, confere, escreve, agenda, dispara), o tutorial
+        // passou a repetir o painel, e repetição desatualiza: a ajuda ainda mandava digitar "9 ver"
+        // depois do `ver` ter sido removido. As instruções de COLAGEM continuam vivas, impressas no
+        // momento em que a colagem começa, que é onde elas são lidas de verdade. O `comandos` continua
+        // sendo a referência seca de tudo.
         var sair = false;
         while (!sair)
         {
@@ -407,15 +446,10 @@ internal sealed class PhoneConsoleCommand(
                 switch (partes[0].ToLowerInvariant())
                 {
                     // ── pelo menu (número): pergunta o valor, não exige a sintaxe ────────────────
+                    // A ORDEM AQUI É A DA TABELA do Menu, e vale mantê-la: quando as duas divergiram,
+                    // a linha nova entrou no fim do switch e ninguém percebeu que o número já era de
+                    // outro comando. Lendo de cima a baixo, o conflito aparece.
                     case "1":
-                        IntervaloInterativo();
-                        Salvar(serial);
-                        break;
-                    case "2":
-                        TetoInterativo();
-                        Salvar(serial);
-                        break;
-                    case "4":
                         switch (PerguntarModo(_contatos.Count, "contato(s)"))
                         {
                             case ModoLista.Editar: EditarContato(); break;
@@ -424,7 +458,13 @@ internal sealed class PhoneConsoleCommand(
                         }
                         Salvar(serial);
                         break;
-                    case "5":
+                    case "2":
+                        await GravarAgendaAsync(ct);
+                        break;
+                    case "3":
+                        Conferir();
+                        break;
+                    case "4":
                         switch (PerguntarModo(_textos.Count, "template(s)"))
                         {
                             case ModoLista.Editar: EditarTexto(); break;
@@ -433,24 +473,47 @@ internal sealed class PhoneConsoleCommand(
                         }
                         Salvar(serial);
                         break;
-                    case "6":
-                        Ver();
+                    case "5":
+                        QuantoEQuando();
+                        Salvar(serial);
                         break;
-                    case "7":
+                    case "6":
                         Previa();
                         break;
-                    case "8":
-                        await EnviarAsync(serial, ct);
+                    case "7":
+                        IntervaloInterativo();
+                        Salvar(serial);
                         break;
+                    case "8":
+                        JanelaInterativa();
+                        Salvar(serial);
+                        break;
+                    case "9":
+                        AlternarDigitacaoHumana();
+                        Salvar(serial);
+                        break;
+                    case "10":
+                        AlternarSegurar();
+                        Salvar(serial);
+                        break;
+                    case "11":
+                        await AlternarBipAsync();
+                        Salvar(serial);
+                        break;
+                    case "12":
+                        Planilha(serial);
+                        Salvar(serial);
+                        break;
+                    // Sem "13": o disparo só atende pela palavra (o `case "enviar"` mais abaixo). Ver o
+                    // Menu para o porquê de ele ser a única exceção ao painel numerado.
                     case "0":
                         sair = true;
                         break;
 
                     // ── por extenso, e os que valem nas duas formas ──────────────────────────────
-                    case "9" or "ajuda" or "?" or "help":
-                        Ajuda();
-                        break;
-                    case "comandos":
+                    // `ajuda` caindo na lista de comandos: a tela de tutorial saiu, e mandar quem pediu
+                    // ajuda para "comando desconhecido" seria a pior resposta possível à palavra.
+                    case "ajuda" or "?" or "help" or "comandos":
                         Comandos();
                         break;
                     case "status":
@@ -464,10 +527,14 @@ internal sealed class PhoneConsoleCommand(
                         LerTextos(serial, somar: partes is [_, "+", ..]);
                         Salvar(serial);
                         break;
-                    case "ver":
-                        Ver();
+                    case "agenda":
+                        LerAgenda(somar: partes is [_, "+", ..]);
+                        Salvar(serial);
                         break;
-                    case "previa":
+                    // `ver` sobrevive como APELIDO, não como tela: o comando sumiu do painel, mas quem
+                    // já digitava ver merece cair onde a informação foi parar, e não em "comando
+                    // desconhecido". Custa uma linha e evita a busca por uma tela que não existe mais.
+                    case "previa" or "ver":
                         Previa();
                         break;
                     case "c" or "conferir":
@@ -500,48 +567,26 @@ internal sealed class PhoneConsoleCommand(
                         Parar(partes);
                         Salvar(serial);
                         break;
-                    case "b" or "blocos":
-                        BlocosOuInterativo(partes, serial);
-                        break;
+                    // `blocos` some junto com o ajuste: um comando que ainda responde depois de o
+                    // recurso sair é pior que um comando desconhecido, porque parece ter funcionado.
                     case "janela":
                         Janela(partes);
                         Salvar(serial);
                         break;
                     case "segurar":
-                        _segurarNaoConfirmados = !_segurarNaoConfirmados;
-                        AnsiConsole.MarkupLine(_segurarNaoConfirmados
-                            ? "checagem prévia: [bold]ligada[/] [grey]— pergunta à agenda se o número tem "
-                              + "WhatsApp antes de gastar o disparo. quem a agenda não confirmar é "
-                              + "segurado e fica na lista.[/]"
-                            : "checagem prévia: [grey]desligada — tenta todo mundo e descobre abrindo a "
-                              + "conversa (gasta tentativa em número morto).[/]");
+                        AlternarSegurar();
                         Salvar(serial);
                         break;
                     case "bip" or "som":
-                        _bip = !_bip;
-                        AnsiConsole.MarkupLine(_bip
-                            ? "bip a cada mensagem: [bold]ligado[/] [grey](agudo curto = saiu; dois graves "
-                              + "= não saiu). dá pra acompanhar o lote sem olhar a tela.[/]"
-                            : "bip a cada mensagem: [grey]desligado (lote silencioso).[/]");
-                        if (_bip)
-                        {
-                            await BiparAsync(true); // amostra na hora: som que ninguém ouviu não foi configurado.
-                        }
+                        await AlternarBipAsync();
                         Salvar(serial);
                         break;
                     case "acentos" or "semacento":
                         TirarAcentos();
                         Salvar(serial);
                         break;
-                    case "d" or "digitacao" or "digitação":
-                        _digitacaoHumana = !_digitacaoHumana;
-                        options.Value.HumanTyping = _digitacaoHumana;
-                        AnsiConsole.MarkupLine(_digitacaoHumana
-                            ? "[bold]digitação humana LIGADA:[/] digita caractere a caractere, o destinatário vê "
-                              + "\"digitando…\". [yellow]só ASCII: acento e emoji são barrados no pré-voo.[/]"
-                            : "[bold]digitação humana DESLIGADA:[/] o texto vai pronto pelo deep link, então "
-                              + "[green]aceita acento, emoji e quebra de linha[/]. "
-                              + "[yellow]em troca não há digitação, e o destinatário não vê \"digitando…\".[/]");
+                    case "digitacao" or "digitação":
+                        AlternarDigitacaoHumana();
                         Salvar(serial);
                         break;
                     case "x" or "remover" or "excluir":
@@ -558,13 +603,10 @@ internal sealed class PhoneConsoleCommand(
                     case "gravar" or "g":
                         await GravarAgendaAsync(ct);
                         break;
-                    case "relatorio" or "relatório" or "planilha":
-                        // Sem contexto de lote: o recorte vira o histórico inteiro, e a planilha diz
-                        // isso na aba Resumo em vez de deixar parecer que aqueles números são de hoje.
-                        GerarRelatorio(serial, null);
-                        break;
-                    case "suspensos":
-                        Suspensos();
+                    // `suspensos` continua caindo aqui: a quarentena virou aba da planilha, e quem
+                    // digitava a palavra tem que chegar onde o dado foi parar.
+                    case "relatorio" or "relatório" or "planilha" or "suspensos":
+                        Planilha(serial);
                         Salvar(serial);
                         break;
                     default:
@@ -581,7 +623,9 @@ internal sealed class PhoneConsoleCommand(
                                 + "[grey]para SOMAR o resto sem perder o que já entrou.[/]");
                             break;
                         }
-                        AnsiConsole.MarkupLine($"[red]comando desconhecido:[/] {partes[0].EscapeMarkup()}. digite [bold]ajuda[/].");
+                        AnsiConsole.MarkupLine(
+                            $"[red]comando desconhecido:[/] {partes[0].EscapeMarkup()}. "
+                            + "o menu está logo acima; [bold]comandos[/] lista todos.");
                         break;
                 }
             }
@@ -591,7 +635,11 @@ internal sealed class PhoneConsoleCommand(
                 // prompt: o próximo envio nasceria cancelado. Sai avisando, com o estado salvo.
                 AnsiConsole.MarkupLine("\n[yellow]interrompido. o que já saiu está no log; a lista foi salva.[/]");
                 Salvar(serial);
-                return 1;
+                // 130 e não 1: é o código consagrado para "interrompido pelo operador", e o atalho
+                // usa exatamente essa distinção para NÃO mostrar a caixa de "o console não abriu".
+                // Interromper um lote de propósito não é defeito, e tratar como defeito ensina o
+                // operador a ignorar a caixa que existe para os defeitos de verdade.
+                return 130;
             }
         }
 
@@ -647,6 +695,19 @@ internal sealed class PhoneConsoleCommand(
     /// <summary>Lê UMA variante, que pode ter várias linhas. Linha vazia fecha a variante; "fim" (ou o
     /// fim da entrada) encerra tudo.</summary>
     /// <returns>Texto null = a pessoa não digitou nada, ou seja, encerrou a lista.</returns>
+    /// <summary>Como se escreve uma linha em branco DENTRO do texto, dito nos dois caminhos que colam
+    /// template: o de colar novo e o de corrigir um existente.</summary>
+    /// <remarks>
+    /// 🔴 UM MÉTODO, e não a mesma frase escrita duas vezes. Ela já nasceu divergindo: a versão do
+    /// "corrigir" entrou depois e, enquanto foram dois textos, qualquer ajuste num deles (o `..` virar
+    /// outro escape, por exemplo) deixaria o outro ensinando o caminho antigo. Instrução duplicada
+    /// envelhece pela metade, e a metade velha é indistinguível da nova para quem lê.
+    /// </remarks>
+    private static void ExplicarLinhaEmBranco() =>
+        AnsiConsole.MarkupLine(
+            "[grey]para uma[/] [bold]linha em branco DENTRO[/] [grey]do texto, use[/] [bold]..[/] "
+            + "[grey](DOIS pontos) numa linha sozinha. um ponto só, como a linha vazia, encerra.[/]");
+
     private static (string? Texto, bool Fim) LerVariante()
     {
         var linhas = new List<string>();
@@ -655,6 +716,19 @@ internal sealed class PhoneConsoleCommand(
             var l = Console.ReadLine();
             if (l is null || l.Trim() is "fim" or ".")
             {
+                // 🔴 O PONTO SOZINHO EXPLICA O QUE ACABOU DE FAZER. Ele encerra a colagem inteira, e a
+                // confusão com o `..` foi relatada pelo próprio operador em 2026-08-20 ("eu achava que
+                // era com um ponto"). O engano é silencioso e caro: o bloco fecha, e as linhas seguintes
+                // do texto que a pessoa ia colar caem no menu, uma a uma, como comando desconhecido.
+                // Uma linha de aviso na hora vale mais que qualquer instrução impressa antes, porque
+                // chega no instante em que a expectativa e o resultado divergem.
+                if (l?.Trim() == ".")
+                {
+                    AnsiConsole.MarkupLine(
+                        "[yellow]o ponto sozinho encerrou a colagem.[/] [grey]se você queria uma linha "
+                        + "em branco DENTRO do texto, ela se escreve com[/] [bold]..[/] [grey](dois "
+                        + "pontos). entre de novo na opção[/] [bold]4[/] [grey]para continuar.[/]");
+                }
                 return (Juntar(linhas), true);
             }
             if (l.Trim().Length == 0)
@@ -793,11 +867,7 @@ internal sealed class PhoneConsoleCommand(
         }
         AnsiConsole.MarkupLine($"[grey]use[/] [bold]{TokenNome}[/] [grey]onde entra o nome do contato. cada template pode ter VÁRIAS linhas.[/]");
         AnsiConsole.MarkupLine("[grey]uma[/] [bold]linha vazia[/] [grey]fecha o template. outra linha vazia (ou[/] fim[grey]) encerra.[/]");
-        // Repetido aqui, no ponto de uso, e não só na ajuda: quem está colando texto não vai abrir o
-        // manual pra descobrir como fazer um parágrafo, vai tentar a linha vazia e cortar o template.
-        AnsiConsole.MarkupLine(
-            "[grey]para uma[/] [bold]linha em branco DENTRO[/] [grey]do texto, use[/] [bold]..[/] "
-            + "[grey](dois pontos) numa linha sozinha — a linha vazia fecharia o template.[/]");
+        ExplicarLinhaEmBranco();
 
         var antes = _textos.Count;
         while (true)
@@ -910,7 +980,7 @@ internal sealed class PhoneConsoleCommand(
             // e apagar caractere do texto de alguém sem avisar seria pior que barrar.
             AnsiConsole.MarkupLine(
                 $"[red]template {indice}[/] ainda tem [bold]{chars.EscapeMarkup()}[/], que não é acento "
-                + "(emoji ou símbolo). tire à mão, ou desligue a digitação humana com [bold]d[/].");
+                + "(emoji ou símbolo). tire à mão, ou desligue a digitação humana no [bold]9[/].");
         }
     }
 
@@ -940,29 +1010,6 @@ internal sealed class PhoneConsoleCommand(
         new([.. texto.Where(c => c != '\n' && (c > '~' || c < ' ')).Distinct()]);
 
     // ── Visualização ─────────────────────────────────────────────────────────────────────────────
-
-    private void Ver()
-    {
-        if (_contatos.Count == 0 && _textos.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[grey]nada carregado. use[/] [bold]contatos[/] [grey]e[/] [bold]textos[/].");
-            return;
-        }
-
-        MostrarTextos();
-
-        if (_contatos.Count > 0)
-        {
-            var semNome = _contatos.Count(c => c.Nome is null);
-            AnsiConsole.MarkupLine($"[bold]{_contatos.Count}[/] contato(s), {semNome} sem nome.");
-            MostrarAlguns(_contatos.Count, 15, i => $"  [blue]{i + 1}[/] {DescreverContato(i)}");
-        }
-
-        AnsiConsole.MarkupLine(
-            $"[grey]intervalo {_min}-{_max}s · teto {TetoDescrito()} · "
-            + (_bloco > 0 ? $"blocos ~{_bloco}/pausa ~{_pausaMin}min · " : "sem blocos · ")
-            + $"{JanelaDescrita()}[/]");
-    }
 
     /// <summary>Os templates INTEIROS, numerados. É o que permite escolher um deles: o resumo do menu
     /// corta, e dois templates longos que só diferem no fim ficam iguais na tela.</summary>
@@ -1059,12 +1106,38 @@ internal sealed class PhoneConsoleCommand(
         _ => "[red]não é brasileiro[/]",
     };
 
+    /// <summary>A única tela de conferência antes do disparo: quem recebe qual texto, e com quais
+    /// ajustes.</summary>
+    /// <remarks>
+    /// 🔴 ABSORVEU O `ver`, que era um segundo comando fazendo quase a mesma coisa: listava contatos e
+    /// templates lado a lado, sem cruzar um com o outro. Dois comandos vizinhos que respondem "o que
+    /// está carregado?" obrigam a pessoa a abrir os dois para ter certeza de que não perdeu nada, que é
+    /// o oposto de conferir. Sobrou o que cruza, e o que só o `ver` mostrava veio junto:
+    /// <list type="bullet">
+    /// <item>a linha de ajustes no rodapé (intervalo, cota ou agenda, janela);</item>
+    /// <item>o modo SEM TEMPLATE: o `ver` funcionava com a lista colada e nenhum texto, e a prévia
+    /// recusava. Recusar aqui obrigaria a inventar um template só para reler a lista.</item>
+    /// </list>
+    /// </remarks>
     private void Previa()
     {
-        if (!TemMaterial())
+        if (_contatos.Count == 0)
         {
+            AnsiConsole.MarkupLine("[red]sem contatos.[/] use [bold]contatos[/] e cole a lista.");
             return;
         }
+
+        // Sem template ainda não há cruzamento, mas há lista: mostra o que existe em vez de recusar.
+        if (_textos.Count == 0)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]{_contatos.Count} contato(s) na lista, nenhum template ainda.[/] [grey]cole ao "
+                + "menos um em[/] [bold]4[/] [grey]para ver quem recebe o quê.[/]");
+            MostrarAlguns(_contatos.Count, 15, i => $"  [blue]{i + 1}[/] {DescreverContato(i)}");
+            MostrarAjustes();
+            return;
+        }
+
         if (ProblemaDeNome() is { } problema)
         {
             AnsiConsole.MarkupLine($"[red]{problema}[/]");
@@ -1078,7 +1151,16 @@ internal sealed class PhoneConsoleCommand(
                 $"[grey]{semNome} contato(s) sem nome: recebem só templates que não usam {TokenNome}.[/]");
         }
         MostrarPlano(Sortear());
+        MostrarAjustes();
     }
+
+    /// <summary>Os ajustes do lote em uma linha. Herdado do `ver`: o plano na tela não diz nada sobre o
+    /// RITMO em que ele sai, e é o ritmo que decide se o lote acaba hoje ou de madrugada.</summary>
+    private void MostrarAjustes() =>
+        AnsiConsole.MarkupLine(
+            $"[grey]ritmo {RitmoDescrito()} · "
+            + (_agenda.Count > 0 ? $"agenda: {_agenda.Count} etapa(s)" : $"cota {TetoDescrito()}")
+            + $" · {JanelaDescrita()}[/]");
 
     /// <summary>Sorteia uma variante por contato. Sorteio, e não rodízio, porque rodízio cria uma
     /// regularidade (contato 1 = variante A, contato 4 = variante A…) que é justamente o padrão que
@@ -1232,9 +1314,23 @@ internal sealed class PhoneConsoleCommand(
         {
             // Não é enfeite: é o MESMO motivo do Defer de 180s do DispatchEngine. Disparar agora para
             // um contato recém-criado é disparar antes de o WhatsApp do aparelho conhecê-lo.
+            //
+            // 🔴 SEM PRAZO PROMETIDO, e com um jeito de CONFERIR no lugar dele. A medição que temos é de
+            // um dia, num parque de aparelhos: ela descreve o que aconteceu, não o que vai acontecer.
+            // Quem sincroniza é a conta Google do celular, e isso depende da rede dele, da bateria e do
+            // humor do Android. Prazo inventado vira promessa quebrada; o teste abaixo não quebra.
             AnsiConsole.MarkupLine(
-                "[yellow]dê alguns minutos antes de disparar[/][grey]: contato recém-criado precisa "
-                + "sincronizar pela conta Google até o WhatsApp do aparelho.[/]");
+                "[yellow]não dispare ainda[/][grey]: contato recém-criado só chega ao WhatsApp depois "
+                + "que o aparelho sincroniza pela conta Google. na nossa medição isso levou de 2,5 a 7 "
+                + "min, mas é o que MEDIMOS um dia, não um prazo: pode demorar mais.[/]");
+            // 🔴 O TESTE É O PRÓPRIO LOTE, e ele é seguro por causa do `segurar`: contato que a agenda
+            // não confirma é PULADO sem abrir conversa nenhuma, então sondar não gasta tentativa nem
+            // risco. Sem essa propriedade, "dispare para descobrir" seria um conselho caro.
+            AnsiConsole.MarkupLine(
+                "[grey]como saber que já foi, em vez de cronometrar: com o[/] [bold]10[/] [grey]ligado, "
+                + "dispare e olhe a contagem de \"a agenda confirmou\". quem ela não confirma é segurado "
+                + "sem gastar tentativa, então a sondagem é de graça: se não confirmar quase ninguém, "
+                + "ainda não sincronizou.[/]");
         }
     }
 
@@ -1304,8 +1400,8 @@ internal sealed class PhoneConsoleCommand(
         // 🔴 O TETO CORTA, e não recusa mais. Antes, lista maior que o teto era um NÃO seco: "1000
         // contatos passam do teto de 30, suba o teto ou reduza a lista". Isso empurrava o operador
         // para as duas saídas ruins — subir o teto para 1000, que é o disparo em rajada que o teto
-        // existe para impedir, ou recortar a lista à mão a cada execução. Com blocos e pausas o lote
-        // se auto-regula, então o teto passa a ser a COTA da execução: manda os primeiros, e o resto
+        // existe para impedir, ou recortar a lista à mão a cada execução. Com a agenda o lote
+        // se espalha pelo dia, então o teto passa a ser a COTA da execução: manda os primeiros, e o resto
         // fica na lista, que é justamente o que faz o ciclo de vários dias funcionar sozinho.
         // O log é lido AQUI porque o teto automático precisa dele antes de cortar o plano, e o painel
         // logo abaixo usa o mesmo resumo. Uma leitura serve às três coisas.
@@ -1316,8 +1412,11 @@ internal sealed class PhoneConsoleCommand(
 
         // 🔴 TETO AUTOMÁTICO: a cota do dia sai do histórico deste chip, descontando o que já saiu hoje.
         // É a única coisa que corta sozinha, e só porque o operador pediu com `teto auto`.
-        var tetoEfetivo = _teto;
-        if (_tetoAuto)
+        // 🔴 A AGENDA MANDA NA COTA quando existe. Duas fontes para "quantos saem agora" dariam duas
+        // respostas, e a que perde seria sempre a que o operador acabou de digitar. Aqui a cota da
+        // execução é a soma das etapas, e o pré-voo diz isso em voz alta.
+        var tetoEfetivo = _agenda.Count > 0 ? TotalAgendado() : _teto;
+        if (_tetoAuto && _agenda.Count == 0)
         {
             var sug = ChipHistory.Sugerir(
                 resumoDoLog.DiasAtivos, resumoDoLog.UltimoFechado, resumoDoLog.DiasDesdeUltimoDia);
@@ -1343,7 +1442,8 @@ internal sealed class PhoneConsoleCommand(
         {
             AnsiConsole.MarkupLine(
                 $"[grey]lista com[/] [bold]{plano.Count}[/][grey] contato(s); esta execução para depois "
-                + $"de[/] [bold]{tetoEfetivo}[/] [grey]ENVIO(s) ({(_tetoAuto ? "teto automático" : "teto")}). "
+                + $"de[/] [bold]{tetoEfetivo}[/] [grey]ENVIO(s) "
+                + $"({(_agenda.Count > 0 ? "soma da agenda" : _tetoAuto ? "teto automático" : "cota")}). "
                 + "quem falhar ou não tiver WhatsApp não gasta cota, então ela pode percorrer mais "
                 + "contatos que isso. o resto fica na lista.[/]");
         }
@@ -1364,16 +1464,16 @@ internal sealed class PhoneConsoleCommand(
             {
                 (minEfetivo, maxEfetivo) = (im, ix);
                 AnsiConsole.MarkupLine(
-                    $"[grey]intervalo desta execução:[/] [bold]{im}-{ix}s[/] [grey](calculado pra "
-                    + $"espalhar {alcance} pela janela; você não escolheu um, então o teto automático "
-                    + "preenche). fixe o seu com[/] intervalo <min> <max][grey].[/]");
+                    $"[grey]ritmo desta execução:[/] [bold]{EmMinutos(im)} a {EmMinutos(ix)} min[/] "
+                    + $"[grey](calculado pra espalhar {alcance} pela janela; você não escolheu um, então "
+                    + "o teto automático preenche). fixe o seu com[/] intervalo <min> <max][grey].[/]");
             }
             else if (ix > _max * 2)
             {
                 AnsiConsole.MarkupLine(
-                    $"[yellow]seu intervalo é {_min}-{_max}s e a cota é {alcance}.[/] [grey]isso despacha "
+                    $"[yellow]seu ritmo é {RitmoDescrito()} e a cota é {alcance}.[/] [grey]isso despacha "
                     + $"o dia inteiro em pouco tempo e depois silencia. pra espalhar, seria[/] "
-                    + $"intervalo {im} {ix}[grey]. não mudei nada: o ajuste é seu.[/]");
+                    + $"intervalo {EmMinutos(im)} {EmMinutos(ix)}[grey]. não mudei nada: o ajuste é seu.[/]");
             }
         }
 
@@ -1394,23 +1494,28 @@ internal sealed class PhoneConsoleCommand(
         AvisarRepeticao(plano, resumoDoLog.JaEnviados, resumoDoLog.TalvezReceberam);
         AvisarFormaSuspeita(plano);
 
-        // Quantas pausas cabem: uma a cada bloco fechado, e nenhuma depois da última mensagem. Com 30
-        // mensagens em blocos de 15 são 2 blocos e UMA pausa, não duas.
-        // Estimativa sobre o ALCANCE (a cota), não sobre a lista: com teto, o lote termina na cota.
-        var blocos = _bloco > 0 ? (alcance + _bloco - 1) / _bloco : 1;
-        var pausas = _bloco > 0 ? Math.Max(0, blocos - 1) : 0;
-        var esperaEntreMsg = (alcance - 1 - pausas) * ((minEfetivo + maxEfetivo) / 2.0);
-        var estimativa = TimeSpan.FromSeconds(Math.Max(0, esperaEntreMsg) + (pausas * _pausaMin * 60.0));
+        // Estimativa sobre o ALCANCE (a cota), não sobre a lista: com cota, o lote termina na cota.
+        var estimativa = EsperaDe(alcance, minEfetivo, maxEfetivo);
 
         AnsiConsole.MarkupLine(
-            $"[bold]{alcance}[/] mensagem(ns), intervalo {minEfetivo}-{maxEfetivo}s"
-            + (_bloco > 0
-                ? $", em ~[bold]{blocos}[/] bloco(s) de ~{_bloco} com pausa de ~{_pausaMin} min "
-                  + $"({JanelaDescrita()})."
-                : $", sem pausa entre blocos ({JanelaDescrita()})."));
-        AnsiConsole.MarkupLine(
-            $"[grey]~[/][bold]{Duracao(estimativa)}[/][grey] só de espera (o envio em si soma mais). "
-            + $"término por volta das[/] [bold]{DateTime.Now.Add(estimativa):HH:mm}[/][grey].[/]");
+            $"[bold]{alcance}[/] mensagem(ns), ritmo de {EmMinutos(minEfetivo)} a "
+            + $"{EmMinutos(maxEfetivo)} min ({JanelaDescrita()}).");
+        if (_agenda.Count > 0)
+        {
+            // Com agenda, a linha acima descreve o dia INTEIRO, e o dia não sai de uma vez: a tabela é
+            // que diz quando cada pedaço começa. Sem ela, "término por volta das 18h" seria lido como
+            // "vai ficar mandando até as 18h", que é o oposto do que a agenda faz.
+            AnsiConsole.MarkupLine(
+                "[bold]a agenda manda nesta execução[/] [grey](a cota fica de fora). o console espera a "
+                + "hora de cada etapa e dispara sozinho, então ele precisa ficar ABERTO até a última.[/]");
+            MostrarAgenda();
+        }
+        else
+        {
+            AnsiConsole.MarkupLine(
+                $"[grey]~[/][bold]{Duracao(estimativa)}[/][grey] só de espera (o envio em si soma mais). "
+                + $"término por volta das[/] [bold]{DateTime.Now.Add(estimativa):HH:mm}[/][grey].[/]");
+        }
         MostrarPainelDoChip(alcance, resumoDoLog);
         AvisarRiscoDoLote(alcance);
         AnsiConsole.Markup("[bold]confirmar? digite[/] sim [bold]:[/] ");
@@ -1423,7 +1528,7 @@ internal sealed class PhoneConsoleCommand(
 
         var log = AbrirLog(serial);
 
-        // 🔴 SEGURA O PC ACORDADO PELO LOTE INTEIRO. A pausa entre blocos passa ~30 min sem teclado nem
+        // 🔴 SEGURA O PC ACORDADO PELO LOTE INTEIRO. Uma etapa agendada passa horas sem teclado nem
         // mouse, que é o gatilho do standby do Windows: o mesmo defeito do celular dormindo, do outro
         // lado do cabo. Ver PcAcordado — inclusive por que a TELA continua livre pra apagar.
         using var acordado = PcAcordado.Ligar();
@@ -1443,8 +1548,9 @@ internal sealed class PhoneConsoleCommand(
         var diario = new DiarioDoLote();
         try
         {
-            var resumo = await DispararAsync(
-                plano, log, serial, tetoEfetivo, minEfetivo, maxEfetivo, diario, ct);
+            var resumo = _agenda.Count == 0
+                ? await DispararAsync(plano, log, serial, tetoEfetivo, minEfetivo, maxEfetivo, diario, ct)
+                : await DispararAgendaAsync(log, serial, minEfetivo, maxEfetivo, diario, ct);
 
             // O recorte de "sem conta" sai NO FECHO porque é a linha que sobra na tela e a que o
             // operador lê de manhã. Sem ele, "0 enviada(s), 87 falha(s)" some com a informação que
@@ -1494,7 +1600,7 @@ internal sealed class PhoneConsoleCommand(
     /// terminou às 3h da manhã é um caminho que ninguém vai copiar. A abertura também engole erro, e
     /// separadamente: falhar em ABRIR não pode esconder que o arquivo foi GERADO.</para>
     /// </remarks>
-    private static void GerarRelatorio(string serial, ContextoDoLote? lote)
+    private void GerarRelatorio(string serial, ContextoDoLote? lote)
     {
         try
         {
@@ -1506,7 +1612,8 @@ internal sealed class PhoneConsoleCommand(
             }
 
             var arquivo = PlanilhaDeEnvios.Gerar(
-                Higienizar(serial), linhas, lote, Pasta, DateTimeOffset.Now);
+                Higienizar(serial), linhas, lote, Pasta, DateTimeOffset.Now,
+                [.. _suspensos.Select(c => (c.Numero, c.Nome))]);
             AnsiConsole.MarkupLine($"[green]planilha:[/] {arquivo.EscapeMarkup()}");
             Abrir(arquivo);
         }
@@ -1551,6 +1658,102 @@ internal sealed class PhoneConsoleCommand(
     /// <param name="cota">Quantos ENVIOS esta execução pode fazer. 0 = sem cota.</param>
     /// <param name="intervaloMin">Intervalo mínimo DESTA execução; pode diferir de <c>_min</c> quando o
     /// teto automático preencheu um intervalo que o operador nunca escolheu.</param>
+    /// <summary>O lote em ETAPAS: espera a hora de cada uma e dispara a cota dela.</summary>
+    /// <remarks>
+    /// 🔴 CHAMA O MESMO <see cref="DispararAsync"/> uma vez por etapa, em vez de ensinar o laço de
+    /// disparo a conhecer horário. O laço já tem disjuntor, dedup, segunda chance, quarentena e
+    /// janela; enfiar agenda ali dentro seria uma sexta razão para ele parar no meio, e cada uma delas
+    /// precisa de mensagem própria. Aqui a etapa é só "uma execução com cota N que começa às H".
+    /// <para>SORTEIA DE NOVO A CADA ETAPA, e é obrigatório: quem recebeu na etapa anterior já saiu de
+    /// <c>_contatos</c> (o <c>Persistir</c> tira a cada entrega), então um plano tirado lá atrás
+    /// mandaria de novo para quem já recebeu.</para>
+    /// <para>O console precisa ficar ABERTO entre as etapas, e por isso ele segura o PC acordado e a
+    /// espera tem cronômetro na tela: espera sem contador é indistinguível de programa travado.</para>
+    /// </remarks>
+    private async Task<ResumoDoLote> DispararAgendaAsync(
+        string log,
+        string serial,
+        int intervaloMin,
+        int intervaloMax,
+        DiarioDoLote diario,
+        CancellationToken ct)
+    {
+        var (enviados, falhas, semConta, confirmadas) = (0, 0, 0, 0);
+
+        for (var i = 0; i < _agenda.Count; i++)
+        {
+            var etapa = _agenda[i];
+            await EsperarHoraAsync(etapa, i + 1, _agenda.Count, ct);
+
+            var plano = Sortear();
+            if (plano.Count == 0)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[yellow]a lista acabou antes da etapa {i + 1}.[/] [grey]as etapas restantes não "
+                    + "têm quem receber; cole mais contatos e rode de novo.[/]");
+                break;
+            }
+
+            // 🔴 O APARELHO É RECONFERIDO A CADA ETAPA, e não só no pré-voo. Entre confirmar o lote e a
+            // etapa das 18h passam horas: cabo esbarrado, celular reiniciado, USB que dormiu, tela
+            // travada. Sem esta conferência, a etapa inteira era despejada contra um aparelho morto, uma
+            // falha por contato, e com `parar 0` (o padrão) nada interrompia isso.
+            //
+            // PULA A ETAPA em vez de encerrar o lote: as etapas seguintes são horas depois, e nesse
+            // intervalo o cabo pode voltar. Encerrar tudo por causa de um tropeço às 14h jogaria fora um
+            // cronograma que ainda tinha conserto, e é a decisão irreversível entre as duas.
+            if (!await AparelhoPronto(ct))
+            {
+                AnsiConsole.MarkupLine(
+                    $"[red]etapa {i + 1} pulada: o aparelho não está pronto agora.[/] [grey]nada foi "
+                    + "tentado, e ninguém saiu da lista. religue o cabo e a próxima etapa segue no "
+                    + "horário dela.[/]");
+                continue;
+            }
+
+            AnsiConsole.Write(new Rule(
+                $"[bold]etapa {i + 1}/{_agenda.Count}[/]  ·  {etapa.Hora:HH\\:mm}  ·  "
+                + $"{etapa.Quantos} envio(s)").LeftJustified());
+
+            var r = await DispararAsync(
+                plano, log, serial, etapa.Quantos, intervaloMin, intervaloMax, diario, ct);
+            enviados += r.Enviados;
+            falhas += r.Falhas;
+            semConta += r.SemConta;
+            confirmadas += r.EntregasConfirmadas;
+        }
+
+        return new ResumoDoLote(enviados, falhas, semConta, confirmadas);
+    }
+
+    /// <summary>Segura o lote até a hora da etapa, com cronômetro. Hora já passada começa agora.</summary>
+    /// <remarks>
+    /// Hora passada NÃO vira "amanhã": o console não sobrevive a uma noite por decisão registrada na
+    /// janela do laço de disparo, e adiar para amanhã seria prometer um envio que ninguém vai ver
+    /// acontecer. Começar agora é o que o operador quis dizer ao confirmar o lote depois da hora.
+    /// </remarks>
+    private static async Task EsperarHoraAsync(Agendamento etapa, int numero, int total, CancellationToken ct)
+    {
+        var alvo = DateTime.Now.Date.Add(etapa.Hora.ToTimeSpan());
+        if (alvo <= DateTime.Now)
+        {
+            AnsiConsole.MarkupLine(
+                $"[blue]etapa {numero}/{total}:[/] [grey]as {etapa.Hora:HH\\:mm} já passaram, "
+                + "então ela começa agora.[/]");
+            return;
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[blue]etapa {numero}/{total} começa às {etapa.Hora:HH\\:mm}.[/] [grey]deixe o console "
+            + "aberto; o PC não vai suspender enquanto o lote roda.[/]");
+        for (var falta = alvo - DateTime.Now; falta > TimeSpan.Zero; falta = alvo - DateTime.Now)
+        {
+            Console.Write($"\r   começa em {falta:hh\\:mm\\:ss}  (Ctrl+C interrompe)   ");
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+        }
+        Console.Write("\r" + new string(' ', 48) + "\r");
+    }
+
     private async Task<ResumoDoLote> DispararAsync(
         List<(Contato Contato, int Variante, string Texto)> plano,
         string log,
@@ -1609,10 +1812,6 @@ internal sealed class PhoneConsoleCommand(
         var naoConfirmados = new List<string>();
         var confirmados = 0;
 
-        // Tentativas desde a última pausa longa, e o tamanho SORTEADO deste bloco.
-        var noBloco = 0;
-        var alvoBloco = ComJitter(_bloco, JitterBloco);
-
         // 🔴 TIRA DA LISTA E GRAVA EM DISCO A CADA ENTREGA, e não só no `finally`.
         //
         // O `finally` cobre exceção e Ctrl+C, que passam por ele. NÃO cobre queda de energia, reboot
@@ -1646,11 +1845,21 @@ internal sealed class PhoneConsoleCommand(
                 // estaria por perto para ver dar errado. O resto fica na lista.
                 if (!DentroDaJanela())
                 {
+                    // 🔴 QUEM SOBREPÕE QUEM, dito na hora em que a regra é aplicada. A janela vence a
+                    // agenda, e a palavra "execução" mentia quando havia etapas: o que acaba aqui é a
+                    // ETAPA, e as seguintes continuam esperando a hora delas. Quem lesse "execução
+                    // encerrada" às 22h fecharia a janela do console achando que o dia tinha acabado.
                     AnsiConsole.MarkupLine(
-                        $"[blue]fora da janela de envio ({_horaInicio}h-{_horaFim}h): execução "
-                        + $"encerrada.[/] [grey]{plano.Count - i} contato(s) ficam na lista para o "
-                        + "próximo dia. abra com[/] janela 0 24 [grey]se quiser rodar em qualquer "
-                        + "horário.[/]");
+                        _agenda.Count > 0
+                            ? $"[blue]{DateTime.Now:HH\\:mm} está fora da janela ({JanelaDescrita()}): "
+                              + $"esta etapa não manda nada.[/] [grey]a janela do[/] [bold]8[/] "
+                              + "[grey]manda sobre a hora do[/] [bold]5[/][grey]. os "
+                              + $"{plano.Count - i} contato(s) ficam na lista, e as etapas seguintes "
+                              + "continuam valendo.[/]"
+                            : $"[blue]fora da janela de envio ({JanelaDescrita()}): execução "
+                              + $"encerrada.[/] [grey]{plano.Count - i} contato(s) ficam na lista para o "
+                              + "próximo dia. abra a janela no[/] [bold]8[/] [grey]se quiser rodar em "
+                              + "qualquer horário.[/]");
                     break;
                 }
 
@@ -1717,10 +1926,6 @@ internal sealed class PhoneConsoleCommand(
                 }
 
                 tentados.Add(contato.Numero);
-                // Conta TENTATIVA, não entrega: o que desenha padrão para o WhatsApp é a conversa
-                // aberta, e ela é aberta mesmo quando o envio falha. Contato pulado por duplicata não
-                // chega aqui, e é certo que não conte: nada foi aberto por ele.
-                noBloco++;
                 var r = await phone.SendWhatsAppMessageAsync(contato.Numero, texto, ct);
 
                 // 🔴 SEGUNDA CHANCE COM A OUTRA FORMA DO NÚMERO. O WhatsApp guarda a conta ora com o
@@ -1902,7 +2107,7 @@ internal sealed class PhoneConsoleCommand(
                         candidatos.Add(new ContatoSuspenso(
                             numeroUsado, contato.Nome, r.Causa, DateTimeOffset.Now));
                         AnsiConsole.MarkupLine(
-                            "[grey]  sai da lista no fim do lote. volta com[/] suspensos[grey].[/]");
+                            "[grey]  sai da lista no fim do lote. volta pela planilha, no[/] [bold]12[/][grey].[/]");
                     }
                 }
                 else
@@ -2044,16 +2249,13 @@ internal sealed class PhoneConsoleCommand(
                     break;
                 }
 
-                // 🔴 PAUSA LONGA ENTRE BLOCOS, e ela SUBSTITUI a espera normal, não soma. O que pesa
-                // contra o chip é padrão: fluxo contínuo, hora após hora, no mesmo intervalo, é
-                // assinatura de máquina. Gente manda um punhado, some, volta depois.
-                if (_bloco > 0 && noBloco >= alvoBloco && i < plano.Count - 1)
-                {
-                    await PausarAsync(ComJitter(_pausaMin, JitterPausa), noBloco, plano.Count - (i + 1), ct);
-                    noBloco = 0;
-                    alvoBloco = ComJitter(_bloco, JitterBloco);
-                }
-                else if (i < plano.Count - 1)
+                // 🔴 A PAUSA LONGA ENTRE BLOCOS SAIU em 2026-08-20, por decisão do operador ("sem
+                // pausas"). Ela mandava um punhado, sumia por ~30 min e voltava, para o lote não ter a
+                // regularidade de máquina. Quem faz esse trabalho agora é a AGENDA: etapas com hora
+                // marcada produzem o mesmo desenho (punhado, silêncio longo, punhado), com a diferença
+                // de que os intervalos são escolhidos por quem opera em vez de sorteados. O que a agenda
+                // NÃO cobre é o lote sem agenda, e ali o espaçamento é o ritmo entre mensagens.
+                if (i < plano.Count - 1)
                 {
                     // 🔴 FALHA NÃO É ENVIO. Nada saiu, então esperar os 150-360s do ritmo normal é
                     // pagar o preço do anti-ban por uma mensagem que não existiu: um lote com cinco
@@ -2138,7 +2340,8 @@ internal sealed class PhoneConsoleCommand(
                         $"[yellow]{candidatos.Count} contato(s) SAÍRAM da lista.[/] [grey]o WhatsApp "
                         + "negou estes números em todas as formas do 9º dígito que existem para eles. "
                         + "insistir só abriria conversa contra número inexistente, lote após lote. eles "
-                        + "estão na planilha, em vermelho, com o motivo. para trazer de volta:[/] suspensos");
+                        + "estão na planilha, na aba[/] [bold]Suspensos[/][grey], com o motivo e a última "
+                        + "tentativa de cada um. para trazer de volta:[/] [bold]12[/]");
                     MostrarAlguns(candidatos.Count, 10,
                         i => $"  [red]{candidatos[i].Numero}[/] {(candidatos[i].Nome ?? "").EscapeMarkup()}");
                 }
@@ -2197,8 +2400,9 @@ internal sealed class PhoneConsoleCommand(
                         "[yellow]mais da metade não confirmada.[/] [grey]duas causas possíveis: (1) você "
                         + "ainda não rodou o[/] gravar [grey]— sem ele os contatos NÃO entram na agenda "
                         + "do celular e vão continuar segurados; (2) você gravou há pouco e é sync, que "
-                        + "leva de 2,5 a 7 min. se já gravou e esperou, aí sim provavelmente não têm "
-                        + "conta — confira a forma deles com[/] c[grey].[/]");
+                        + "na nossa medição levou de 2,5 a 7 min e pode demorar mais. se já gravou e "
+                        + "esperou, aí sim provavelmente não têm conta: confira a forma deles com[/] "
+                        + "[bold]3[/][grey].[/]");
                 }
                 MostrarAlguns(naoConfirmados.Count, 10, i => $"  [grey]{naoConfirmados[i]}[/]", " não confirmado(s)");
             }
@@ -2321,12 +2525,12 @@ internal sealed class PhoneConsoleCommand(
         var paraEspalhar = Math.Max(1, resta);
         var (im, ix) = ChipHistory.IntervaloPara(paraEspalhar, _horaFim - _horaInicio);
         AnsiConsole.MarkupLine(
-            $"[grey]para espalhar ~{paraEspalhar} pela janela, o intervalo seria[/] "
-            + $"[bold]{im}-{ix}s[/] [grey]({Duracao(TimeSpan.FromSeconds(im))} a "
-            + $"{Duracao(TimeSpan.FromSeconds(ix))} entre mensagens); o seu é {_min}-{_max}s.[/]");
+            $"[grey]para espalhar ~{paraEspalhar} pela janela, o ritmo seria[/] "
+            + $"[bold]{EmMinutos(im)} a {EmMinutos(ix)} min[/] [grey]entre mensagens; o seu é "
+            + $"{RitmoDescrito()}.[/]");
         AnsiConsole.MarkupLine(
             "[grey]é sugestão, não limite: nada será cortado. para aplicar:[/] "
-            + $"teto {paraEspalhar} [grey]e[/] intervalo {im} {ix}");
+            + $"teto {paraEspalhar} [grey]e[/] intervalo {EmMinutos(im)} {EmMinutos(ix)}");
     }
 
     /// <summary>Os três sinais de risco que o console consegue enxergar antes de disparar.</summary>
@@ -2420,15 +2624,6 @@ internal sealed class PhoneConsoleCommand(
         AnsiConsole.MarkupLine("[yellow]tire com[/] x [yellow]se não quiser mandar de novo.[/]");
     }
 
-    /// <summary>A faixa que o <see cref="ComJitter"/> pode sortear, como "12-18". Deriva dos MESMOS
-    /// limites do sorteio: texto escrito à mão divergiria do código no primeiro ajuste da folga, e aí a
-    /// tela estaria mentindo sobre o que o sistema faz.</summary>
-    private static string FaixaJitter(int centro, double folga) =>
-        centro <= 0
-            ? "0"
-            : $"{Math.Max(1, (int)Math.Floor(centro * (1 - folga)))}-"
-              + $"{Math.Max(1, (int)Math.Ceiling(centro * (1 + folga)))}";
-
     /// <summary>Bip de acompanhamento: agudo curto quando saiu, dois graves quando não saiu.</summary>
     /// <remarks>
     /// 🔴 NUNCA PROPAGA. Um lote de horas não pode morrer porque a máquina não tem alto-falante, ou
@@ -2469,14 +2664,6 @@ internal sealed class PhoneConsoleCommand(
         }
     }
 
-    /// <summary>Sorteia em torno de um centro, com a folga percentual dada. Nunca devolve menos de 1.</summary>
-    private static int ComJitter(int centro, double folga) =>
-        centro <= 0
-            ? centro
-            : Math.Max(1, Random.Shared.Next(
-                (int)Math.Floor(centro * (1 - folga)),
-                (int)Math.Ceiling(centro * (1 + folga)) + 1));
-
     /// <summary>Agora está dentro da janela em que é permitido mandar mensagem?</summary>
     private bool DentroDaJanela()
     {
@@ -2484,43 +2671,25 @@ internal sealed class PhoneConsoleCommand(
         return h >= _horaInicio && h < _horaFim;
     }
 
+    /// <summary>A hora agendada cai fora da janela permitida? Mesma conta do
+    /// <see cref="DentroDaJanela"/>, aplicada a uma hora futura em vez de agora.</summary>
+    /// <remarks>
+    /// Um método, e não a expressão repetida nos dois lugares que a usam (a observação por etapa e o
+    /// aviso do rodapé). Repetida, ela vira duas verdades independentes: bastaria alguém trocar `>=`
+    /// por `>` num dos lados para a tabela marcar uma etapa que o rodapé não conta, e ninguém
+    /// desconfiaria de um aviso que some.
+    /// </remarks>
+    private bool ForaDaJanela(TimeOnly hora) => hora.Hour < _horaInicio || hora.Hour >= _horaFim;
+
     /// <summary>A janela em uma linha, para o menu e o pré-voo. 0h-24h não é horário, é "sem
     /// restrição", e mostrar "0h-24h" faria o operador procurar uma limitação que não existe.</summary>
     private string TetoDescrito() =>
         _tetoAuto ? "automático (pelo histórico do chip)"
-        : _teto == 0 ? "sem teto"
+        : _teto == 0 ? "sem limite"
         : _teto.ToString(CultureInfo.InvariantCulture);
 
     private string JanelaDescrita() =>
         _horaInicio == 0 && _horaFim == 24 ? "qualquer horário" : $"{_horaInicio}h-{_horaFim}h";
-
-    /// <summary>Pausa entre blocos, com o horário de volta e um cronômetro na tela.</summary>
-    /// <remarks>
-    /// 🔴 O CRONÔMETRO NÃO É ENFEITE. Uma pausa de 30 minutos sem nada na tela é indistinguível de um
-    /// console travado, e a reação natural é fechar a janela — que é justamente o que faz perder o
-    /// lote. O horário de volta serve para quem sai de perto: dá para conferir o relógio da parede em
-    /// vez de ficar olhando o terminal.
-    ///
-    /// <para>Contagem sem markup e reescrita na MESMA linha com <c>\r</c>: uma tag do Spectre aberta
-    /// numa linha parcial embaralha a saída seguinte. E a linha é limpa com espaços no fim, senão o
-    /// resto do texto anterior fica pendurado quando o contador encurta.</para>
-    /// </remarks>
-    private static async Task PausarAsync(int minutos, int noBloco, int restantes, CancellationToken ct)
-    {
-        var volta = DateTime.Now.AddMinutes(minutos);
-        AnsiConsole.MarkupLine(
-            $"[blue]bloco de {noBloco} concluído.[/] [grey]pausa de {minutos} min. volta às[/] "
-            + $"[bold]{volta:HH:mm}[/][grey], com {restantes} contato(s) pela frente.[/]");
-
-        var fim = DateTime.UtcNow.AddMinutes(minutos);
-        for (var falta = fim - DateTime.UtcNow; falta > TimeSpan.Zero; falta = fim - DateTime.UtcNow)
-        {
-            Console.Write($"\r   retomando em {falta:hh\\:mm\\:ss}  (Ctrl+C interrompe)   ");
-            await Task.Delay(TimeSpan.FromSeconds(1), ct);
-        }
-        Console.Write("\r" + new string(' ', 48) + "\r");
-        AnsiConsole.MarkupLine("[blue]voltando.[/]");
-    }
 
     /// <summary>Avisa, ANTES do lote começar, quais números não têm forma de celular.</summary>
     /// <remarks>
@@ -2576,23 +2745,81 @@ internal sealed class PhoneConsoleCommand(
 
     // ── Ajustes ──────────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>O ritmo entre mensagens, EM MINUTOS. Guardado em segundos, falado em minutos.</summary>
+    /// <remarks>
+    /// 🔴 A UNIDADE DA TELA MUDOU EM 2026-08-20, por pedido do operador, e mudou INTEIRA. Segundo é a
+    /// unidade certa para o laço de disparo, que sorteia a espera, e a errada para quem decide: "150 a
+    /// 360" exige uma divisão de cabeça para virar a única pergunta que interessa, que é quanto tempo o
+    /// lote vai levar. O campo continua em segundos; o que virou minuto é toda entrada e toda saída.
+    /// <para>Trocar a unidade em UM lugar seria pior que não trocar: o menu diria "2,5 a 6 min", o
+    /// comando pediria segundos, e alguém digitaria 4 querendo 4 minutos e recebendo 4 segundos, que é
+    /// justamente o intervalo de rajada que o projeto inteiro existe para evitar.</para>
+    /// </remarks>
     private void Intervalo(string[] partes)
     {
         if (partes.Length < 3
-            || !int.TryParse(partes[1], out var min)
-            || !int.TryParse(partes[2], out var max)
-            || min < 0 || max < min)
+            || MinutosEmSegundos(partes[1]) is not { } min
+            || MinutosEmSegundos(partes[2]) is not { } max
+            || max < min)
         {
-            AnsiConsole.MarkupLine("[red]uso:[/] intervalo <min> <max>  (segundos, max >= min)");
+            AnsiConsole.MarkupLine(
+                $"[red]uso:[/] intervalo <min> <max>   [grey](em MINUTOS, aceita 2,5. atual: {RitmoDescrito()})[/]");
+            AnsiConsole.MarkupLine(
+                "[grey]exemplo:[/] intervalo 4 10 [grey]espera de 4 a 10 min entre mensagens, sorteada a "
+                + "cada uma.[/]");
             return;
         }
         (_min, _max) = (min, max);
-        AnsiConsole.MarkupLine($"intervalo entre envios: [bold]{_min}-{_max}s[/].");
-        if (max < 60)
+        AnsiConsole.MarkupLine($"ritmo entre mensagens: [bold]{RitmoDescrito()}[/].");
+        AvisarRitmoCurto();
+    }
+
+    /// <summary>Os dois avisos do ritmo, compartilhados pelo comando e pelo menu.</summary>
+    private void AvisarRitmoCurto()
+    {
+        if (_max < 60)
         {
-            AnsiConsole.MarkupLine("[yellow]intervalo curto num chip novo é o gatilho de ban que este projeto tenta evitar.[/]");
+            AnsiConsole.MarkupLine(
+                "[yellow]menos de um minuto entre mensagens num chip novo é o gatilho de ban que este "
+                + "projeto tenta evitar.[/]");
+        }
+        // 🔴 O ENGANO PREVISÍVEL DA TROCA DE UNIDADE, dito em voz alta em vez de recusado. Quem tem o
+        // dedo viciado em `intervalo 240 600` vai digitar isso de novo, e em minutos aquilo são 4 horas
+        // entre mensagens: um lote que parece travado, sem nenhuma mensagem de erro para explicar.
+        // Recusar seria pior, porque 4 horas é um valor legítimo para quem quer espalhar o dia.
+        if (_max >= 3600)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]conferindo: são {EmMinutos(_max)} MINUTOS entre mensagens[/] "
+                + $"[grey](até {Duracao(TimeSpan.FromSeconds(_max))} de espera). se você quis segundos, "
+                + "o console agora fala em minutos:[/] intervalo 4 10 [grey]é de 4 a 10 min.[/]");
         }
     }
+
+    /// <summary>O ritmo em uma linha, na unidade da tela.</summary>
+    private string RitmoDescrito() => $"{EmMinutos(_min)} a {EmMinutos(_max)} min";
+
+    /// <summary>Segundos em minutos para LER: "2,5", "6", "0,5". Uma casa decimal basta.</summary>
+    private static string EmMinutos(int segundos) =>
+        (segundos / 60.0).ToString("0.#", CultureInfo.InvariantCulture).Replace('.', ',');
+
+    /// <summary>Minutos digitados em segundos para GUARDAR. Aceita vírgula e ponto.</summary>
+    /// <remarks>
+    /// 🔴 O TETO DE 24 HORAS NÃO É POLÍTICA, É ARITMÉTICA. Sem ele, "999999999" vira uma multiplicação
+    /// que não cabe em <c>int</c>, e o cast em C# não estoura: ele TRUNCA em silêncio e devolve um
+    /// número negativo. Um ritmo negativo passaria pela validação de max >= min, seria gravado no
+    /// disco e reapareceria como espera absurda no meio do lote. O limite recusa o que não tem
+    /// representação, e não o que é grande demais para o gosto de alguém: 24h de espera entre
+    /// mensagens continua aceito, e é mais do que qualquer janela de envio comporta.
+    /// </remarks>
+    private static int? MinutosEmSegundos(string texto) =>
+        double.TryParse(
+            texto.Trim().Replace(',', '.'),
+            NumberStyles.Float, CultureInfo.InvariantCulture, out var minutos)
+            && minutos >= 0
+            && minutos <= 24 * 60
+            ? (int)Math.Round(minutos * 60)
+            : null;
 
     /// <summary>Teto AUTOMÁTICO: a cota do dia sai do histórico do próprio chip, a cada lote.</summary>
     /// <remarks>
@@ -2675,8 +2902,25 @@ internal sealed class PhoneConsoleCommand(
 
     private void Teto(string[] partes)
     {
+        // 🔴 DEFINIR COTA APAGA A AGENDA, e é dito em voz alta. As duas respondem "quantos saem nesta
+        // execução", e a regra escrita é que a agenda ganha: sem esta linha, digitar `teto 30` com uma
+        // agenda de pé não faria nada, e o console mostraria a cota nova enquanto obedecia a agenda
+        // velha. Estado que a tela mostra e o lote ignora é a pior das duas opções.
+        void ApagarAgenda()
+        {
+            if (_agenda.Count == 0)
+            {
+                return;
+            }
+            AnsiConsole.MarkupLine(
+                $"[yellow]a agenda de {_agenda.Count} etapa(s) foi apagada.[/] [grey]cota e agenda "
+                + "respondem a mesma pergunta, e agora quem manda é a cota.[/]");
+            _agenda.Clear();
+        }
+
         if (partes.Length >= 2 && string.Equals(partes[1].Trim(), "auto", StringComparison.OrdinalIgnoreCase))
         {
+            ApagarAgenda();
             _tetoAuto = true;
             _teto = 0;
             AnsiConsole.MarkupLine(
@@ -2692,81 +2936,47 @@ internal sealed class PhoneConsoleCommand(
             AnsiConsole.MarkupLine(
                 $"[red]uso:[/] teto <n>   [grey]ou[/] teto auto   (atual: {TetoDescrito()})");
             AnsiConsole.MarkupLine(
-                "[grey]quantas mandar NESTA execução; o resto fica na lista.[/] 0 [grey]= sem teto, "
+                "[grey]quantas mandar NESTA execução; o resto fica na lista.[/] 0 [grey]= sem limite, "
                 + "manda a lista inteira.[/] auto [grey]= deriva do histórico do chip a cada lote.[/]");
             return;
         }
+        ApagarAgenda();
         _tetoAuto = false;
         _teto = n;
         AnsiConsole.MarkupLine(
             _teto == 0
-                ? "teto: [bold]sem teto[/] [grey](manda a lista inteira)[/]."
+                ? "teto: [bold]sem limite[/] [grey](manda a lista inteira)[/]."
                 : $"cota por execução: [bold]{_teto}[/] [grey](o resto fica na lista)[/].");
     }
 
-    /// <summary>Tamanho do bloco e duração da pausa, num comando só.</summary>
+    /// <summary>A janela pelo menu: pergunta em vez de exigir a sintaxe do comando.</summary>
     /// <remarks>
-    /// Os dois juntos porque um sem o outro não quer dizer nada: bloco sem pausa é o fluxo contínuo de
-    /// antes, e pausa sem bloco não tem quando acontecer. Separar em dois comandos deixaria o console
-    /// passar por estados que não fazem sentido entre um ajuste e o outro.
+    /// 🔴 GANHOU LINHA PRÓPRIA em 2026-08-20. Ela morava dentro do "blocos, pausa e janela", aparecia
+    /// na coluna do estado e não era perguntada em lugar nenhum: para mexer no horário era preciso
+    /// descobrir sozinho que existia um comando `janela 8 22`. Ajuste anunciado no painel e
+    /// inalcançável pelo painel é pior que ajuste escondido, porque quem lê acredita que já pode mexer.
     /// </remarks>
-    /// <summary>Digitado com argumentos, aplica; digitado sozinho (ou pelo menu), pergunta.</summary>
-    private void BlocosOuInterativo(string[] partes, string serial)
+    private void JanelaInterativa()
     {
-        if (partes.Length >= 3)
-        {
-            Blocos(partes);
-            Salvar(serial);
-            return;
-        }
-
         AnsiConsole.MarkupLine(
-            $"[grey]hoje: {(_bloco == 0 ? "sem blocos" : $"{_bloco} mensagens e pausa de {_pausaMin} min")}."
-            + " 0 mensagens desliga a pausa.[/]");
-        AnsiConsole.Markup("[grey]mensagens por bloco (Enter mantém):[/] ");
-        var qtd = Console.ReadLine();
-        if (string.IsNullOrWhiteSpace(qtd))
+            $"[grey]hoje: {JanelaDescrita()}. fora dela o lote encerra e o resto fica na lista.[/]");
+        AnsiConsole.Markup(
+            "[grey]horário permitido, \"inicio fim\" em horas ([/]0 24[grey] = qualquer horário, "
+            + "Enter mantém):[/] ");
+        var horas = Console.ReadLine()?.Trim() ?? "";
+        if (horas.Length == 0)
         {
             AnsiConsole.MarkupLine("[grey]mantido.[/]");
             return;
         }
-        AnsiConsole.Markup("[grey]minutos de pausa entre blocos:[/] ");
-        var min = Console.ReadLine();
-        Blocos(["blocos", qtd.Trim(), (min ?? "").Trim()]);
-        Salvar(serial);
-    }
+        Janela(["janela", .. horas.Split(' ', StringSplitOptions.RemoveEmptyEntries)]);
 
-    private void Blocos(string[] partes)
-    {
-        var atual = _bloco == 0
-            ? "sem blocos (fluxo contínuo)"
-            : $"{_bloco} mensagens, pausa de {_pausaMin} min";
-        if (partes.Length < 3
-            || !int.TryParse(partes[1], out var n) || n < 0 || n > 200
-            || !int.TryParse(partes[2], out var min) || min < 1 || min > 720)
+        // A agenda é lida em cima da janela: mudar uma sem olhar a outra é como uma etapa das 23h fica
+        // marcada e nunca sai.
+        if (_agenda.Count > 0)
         {
-            AnsiConsole.MarkupLine($"[red]uso:[/] blocos <mensagens> <minutos de pausa>   (atual: {atual})");
-            AnsiConsole.MarkupLine(
-                "[grey]exemplo:[/] blocos 15 30 [grey]manda um punhado de ~15, para ~30 min, e repete.[/] "
-                + "blocos 0 30 [grey]desliga a pausa e volta ao fluxo contínuo.[/]");
-            AnsiConsole.MarkupLine(
-                "[grey]os dois números são o CENTRO, não o valor exato: cada bloco sorteia em volta "
-                + "(12-18 mensagens, 22-38 min). repetir 15 e 30 cravados seria o único trecho "
-                + "regular da série, que é a assinatura que a pausa existe para desmanchar.[/]");
-            return;
+            MostrarAgenda();
         }
-        (_bloco, _pausaMin) = (n, min);
-        // 🔴 A FAIXA SORTEADA NO RAMO DE SUCESSO, e não só no de erro. Ela estava explicada apenas na
-        // mensagem de uso, ou seja, só via quem errava o comando. Quem acertava configurava 15 e 30, via
-        // sair 14 e 29, e concluía que o sistema não obedece — relatado operando em 2026-08-10. Número
-        // sorteado sem a faixa à vista não parece sorteio, parece defeito.
-        AnsiConsole.MarkupLine(
-            _bloco == 0
-                ? "blocos: [bold]desligados[/] [grey](fluxo contínuo)[/]."
-                : $"blocos de [bold]{_bloco}[/] mensagem(ns), pausa de [bold]{_pausaMin}[/] min entre eles. "
-                  + $"[grey]cada bloco sorteia em volta disso: {FaixaJitter(_bloco, JitterBloco)} "
-                  + $"mensagens e {FaixaJitter(_pausaMin, JitterPausa)} min. repetir os números cravados "
-                  + "seria o único trecho regular da série, que é o padrão que a pausa desmancha.[/]");
     }
 
     private void Janela(string[] partes)
@@ -2827,7 +3037,7 @@ internal sealed class PhoneConsoleCommand(
             _contatos.Clear();
             // 🔴 A QUARENTENA VAI JUNTO, e é dito em voz alta. Ela guarda CONTATOS, então deixá-la de pé
             // depois de "limpar tudo" faria a mensagem mentir: a sessão continuaria com 23 números
-            // dentro, invisíveis fora do menu, prontos pra reaparecer no `suspensos` de outro dia e
+            // dentro, invisíveis fora do menu, prontos pra reaparecer na planilha de outro dia e
             // parecerem lixo de origem desconhecida.
             quarentena = _suspensos.Count;
             _suspensos.Clear();
@@ -2854,54 +3064,143 @@ internal sealed class PhoneConsoleCommand(
     private void Menu(string serial)
     {
         var t = new Table().Border(TableBorder.Rounded).HideHeaders();
+        // 🔴 SEM ShowRowSeparators(), e isso foi TESTADO E DESCARTADO em 2026-08-20. Um traço entre cada
+        // opção resolvia no papel o que a linha em branco resolve por ausência, e na tela virou uma
+        // grade: com 16 opções, o menu passou a ter mais borda que conteúdo, e a moldura competia com a
+        // informação em vez de organizá-la. A linha em branco separa o suficiente e não desenha nada.
         t.AddColumn(new TableColumn("n").NoWrap());
         t.AddColumn(new TableColumn("o que é"));
         t.AddColumn(new TableColumn("agora"));
 
-        t.AddRow("[bold]1[/]", "ritmo entre mensagens", $"[bold]{_min}-{_max}s[/]");
-        t.AddRow("[bold]2[/]", "cota de envios por execução", $"[bold]{TetoDescrito()}[/]");
-        t.AddRow("[bold]b[/]", "blocos, pausa e janela",
-            (_bloco == 0
-                ? "[grey]fluxo contínuo[/]"
-                : $"~[bold]{_bloco}[/] por vez, pausa ~[bold]{_pausaMin}[/] min")
-            + $" [grey]· {JanelaDescrita()}[/]");
-        t.AddRow("[bold]d[/]", "digitação humana",
-            _digitacaoHumana
-                ? "[bold]ligada[/] [grey](só ASCII)[/]"
-                : "[grey]desligada[/] [green](aceita acento)[/]");
-        t.AddRow("[bold]segurar[/]", "não enviar sem a agenda confirmar",
-            _segurarNaoConfirmados
-                ? "[bold]ligado[/] [grey](não gasta em número morto)[/]"
-                : "[grey]desligado[/] [grey](só mede)[/]");
-        t.AddRow("[bold]bip[/]", "aviso sonoro por mensagem",
-            _bip ? "[bold]ligado[/] [grey](acompanha de ouvido)[/]" : "[grey]desligado[/]");
-        t.AddRow("[bold]4[/]", "contatos",
+        // 🔴 A ORDEM DO TOPO É A ORDEM DE OPERAR, e não a ordem em que os ajustes foram nascendo. Quem
+        // abre o console pela primeira vez lê a coluna de cima pra baixo e faz o lote: cola, grava,
+        // confere, escreve, agenda, dispara. Os ajustes que se mexem de vez em quando desceram para o
+        // bloco de baixo, porque ajuste no meio do fluxo faz o passo seguinte parecer opcional.
+        //
+        // 🔴 GRAVAR É O 2, e não uma conveniência lá embaixo: com o `segurar` ligado por padrão, o lote
+        // pergunta à agenda do aparelho se cada número tem WhatsApp, e sem a lista gravada a agenda não
+        // confirma ninguém, então o lote inteiro sai segurado. Ele não pode ser o 1 porque grava a
+        // lista COLADA: sem os contatos não há o que gravar.
+        //
+        // Tudo numerado, inclusive o que já foi `g`, `c`, `b`, `d`, `segurar` e `bip`: tecla de tipos
+        // diferentes na mesma coluna faz a mão parar para ler antes de escolher. A ÚNICA exceção é o
+        // `enviar`, e ela é o ponto: ver mais abaixo.
+        // UMA LINHA EM BRANCO ENTRE CADA OPÇÃO. Dezesseis linhas coladas viram um parágrafo, e num
+        // parágrafo o olho não acha a terceira linha sem contar as anteriores. O menu fica mais alto por
+        // causa disso, e é o preço combinado: ele é consultado item a item, não lido de ponta a ponta.
+        //
+        // O espaçamento uniforme apagaria os GRUPOS (o fluxo do lote, os ajustes, o disparo), que antes
+        // eram desenhados justamente pela linha em branco. Por isso a divisão passou a ser dita com
+        // todas as letras, numa linha de título, em vez de ficar implícita no espaço.
+        var primeiraDaSecao = true;
+        void Opcao(string tecla, string oQue, string agora)
+        {
+            if (!primeiraDaSecao)
+            {
+                t.AddEmptyRow();
+            }
+            primeiraDaSecao = false;
+            t.AddRow($"[bold]{tecla}[/]", oQue, agora);
+        }
+
+        void Secao(string titulo)
+        {
+            if (t.Rows.Count > 0)
+            {
+                t.AddEmptyRow();
+            }
+            t.AddRow("", $"[grey]{titulo}[/]", "");
+            primeiraDaSecao = true;
+        }
+
+        // O título do primeiro bloco saiu e VOLTOU no mesmo dia, a pedido do operador. O argumento para
+        // tirar era que ele não separa nada (não há o que vir antes da primeira linha); o argumento que
+        // o trouxe de volta é mais forte: sem ele, os três blocos de baixo têm nome e o de cima não, e
+        // um rótulo faltando no primeiro grupo faz parecer que os títulos começam no meio da tela.
+        Secao("o lote, na ordem");
+        Opcao("1", "contatos",
             (_contatos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_contatos.Count}[/] na lista")
             // A quarentena aparece AQUI e não numa linha própria de propósito: quem lê "12 na lista"
             // precisa saber, no mesmo lugar, que havia mais e que eles não sumiram.
             + (_suspensos.Count == 0 ? "" : $" [grey]· {_suspensos.Count} suspenso(s)[/]"));
-        t.AddRow("[bold]5[/]", "templates",
-            _textos.Count == 0 ? "[grey]vazio[/]" : $"[bold]{_textos.Count}[/] template(s)");
-        t.AddEmptyRow();
-        // Letras porque os dígitos acabaram, e renumerar 1..9 quebraria a memória de quem já usa.
-        t.AddRow("[bold]g[/]", "gravar", "[grey]grava a lista na agenda do aparelho, sem enviar[/]");
-        t.AddEmptyRow();
-        // 🔴 O `relatorio` e o `suspensos` entram AQUI, e não só no `comandos`. É a regra escrita no
-        // remarks acima, e eu tinha acabado de quebrá-la: comando que não está neste painel, na prática,
-        // não existe — a ajuda rola pra fora da tela e o `comandos` exige já saber que ele existe.
-        t.AddRow("[bold]suspensos[/]", "quarentena",
-            _suspensos.Count == 0
-                ? "[grey]vazia (quem o app negou sai da lista e para aqui)[/]"
-                : $"[bold]{_suspensos.Count}[/] [grey]guardado(s); devolve ou descarta[/]");
-        t.AddRow("[bold]relatorio[/]", "planilha", "[grey]gera o .xlsx do aparelho e abre (sai sozinho no fim do lote)[/]");
-        t.AddEmptyRow();
-        t.AddRow("[bold]6[/]", "ver", "[grey]confere o que está carregado[/]");
-        t.AddRow("[bold]c[/]", "conferir", "[grey]a forma de cada número: celular, legado ou fixo[/]");
-        t.AddRow("[bold]7[/]", "previa", "[grey]quem recebe qual texto[/]");
-        t.AddRow("[bold]8[/]", "enviar", "[grey]dispara o lote (pergunta antes)[/]");
-        t.AddEmptyRow();
-        t.AddRow("[bold]9[/]", "ajuda", "[grey]o passo a passo explicado[/]");
-        t.AddRow("[bold]0[/]", "sair", "[grey]fecha (tudo fica salvo)[/]");
+        // 🔴 NÃO PROMETE PRAZO, e a correção é de 2026-08-20: a linha dizia "espere 5 a 10 min pra
+        // sincronizar", e o operador perguntou como é que se sabe que não pode ser mais. Não se sabe.
+        // O que existe é UMA medição (2,5 a 7 min, 2026-07-23, neste parque de aparelhos), e ela não
+        // manda no relógio do WhatsApp: quem sincroniza é a conta Google do celular, com a rede dele.
+        // Número inventado com cara de regra é pior que nenhum número, porque quem esperou 10 min e
+        // ainda vê tudo segurado conclui que o console está quebrado.
+        Opcao("2", "gravar na agenda do aparelho",
+            "[grey]sem enviar nada; o WhatsApp só reconhece depois de sincronizar[/]");
+        Opcao("3", "conferir os números",
+            "[grey]a forma de cada um: celular, legado ou fixo[/]");
+        // 🔴 O {nome} APARECE NA COLUNA DO ESTADO, e não numa linha de instrução. A pergunta que ele
+        // responde é operacional, não didática: contato SEM nome só sorteia template SEM {nome}, então
+        // "3 template(s), 3 usam {nome}" com meia lista sem nome é um lote que vai parar no pré-voo.
+        // Ver isso no painel é ver o problema antes de ele virar recusa.
+        //
+        // Com a lista vazia não há estado para mostrar, e é exatamente aí que a dica cabe sem poluir:
+        // quem tem zero template é quem ainda não sabe que o token existe.
+        var comNome = _textos.Count(t => t.Contains(TokenNome, StringComparison.OrdinalIgnoreCase));
+        Opcao("4", "templates",
+            _textos.Count == 0
+                ? $"[grey]vazio (o texto pode ter[/] {TokenNome} [grey]ou ser fixo)[/]"
+                : $"[bold]{_textos.Count}[/] template(s) "
+                  + (comNome == 0
+                      ? $"[grey]· nenhum usa {TokenNome}[/]"
+                      : $"[grey]· {comNome} usa(m) {TokenNome}[/]"));
+        // 🔴 QUANTOS E QUANDO SÃO A MESMA PERGUNTA, e por isso são uma linha só desde 2026-08-20.
+        // Estavam em duas ("cota por execução" e "agenda de envios"), e quem lia via dois campos que
+        // se contradiziam na cara: a cota dizia 25 e a agenda dizia "sem agenda (usa a cota)", o que
+        // não explica nada a quem ainda não sabe que uma anula a outra. Uma opção com escolhas
+        // exclusivas não tem como ficar em estado contraditório.
+        Opcao("5", "quantos e quando enviar", QuantoDescrito());
+        Opcao("6", "previa", "[grey]quem recebe qual texto, e com quais ajustes[/]");
+
+        Secao("ajustes");
+        Opcao("7", "ritmo entre mensagens", $"[bold]{RitmoDescrito()}[/]");
+        Opcao("8", "janela permitida", $"[bold]{JanelaDescrita()}[/]");
+        Opcao("9", "digitação humana",
+            _digitacaoHumana
+                ? "[bold]ligada[/] [grey](só ASCII)[/]"
+                : "[grey]desligada[/] [green](aceita acento)[/]");
+        // O nome do comando por extenso continua NA LINHA, na coluna do meio: "segurar" e "bip" eram a
+        // própria tecla e sumiriam da tela ao virar número. Comando que não aparece no painel, na
+        // prática, não existe.
+        // 🔴 VERDE = O QUE ESTE ESTADO TE DÁ, e a cor é do PARÊNTESE, não do estado. Ligado nem sempre é
+        // bom e desligado nem sempre é ruim: a digitação humana DESLIGADA é que aceita acento. Pintar o
+        // "ligado" faria a coluna dizer que ligar é sempre o certo, que é falso em uma das três linhas.
+        // Pintando só o ganho, o olho varre a coluna procurando verde e lê os três do mesmo jeito.
+        Opcao("10", "segurar: não enviar sem a agenda confirmar",
+            _segurarNaoConfirmados
+                ? "[bold]ligado[/] [green](não gasta em número morto)[/]"
+                : "[grey]desligado[/] [grey](só mede)[/]");
+        Opcao("11", "bip: aviso sonoro por mensagem",
+            _bip ? "[bold]ligado[/] [green](acompanha de ouvido)[/]" : "[grey]desligado[/]");
+
+        // 🔴 ENVIAR NÃO TEM NÚMERO, e é a exceção consciente ao painel numerado. Ele é o único item
+        // irreversível daqui: com um dígito, ficava a uma tecla de distância de um ajuste inofensivo, e
+        // um "13" digitado no lugar de "12" abria o pré-voo do disparo. Escrever a palavra é uma
+        // barreira que dígito nenhum oferece, e custa seis letras uma vez por lote. A regra do painel
+        // numerado existe para a mão não parar antes de escolher; aqui parar é o que se quer.
+        Secao("disparar");
+        Opcao("enviar", "dispara o lote", "[grey]confere o aparelho, mostra o plano e PERGUNTA antes[/]");
+
+        // O FIM DO PAINEL É O FIM DO DIA, na ordem em que ele acontece: dispara, lê o resultado, fecha.
+        // A planilha ficava acima do disparo e quebrava essa leitura, porque ela é a única linha do
+        // menu que só faz sentido DEPOIS de algo ter saído.
+        //
+        // 🔴 A QUARENTENA VIVE AQUI DENTRO desde 2026-08-20, e não numa linha própria: ela virou uma aba
+        // da planilha, e duas portas para o mesmo dado obrigavam a abrir as duas para ter certeza. O que
+        // NÃO podia sumir junto era devolver e descartar: a suspensão automática é a única coisa no
+        // console que tira contato da fila sem ele ter recebido nada, e ela só se justifica por ser
+        // reversível. Por isso esta opção pergunta, logo depois de gerar o arquivo.
+        Secao("depois do lote");
+        Opcao("12", "planilha",
+            "[grey]gera o .xlsx e abre (sai sozinho no fim do lote)[/]"
+            + (_suspensos.Count == 0
+                ? ""
+                : $" [yellow]· {_suspensos.Count} em quarentena: devolve ou descarta aqui[/]"));
+        Opcao("0", "sair", "[grey]fecha (tudo fica salvo)[/]");
 
         AnsiConsole.Write(new Rule($"[bold]menu[/]  ·  aparelho [bold]{serial.EscapeMarkup()}[/]").LeftJustified());
         AnsiConsole.Write(t);
@@ -2919,27 +3218,38 @@ internal sealed class PhoneConsoleCommand(
             "[grey]digite o número, [/]x[grey] para excluir um item, ou o comando ([/]comandos[grey] lista todos).[/]");
     }
 
-    /// <summary>Mostra a quarentena e oferece devolver ou descartar.</summary>
+    /// <summary>Gera a planilha do aparelho e, se houver quarentena, oferece devolver ou descartar.
+    /// </summary>
     /// <remarks>
-    /// 🔴 PERGUNTA, NÃO DECIDE. A suspensão automática já é a única coisa no console que tira contato da
-    /// fila sem ele ter recebido nada, e ela só se justifica porque é REVERSÍVEL aqui. Descartar
-    /// sozinho, ou devolver sozinho, tiraria a reversibilidade e transformaria a suspensão numa
-    /// exclusão com nome bonito.
-    /// <para>O caso que faz isso valer a pena: chip restrito nega TODO mundo, e o operador que descobrir
-    /// isso depois quer a lista inteira de volta com um comando, não recolada à mão.</para>
+    /// 🔴 UMA PORTA SÓ, por decisão do operador em 2026-08-20. O `suspensos` era uma tela separada
+    /// listando quem saiu da fila, e a planilha passou a ter a aba Suspensos com os mesmos números e
+    /// mais o que o log sabe deles. Dois lugares mostrando o mesmo dado fazem quem confere abrir os
+    /// dois, e é isso que esta fusão desfaz.
+    /// <para>O que NÃO some junto é o devolver e o descartar: a suspensão automática é a única coisa no
+    /// console que tira contato da fila sem ele ter recebido nada, e ela só se justifica por ser
+    /// REVERSÍVEL. A pergunta vem DEPOIS de gerar o arquivo, de propósito: a decisão fica melhor com a
+    /// aba aberta na frente, e o caso que a motiva (chip restrito negando todo mundo) só se reconhece
+    /// olhando as tentativas.</para>
     /// </remarks>
-    private void Suspensos()
+    private void Planilha(string serial)
+    {
+        // Sem contexto de lote: o recorte vira o histórico inteiro, e a planilha diz isso na aba Resumo
+        // em vez de deixar parecer que aqueles números são de hoje.
+        GerarRelatorio(serial, null);
+        Quarentena();
+    }
+
+    /// <summary>A pergunta da quarentena: devolve, descarta, ou deixa como está.</summary>
+    private void Quarentena()
     {
         if (_suspensos.Count == 0)
         {
-            AnsiConsole.MarkupLine(
-                "[grey]nenhum contato suspenso.[/] [grey]eles aparecem aqui quando o WhatsApp afirma que "
-                + "o número não tem conta, nas duas formas do 9º dígito.[/]");
             return;
         }
 
         AnsiConsole.MarkupLine(
-            $"[yellow]{_suspensos.Count} contato(s) suspensos.[/] [grey]o app afirmou que estes números "
+            $"[yellow]{_suspensos.Count} contato(s) em quarentena[/] [grey](aba[/] [bold]Suspensos[/] "
+            + "[grey]da planilha, com a última tentativa de cada um). o app afirmou que estes números "
             + "não têm conta, e por isso eles saíram da fila de envio.[/]");
         MostrarAlguns(_suspensos.Count, 20,
             i => $"  [red]{_suspensos[i].Numero}[/] {(_suspensos[i].Nome ?? "").EscapeMarkup()}");
@@ -3053,7 +3363,10 @@ internal sealed class PhoneConsoleCommand(
             return;
         }
         AnsiConsole.MarkupLine($"[grey]{titulo} gravados:[/]");
-        MostrarAlguns(total, teto, i => $"  {linha(i)}", " (veja todos com ver)");
+        // O NÚMERO DA OPÇÃO, e não só o nome do comando: este rodapé aparece logo abaixo do painel, e
+        // ali a mão já está no teclado esperando um dígito. Mandar digitar "previa" no meio de uma tela
+        // que só pede número obriga a trocar de modo por um item de leitura.
+        MostrarAlguns(total, teto, i => $"  {linha(i)}", " (veja todos na opção 6, a previa)");
     }
 
     /// <summary>Uma linha só, para caber no menu. A quebra vira ⏎ visível: sem isso, uma mensagem de
@@ -3069,30 +3382,428 @@ internal sealed class PhoneConsoleCommand(
 
     // ── Ações do menu: perguntam o valor em vez de exigir a sintaxe do comando ────────────────────
 
+    /// <summary>Uma pergunta por número: o mínimo, depois o máximo. Enter mantém o que já vale.</summary>
+    /// <remarks>
+    /// 🔴 ERA UMA LINHA COM OS DOIS VALORES ("min max"), e não funcionava na prática: o operador
+    /// relatou em 2026-08-20 que não conseguia entrar com os dois. A pergunta pedia uma sintaxe (dois
+    /// números separados por espaço) numa tela que, em todo o resto do console, pede UM valor por vez.
+    /// Quem digitasse só um número, ou separasse por vírgula, caía na mensagem de uso.
+    /// <para>Com uma pergunta por número, a vírgula deixa de ser ambígua: sozinha numa linha, "2,5" só
+    /// pode ser dois e meio. Na linha com dois valores, "2,5" tanto podia ser 2,5 minutos quanto "de 2
+    /// a 5", e não havia como escolher sem adivinhar.</para>
+    /// <para>Enter em qualquer uma das duas mantém o valor atual, que na primeira vez é o de fábrica.
+    /// Quem não quer decidir não precisa: o padrão já é uma resposta.</para>
+    /// </remarks>
     private void IntervaloInterativo()
     {
-        AnsiConsole.Markup($"[grey]intervalo atual {_min}-{_max}s. novos valores \"min max\" (Enter mantém):[/] ");
-        var l = Console.ReadLine();
-        if (string.IsNullOrWhiteSpace(l))
+        AnsiConsole.MarkupLine(
+            $"[grey]ritmo atual: [/][bold]{RitmoDescrito()}[/][grey]. a espera de cada mensagem é "
+            + "sorteada entre os dois, para o lote não ter cara de máquina.[/]");
+
+        AnsiConsole.Markup($"[grey]mínimo, em minutos (Enter mantém {EmMinutos(_min)}):[/] ");
+        var minTexto = Console.ReadLine()?.Trim() ?? "";
+        AnsiConsole.Markup($"[grey]máximo, em minutos (Enter mantém {EmMinutos(_max)}):[/] ");
+        var maxTexto = Console.ReadLine()?.Trim() ?? "";
+
+        if (minTexto.Length == 0 && maxTexto.Length == 0)
         {
             AnsiConsole.MarkupLine("[grey]mantido.[/]");
             return;
         }
-        Intervalo(["intervalo", .. l.Split(' ', StringSplitOptions.RemoveEmptyEntries)]);
+
+        // Enter em UMA das duas mantém aquela e muda a outra: trocar só o máximo é o ajuste mais comum
+        // de quem quer espalhar mais o lote sem mexer no piso.
+        var novoMin = minTexto.Length == 0 ? _min : MinutosEmSegundos(minTexto);
+        var novoMax = maxTexto.Length == 0 ? _max : MinutosEmSegundos(maxTexto);
+        if (novoMin is not { } segMin || novoMax is not { } segMax)
+        {
+            AnsiConsole.MarkupLine(
+                "[red]não entendi o número.[/] [grey]digite minutos, como[/] 3 [grey]ou[/] 2,5[grey]. "
+                + "nada mudou.[/]");
+            return;
+        }
+        if (segMax < segMin)
+        {
+            AnsiConsole.MarkupLine(
+                $"[red]o máximo ({EmMinutos(segMax)} min) é menor que o mínimo ({EmMinutos(segMin)} min).[/] "
+                + "[grey]nada mudou.[/]");
+            return;
+        }
+
+        (_min, _max) = (segMin, segMax);
+        AnsiConsole.MarkupLine($"ritmo entre mensagens: [bold]{RitmoDescrito()}[/].");
+        AvisarRitmoCurto();
     }
 
-    private void TetoInterativo()
+    /// <summary>Liga e desliga a digitação caractere a caractere, e conta o que muda em troca.</summary>
+    /// <remarks>
+    /// 🔴 O CORPO SAIU DO SWITCH porque o mesmo botão tem duas entradas: o número do menu e a palavra
+    /// <c>digitacao</c>. Duplicar as duas linhas de estado seria duplicar a que escreve em
+    /// <see cref="PhoneOptions.HumanTyping"/>, e um dos lados esqueceria dela. O driver relê essa
+    /// propriedade a cada envio: sem ela, o menu diria "desligada" e o aparelho continuaria digitando.
+    /// </remarks>
+    private void AlternarDigitacaoHumana()
     {
-        AnsiConsole.Markup(
-            $"[grey]cota atual: {TetoDescrito()}. quantas mandar por execução, 0 = a lista toda "
-            + "(Enter mantém):[/] ");
-        var l = Console.ReadLine();
-        if (string.IsNullOrWhiteSpace(l))
+        _digitacaoHumana = !_digitacaoHumana;
+        options.Value.HumanTyping = _digitacaoHumana;
+        AnsiConsole.MarkupLine(_digitacaoHumana
+            ? "[bold]digitação humana LIGADA:[/] digita caractere a caractere, o destinatário vê "
+              + "\"digitando…\". [yellow]só ASCII: acento e emoji são barrados no pré-voo.[/]"
+            : "[bold]digitação humana DESLIGADA:[/] o texto vai pronto pelo deep link, então "
+              + "[green]aceita acento, emoji e quebra de linha[/]. "
+              + "[yellow]em troca não há digitação, e o destinatário não vê \"digitando…\".[/]");
+    }
+
+    /// <summary>Liga e desliga a checagem prévia na agenda antes de gastar o disparo.</summary>
+    private void AlternarSegurar()
+    {
+        _segurarNaoConfirmados = !_segurarNaoConfirmados;
+        AnsiConsole.MarkupLine(_segurarNaoConfirmados
+            ? "checagem prévia: [bold]ligada[/] [grey]— pergunta à agenda se o número tem "
+              + "WhatsApp antes de gastar o disparo. quem a agenda não confirmar é "
+              + "segurado e fica na lista.[/]"
+            : "checagem prévia: [grey]desligada — tenta todo mundo e descobre abrindo a "
+              + "conversa (gasta tentativa em número morto).[/]");
+    }
+
+    /// <summary>Liga e desliga o bip por mensagem, e toca uma amostra ao ligar.</summary>
+    private async Task AlternarBipAsync()
+    {
+        _bip = !_bip;
+        AnsiConsole.MarkupLine(_bip
+            ? "bip a cada mensagem: [bold]ligado[/] [grey](agudo curto = saiu; dois graves "
+              + "= não saiu). dá pra acompanhar o lote sem olhar a tela.[/]"
+            : "bip a cada mensagem: [grey]desligado (lote silencioso).[/]");
+        if (_bip)
         {
-            AnsiConsole.MarkupLine("[grey]mantido.[/]");
+            await BiparAsync(true); // amostra na hora: som que ninguém ouviu não foi configurado.
+        }
+    }
+
+    // ── Agenda de envios ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Cola a agenda igual se colam contatos e templates: uma etapa por linha.</summary>
+    /// <remarks>
+    /// 🔴 MESMO CONCEITO DA LISTA DE TEMPLATES, por pedido do operador em 2026-08-20: uma agenda é uma
+    /// LISTA, não um ajuste. Antes, "quantos e a que horas" era o par teto + janela, que só sabe
+    /// descrever UMA fatia por dia: "manda 50, entre 8h e 22h". Quem queria 50 de manhã e 30 à tarde
+    /// não tinha como dizer isso, e a saída era voltar ao console no meio da tarde para reconfigurar.
+    /// <para>Com a agenda, o console espera a hora e dispara a etapa sozinho. A previsão de término de
+    /// cada etapa é o que fecha o ciclo: é ela que deixa marcar a etapa seguinte sem chutar.</para>
+    /// </remarks>
+    private void LerAgenda(bool somar)
+    {
+        if (!somar)
+        {
+            _agenda.Clear();
+        }
+        AnsiConsole.MarkupLine(
+            "[grey]uma etapa por linha:[/] [bold]hora;quantos[/] [grey](espaço e vírgula também "
+            + "separam). exemplos:[/] 08:00;50   ·   14h30 30   ·   19 20");
+        AnsiConsole.MarkupLine(
+            "[grey]para terminar:[/] [bold]Enter numa linha vazia[/] [grey](Enter duas vezes no fim). "
+            + "também vale digitar[/] fim[grey].[/]");
+
+        var aceitos = 0;
+        var rejeitados = new List<string>();
+        while (true)
+        {
+            var l = Console.ReadLine();
+            if (FimDoBloco(l))
+            {
+                break;
+            }
+            var (item, erro) = ParseAgendamento(l!);
+            if (item is null)
+            {
+                rejeitados.Add($"{l!.Trim()} → {erro}");
+                continue;
+            }
+            _agenda.Add(item);
+            aceitos++;
+        }
+
+        // Ordenada pela hora, sempre. A agenda é lida como uma linha do tempo, e uma etapa das 8h
+        // depois de uma das 14h faria o operador conferir a ordem em vez de confiar nela.
+        _agenda.Sort((a, b) => a.Hora.CompareTo(b.Hora));
+        AnsiConsole.MarkupLine($"[green]{aceitos}[/] etapa(s) aceita(s); a agenda tem [bold]{_agenda.Count}[/].");
+        MostrarAlguns(rejeitados.Count, 10, i => $"[red]rejeitada:[/] {rejeitados[i].EscapeMarkup()}", " rejeitada(s)");
+        MostrarAgenda();
+    }
+
+    private void EditarAgendamento()
+    {
+        var n = 1;
+        if (_agenda.Count > 1)
+        {
+            MostrarAgenda();
+            AnsiConsole.Markup("[grey]qual etapa? (o número mostrado acima):[/] ");
+            if (!int.TryParse(Console.ReadLine()?.Trim(), out n) || n < 1 || n > _agenda.Count)
+            {
+                AnsiConsole.MarkupLine("[red]não há essa etapa.[/] a tabela mostra a numeração.");
+                return;
+            }
+        }
+        AnsiConsole.MarkupLine(
+            $"[grey]atual:[/] {_agenda[n - 1].Hora:HH\\:mm} · {_agenda[n - 1].Quantos} envio(s)");
+        AnsiConsole.Markup("[grey]nova etapa (hora;quantos, Enter cancela):[/] ");
+        var linha = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(linha))
+        {
+            AnsiConsole.MarkupLine("[grey]cancelado, nada mudou.[/]");
             return;
         }
-        Teto(["teto", l.Trim()]);
+        var (item, erro) = ParseAgendamento(linha);
+        if (item is null)
+        {
+            AnsiConsole.MarkupLine($"[red]{erro}[/] nada mudou.");
+            return;
+        }
+        _agenda[n - 1] = item;
+        _agenda.Sort((a, b) => a.Hora.CompareTo(b.Hora));
+        AnsiConsole.MarkupLine($"[green]etapa {n} atualizada.[/]");
+        MostrarAgenda();
+    }
+
+    /// <summary>A agenda com a PREVISÃO DE TÉRMINO de cada etapa, mais o que ela atropela.</summary>
+    /// <remarks>
+    /// 🔴 A PREVISÃO É O PRODUTO desta tela, não a lista. "50 envios às 8h" não diz nada sobre quando
+    /// dá pra marcar a próxima; "termina ~10:35" diz. O cálculo é o mesmo do pré-voo (ver
+    /// <see cref="EsperaDe"/>), de propósito: dois cálculos diferentes para a mesma pergunta fariam a
+    /// agenda e a confirmação do lote discordarem na cara do operador.
+    /// <para>É ESTIMATIVA e a tela diz isso: conta o ritmo entre mensagens e as pausas de bloco, e não
+    /// conta o tempo do envio em si (abrir conversa, digitar, tocar), que varia com o aparelho.</para>
+    /// </remarks>
+    private void MostrarAgenda()
+    {
+        if (_agenda.Count == 0)
+        {
+            AnsiConsole.MarkupLine(
+                "[grey]sem agenda: o lote sai quando você mandar, respeitando a cota e a janela.[/]");
+            return;
+        }
+
+        var t = new Table().Border(TableBorder.Rounded);
+        t.AddColumn("#");
+        t.AddColumn("começa");
+        t.AddColumn("envios");
+        t.AddColumn("termina ~");
+        t.AddColumn("observação");
+
+        var fimAnterior = TimeOnly.MinValue;
+        for (var i = 0; i < _agenda.Count; i++)
+        {
+            var (hora, quantos) = (_agenda[i].Hora, _agenda[i].Quantos);
+            var fim = hora.Add(EsperaDe(quantos));
+            var notas = new List<string>();
+
+            // Atravessou a meia-noite: o Add dá a volta no relógio, e uma etapa que termina "às 01:20"
+            // do dia seguinte não vai terminar coisa nenhuma, porque o console encerra fora da janela.
+            if (fim < hora)
+            {
+                notas.Add("[red]passa da meia-noite[/]");
+            }
+            if (i > 0 && hora < fimAnterior)
+            {
+                notas.Add($"[yellow]a etapa {i} ainda estará rodando[/]");
+            }
+            if (ForaDaJanela(hora))
+            {
+                notas.Add($"[yellow]fora da janela ({JanelaDescrita()})[/]");
+            }
+
+            t.AddRow(
+                $"[blue]{i + 1}[/]",
+                $"[bold]{hora:HH\\:mm}[/]",
+                quantos.ToString(CultureInfo.InvariantCulture),
+                $"[bold]{fim:HH\\:mm}[/]",
+                notas.Count == 0 ? "[grey]ok[/]" : string.Join(" · ", notas));
+            fimAnterior = fim;
+        }
+        AnsiConsole.Write(t);
+
+        var total = TotalAgendado();
+        AnsiConsole.MarkupLine(
+            $"[grey]total agendado:[/] [bold]{total}[/] [grey]envio(s) em {_agenda.Count} etapa(s). "
+            + "a previsão conta o ritmo, e NÃO conta o tempo de cada envio, então o término real fica "
+            + "um pouco depois.[/]");
+        if (_contatos.Count > 0 && total > _contatos.Count)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]a agenda pede {total} envios e a lista tem {_contatos.Count} contato(s).[/] "
+                + "[grey]as últimas etapas ficam sem quem mandar.[/]");
+        }
+
+        // 🔴 QUEM SOBREPÕE QUEM, DITO UMA VEZ E COM TODAS AS LETRAS. A tabela já marca cada etapa fora
+        // da janela na coluna de observação, mas marca não é regra: quem lê "fora da janela" ao lado de
+        // uma etapa não sabe se aquilo é aviso, impedimento, ou se a hora que ele acabou de escolher
+        // AUMENTA a janela. Não aumenta. A janela é conferida antes de CADA mensagem, então uma etapa
+        // marcada fora dela começa, bate na conferência e não manda nada.
+        var foraDaJanela = _agenda.Count(a => ForaDaJanela(a.Hora));
+        if (foraDaJanela > 0)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]{foraDaJanela} etapa(s) estão fora da janela ({JanelaDescrita()}) e NÃO vão "
+                + "mandar nada.[/] [grey]a janela do[/] [bold]8[/] [grey]manda sobre a hora daqui: "
+                + "marcar um horário aqui não abre a janela. abra o[/] [bold]8[/] [grey]ou mude a "
+                + "hora da etapa.[/]");
+        }
+    }
+
+    /// <summary>"Quantos e quando" numa pergunta só: sem limite, uma cota, ou etapas com hora.</summary>
+    /// <remarks>
+    /// 🔴 UMA OPÇÃO, TRÊS ESTADOS EXCLUSIVOS, e é isso que ela resolve. Cota e agenda eram duas linhas
+    /// do menu, e o operador leu "cota 25" logo acima de "sem agenda (usa a cota)" e perguntou o que
+    /// aquilo queria dizer. Com razão: eram dois campos descrevendo o MESMO limite, e a regra de qual
+    /// vence estava escrita em letra miúda em vez de estar na forma da tela. Escolher aqui apaga o
+    /// outro estado, então não existe mais combinação contraditória para explicar.
+    /// <para>Sem limite continua sendo o padrão, e é o que "não quero agendar nada" significa: manda a
+    /// lista inteira, no ritmo do ajuste 7, dentro da janela do 8.</para>
+    /// </remarks>
+    private void QuantoEQuando()
+    {
+        // Sem desmontar o markup do QuantoDescrito: as tags do Spectre ANINHAM, então basta fechar a
+        // minha antes de emendar a dele. A versão anterior arrancava as tags com Replace, o que quebra
+        // calado no dia em que a descrição ganhar uma cor que a lista de Replace não conhece.
+        AnsiConsole.MarkupLine($"[grey]hoje:[/] {QuantoDescrito()}[grey].[/]");
+        AnsiConsole.MarkupLine("  [bold]1[/] [grey]sem limite: manda a lista inteira de uma vez[/]");
+        AnsiConsole.MarkupLine("  [bold]2[/] [grey]uma cota: quantos envios nesta execução, sem hora marcada[/]");
+        AnsiConsole.MarkupLine("  [bold]3[/] [grey]agendar: etapas com hora e quantidade, com previsão de término[/]");
+        AnsiConsole.MarkupLine("  [bold]4[/] [grey]automático: a cota sai do histórico deste chip, lote a lote[/]");
+        AnsiConsole.Markup("[grey]escolha (Enter mantém):[/] ");
+
+        switch (Console.ReadLine()?.Trim())
+        {
+            // 🔴 NÃO limpa a agenda AQUI: quem limpa é o Teto, e ele AVISA antes de limpar. Fazer o
+            // Clear antes deixava o aviso mudo (ele só dispara com agenda de pé), e apagar 3 etapas
+            // que alguém montou, sem uma linha na tela, é destruir trabalho em silêncio.
+            case "1":
+                Teto(["teto", "0"]);
+                break;
+            case "2":
+                AnsiConsole.Markup("[grey]quantos envios nesta execução?[/] ");
+                var quantos = Console.ReadLine()?.Trim() ?? "";
+                // Zero aqui é engano, não "sem limite": quem quer a lista inteira acabou de ver a
+                // linha 1. Aceitar zero calado devolveria a ambiguidade que esta tela desfez.
+                if (quantos.Length == 0 || quantos == "0")
+                {
+                    AnsiConsole.MarkupLine(
+                        "[grey]mantido. para mandar a lista inteira, escolha[/] [bold]1[/][grey].[/]");
+                    return;
+                }
+                // Valida ANTES de delegar: o `Teto` responde com a sintaxe do comando por extenso
+                // ("uso: teto <n>"), que é a resposta certa para quem digitou um comando e a errada
+                // para quem está dentro de um menu e nunca viu esse comando.
+                if (!int.TryParse(quantos, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cota)
+                    || cota < 0)
+                {
+                    AnsiConsole.MarkupLine(
+                        "[red]não entendi o número.[/] [grey]digite quantos envios, como[/] 25[grey]. "
+                        + "nada mudou.[/]");
+                    return;
+                }
+                Teto(["teto", cota.ToString(CultureInfo.InvariantCulture)]);
+                break;
+            case "3":
+                switch (PerguntarModo(_agenda.Count, "etapa(s) agendada(s)"))
+                {
+                    case ModoLista.Editar: EditarAgendamento(); break;
+                    case ModoLista.Cancelar: AnsiConsole.MarkupLine("[grey]cancelado.[/]"); break;
+                    case var m: LerAgenda(somar: m == ModoLista.Acrescentar); break;
+                }
+                break;
+            case "4":
+                Teto(["teto", "auto"]);
+                break;
+            default:
+                AnsiConsole.MarkupLine("[grey]mantido.[/]");
+                break;
+        }
+    }
+
+    /// <summary>O estado de "quantos e quando" em uma linha, para o menu.</summary>
+    private string QuantoDescrito() =>
+        _agenda.Count > 0
+            ? AgendaDescrita()
+            : _tetoAuto
+                ? "[bold]automático[/] [grey](pelo histórico do chip)[/]"
+                : _teto == 0
+                    ? "[bold]sem limite[/] [grey](a lista inteira, de uma vez)[/]"
+                    : $"cota de [bold]{_teto}[/] [grey]envio(s) nesta execução[/]";
+
+    /// <summary>Quantos envios a agenda inteira pede.</summary>
+    /// <remarks>
+    /// 🔴 SOMA EM <c>long</c> E VOLTA CLAMPADA, e isso não é preciosismo: o <c>Sum</c> de <c>int</c> do
+    /// LINQ é CHECKED, então duas etapas grandes o bastante não devolvem um número errado, elas
+    /// levantam <c>OverflowException</c> — e esta soma é lida na hora de DESENHAR O MENU, fora de
+    /// qualquer try. O console morreria ao redesenhar o painel, sem lote nenhum rodando, por causa de
+    /// um número digitado numa etapa. Somar em long e clampar troca uma quebra por um valor absurdo
+    /// visível na tela, que é o modo de falha certo aqui.
+    /// </remarks>
+    private int TotalAgendado()
+    {
+        var total = _agenda.Sum(a => (long)a.Quantos);
+        return total > int.MaxValue ? int.MaxValue : (int)total;
+    }
+
+    /// <summary>Uma linha só, para o menu.</summary>
+    private string AgendaDescrita() =>
+        _agenda.Count == 0
+            ? "[grey]sem agenda (usa a cota)[/]"
+            : $"[bold]{_agenda.Count}[/] etapa(s), [bold]{TotalAgendado()}[/] envio(s)"
+              + $" [grey]· {_agenda[0].Hora:HH\\:mm} até ~{_agenda[^1].Hora.Add(EsperaDe(_agenda[^1].Quantos)):HH\\:mm}[/]";
+
+    /// <summary>"08:00;50", "14h30 30", "19 20". Devolve o erro em português quando não dá.</summary>
+    private static (Agendamento? Item, string? Erro) ParseAgendamento(string linha)
+    {
+        var partes = (linha ?? "")
+            .Replace(';', ' ')
+            .Replace(',', ' ')
+            .Replace('\t', ' ')
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length < 2)
+        {
+            return (null, "faltou a hora ou a quantidade. exemplo: 08:00;50");
+        }
+        if (ParseHora(partes[0]) is not { } hora)
+        {
+            return (null, $"não entendi a hora \"{partes[0]}\". use 08:00, 8h30 ou 19");
+        }
+        if (!int.TryParse(partes[1], out var quantos) || quantos <= 0)
+        {
+            return (null, $"\"{partes[1]}\" não é uma quantidade de envios");
+        }
+        return (new Agendamento(hora, quantos), null);
+    }
+
+    /// <summary>Aceita 8, 08, 8h, 8h30, 8:30 e 08:30. Hora sem minuto vale a hora cheia.</summary>
+    private static TimeOnly? ParseHora(string texto)
+    {
+        var t = texto.Trim().ToLowerInvariant().Replace('h', ':').TrimEnd(':');
+        if (!t.Contains(':', StringComparison.Ordinal))
+        {
+            t += ":00";
+        }
+        return TimeOnly.TryParse(t, CultureInfo.InvariantCulture, out var hora) ? hora : null;
+    }
+
+    /// <summary>Quanto tempo N envios levam SÓ DE ESPERA, no ritmo de agora.</summary>
+    /// <remarks>
+    /// Uma conta só, usada pela agenda e pelo pré-voo: dois cálculos para a mesma pergunta fariam as
+    /// duas telas discordarem na cara do operador. NÃO conta o tempo do envio em si (abrir conversa,
+    /// digitar, tocar), que varia com o aparelho, e as duas telas dizem isso.
+    /// </remarks>
+    private TimeSpan EsperaDe(int quantos) => EsperaDe(quantos, _min, _max);
+
+    private TimeSpan EsperaDe(int quantos, double min, double max)
+    {
+        if (quantos <= 1)
+        {
+            return TimeSpan.Zero;
+        }
+        // N mensagens têm N-1 intervalos entre elas, e cada intervalo é sorteado entre min e max: a
+        // média é o único número honesto para uma previsão.
+        return TimeSpan.FromSeconds((quantos - 1) * ((min + max) / 2.0));
     }
 
     private enum ModoLista { Substituir, Acrescentar, Editar, Cancelar }
@@ -3146,6 +3857,7 @@ internal sealed class PhoneConsoleCommand(
         }
         AnsiConsole.MarkupLine($"[grey]atual:[/]\n{_textos[n - 1].EscapeMarkup()}");
         AnsiConsole.MarkupLine("[grey]novo texto (pode ter várias linhas; linha vazia termina, Enter direto cancela):[/]");
+        ExplicarLinhaEmBranco();
         var (novo, _) = LerVariante();
         if (novo is null)
         {
@@ -3192,114 +3904,40 @@ internal sealed class PhoneConsoleCommand(
         AnsiConsole.MarkupLine($"[green]linha {n} atualizada.[/]");
     }
 
-    /// <summary>O passo a passo inteiro, na ordem de uso. Aparece sozinha ao abrir e volta com
-    /// "ajuda" (ou 9).</summary>
-    private static void Ajuda()
-    {
-        AnsiConsole.Write(new Rule("[bold]como usar, do começo ao fim[/]").LeftJustified());
-        AnsiConsole.MarkupLine("[grey]cada passo aceita o NÚMERO do menu ou o comando por extenso.[/]");
-
-        // Texto curto NÃO é economia de espaço: passando de ~60 caracteres o Spectre quebra a linha e
-        // a continuação volta pra coluna zero, perdendo o alinhamento que faz a tabela ser legível.
-        // Texto curto NÃO é economia de espaço: passando de ~60 caracteres o Spectre quebra a linha e
-        // a continuação volta pra coluna zero, perdendo o alinhamento que faz a tabela ser legível.
-        Passo(1, "ritmo entre as mensagens",
-            ("digite", "1   ou   intervalo 240 600"),
-            ("resulta", "espera de 4 a 10 min entre mensagens, sorteada"),
-            ("use", "240 600 com chip novo. o default é 150 360"));
-
-        Passo(2, "limite por disparo",
-            ("digite", "2   ou   teto 5"),
-            ("resulta", "lista maior que 5 é recusada ANTES de começar"),
-            ("use", "baixo: colagem errada vira recusa, não rajada"));
-
-        Passo(3, "gravar a lista na agenda",
-            ("digite", "g   ou   gravar"),
-            ("resulta", "grava a lista inteira no celular, SEM enviar nada"),
-            ("espere", "5 a 10 min: o WhatsApp leva esse tempo pra reconhecer"),
-            ("por quê", "só depois disso ele sabe quem tem WhatsApp"),
-            ("já salvo", "detecta e não grava de novo, nem sobrescreve"));
-
-        Passo(4, "colar os contatos",
-            ("digite", "4   ou   contatos"),
-            // Exemplo com número obviamente falso e nome de espaço reservado: a ajuda é impressa em
-            // toda abertura, e número real de alguém não tem por que virar cartaz permanente.
-            ("cole", "5511999999999;Nome"),
-            ("feche", "Enter numa linha vazia (Enter 2x no fim), ou: fim"),
-            ("formato", "numero   ou   numero;nome"),
-            ("o nome", "só é preciso se você usar {nome} no texto"));
-
-        Passo(5, "colar os textos",
-            ("digite", "5   ou   textos"),
-            ("cole", "Ola {nome}, tudo bem?"),
-            ("+linhas", "continue digitando: a mensagem pode ter várias linhas"),
-            ("separa", "linha vazia fecha o template e começa o próximo"),
-            ("em branco", ".. numa linha sozinha vira linha vazia DENTRO do texto"),
-            ("encerra", "outra linha vazia, ou digite: fim"),
-            ("acento", "ele oferece tirar sozinho; ou tecle d pra aceitar acento"),
-            ("sorteio", "cada contato recebe UM template sorteado"),
-            ("sem nome", "contato sem nome só sorteia templates sem {nome}"));
-
-        Passo(6, "errou algo? conserte só aquilo",
-            ("corrigir", "entre de novo no 4 ou no 5 e escolha 1 (é o padrão)"),
-            ("resulta", "mostra o texto atual e você reescreve por cima"),
-            ("apagar", "x   (pergunta se é contato ou texto, e qual)"),
-            ("atalho", "x contato 3   ·   x texto 2   ·   x contato 5511999999999"));
-
-        Passo(7, "conferir antes",
-            ("6  ver", "contatos, templates e a configuração atual"),
-            ("7  previa", "quem recebe qual texto, sem tocar no aparelho"),
-            ("c", "a forma de cada número: celular, legado ou fixo"),
-            ("atencao", "o que vale nao e o total de digitos"),
-            ("regra", "o digito depois do DDD tem que ser 6 a 9"));
-
-        Passo(8, "disparar",
-            ("digite", "8   ou   enviar"),
-            ("resulta", "confere o aparelho, mostra o plano e PERGUNTA"),
-            ("atenção", "nada sai enquanto você não digitar: sim"),
-            ("depois", "quem RECEBEU sai da lista; quem falhou fica"));
-
-        // Uma linha, não quatro. O menu logo abaixo já mostra o estado salvo, então repetir "fica
-        // salvo" em prosa é ruído que a pessoa aprende a pular, e junto com ele o resto.
-        AnsiConsole.MarkupLine(
-            "\n[grey]colar: botão direito do mouse  ·  Ctrl+C encerra  ·[/] [bold]comandos[/][grey]: lista seca[/]");
-    }
-
-    private static void Passo(int numero, string titulo, params (string Rotulo, string Texto)[] linhas)
-    {
-        AnsiConsole.MarkupLine($"\n [bold]{numero}. {titulo}[/]");
-        foreach (var (rotulo, texto) in linhas)
-        {
-            AnsiConsole.MarkupLine($"    [blue]{rotulo,-9}[/] {texto.EscapeMarkup()}");
-        }
-    }
-
     private static void Comandos()
     {
         var t = new Table().Border(TableBorder.Rounded).AddColumn("comando").AddColumn("o que faz");
-        t.AddRow("gravar", "grava a lista na agenda do aparelho, SEM enviar nada");
+        t.AddRow("gravar [grey]| g[/]", "grava a lista na agenda do aparelho, SEM enviar nada");
         t.AddRow("contatos [grey]| contatos +[/]", "cola a lista (substitui | soma). formato: numero ou numero;nome");
         t.AddRow("textos [grey]| textos +[/]", $"cola os templates (substitui | soma). {TokenNome} vira o nome do contato");
-        t.AddRow("[grey]  (ao colar)[/] ..", "numa linha sozinha, vira uma linha em BRANCO dentro do texto");
-        t.AddRow("ver", "mostra a lista, os templates e os ajustes atuais");
-        t.AddRow("previa", "simula quem receberia qual template, sem tocar no aparelho");
+        t.AddRow("[grey]  (na opção 4)[/] ..",
+            "DOIS pontos numa linha sozinha viram uma linha em BRANCO dentro do texto; um ponto só encerra");
+        t.AddRow("agenda [grey]| agenda +[/]", "cola as etapas do dia (substitui | soma). formato: hora;quantos");
+        t.AddRow("previa [grey]| ver[/]", "simula quem receberia qual template, e mostra os ajustes do lote");
         t.AddRow("conferir [grey]| c[/]", "classifica cada número: celular, legado, fixo ou faltando o 9º dígito");
         t.AddRow("enviar", "pré-voo, plano, confirmação e disparo do lote");
         t.AddRow("status", "reconsulta o aparelho pelo adb");
-        t.AddRow("intervalo <min> <max>", "segundos entre um envio e o próximo (default 150 360)");
-        t.AddRow("blocos <n> <min> [grey]| b[/]", "manda ~n, pausa ~min minutos, repete (default 15 e 30; n=0 desliga)");
-        t.AddRow("janela <ini> <fim>", "horas em que é permitido enviar (default 8 22)");
-        t.AddRow("teto <n> [grey]| teto auto[/]", "cota de ENVIOS desta execução; auto deriva do histórico do chip");
+        t.AddRow("intervalo <min> <max>", "MINUTOS entre um envio e o próximo (default 2,5 a 5; aceita 2,5)");
+        // 🔴 O DEFAULT AQUI ESTAVA ERRADO e foi pego pelo operador em 2026-08-20: dizia "8 22", que é o
+        // default do WarmupEngineOptions no servidor, não o deste console. A janela nasce ABERTA (0-24)
+        // por decisão registrada no campo, justamente para o console poder rodar em qualquer horário.
+        // Lista de referência que mente sobre um default é pior que lista incompleta: quem confere um
+        // comportamento estranho contra ela conclui que o programa é que está errado.
+        t.AddRow("janela <ini> <fim>", "horas em que é permitido enviar (default 0 24 = qualquer horário)");
+        t.AddRow("teto <n> [grey]| teto auto[/]",
+            "cota de ENVIOS desta execução, usada quando NÃO há agenda; auto deriva do histórico do chip");
         t.AddRow("chip novo", "você REGISTROU outra conta neste aparelho: o aquecimento recomeça do zero");
         t.AddRow("parar <n>", "falhas seguidas que interrompem o lote (default 0 = nunca interrompe)");
         t.AddRow("bip [grey]| som[/]", "liga/desliga o aviso sonoro (agudo = saiu, dois graves = não saiu)");
         t.AddRow("segurar", "liga/desliga NÃO enviar quando a agenda não confirma que o número tem WhatsApp");
-        t.AddRow("relatorio [grey]| planilha[/]", "gera o .xlsx com o histórico do aparelho e abre");
-        t.AddRow("suspensos", "quem saiu da lista por não ter conta; devolve ou descarta");
+        t.AddRow("digitacao", "liga/desliga digitar caractere a caractere (DESLIGADA por padrão; ligada só sai ASCII)");
+        t.AddRow("planilha [grey]| relatorio | suspensos[/]",
+            "gera o .xlsx (com a aba Suspensos), abre, e oferece devolver ou descartar a quarentena");
         t.AddRow("x [grey][[contato|texto]] [[n]][/]", "exclui UM item (pergunta se você não disser qual)");
         t.AddRow("limpar [grey][[contatos|textos|tudo]][/]", "esvazia o que você pedir");
-        t.AddRow("ajuda", "o passo a passo explicado, o mesmo que aparece ao abrir");
-        t.AddRow("sair", "fecha o console (a lista fica salva)");
+        t.AddRow("acentos [grey]| semacento[/]", "tira os acentos de todos os templates (só faz falta com a digitação LIGADA)");
+        t.AddRow("comandos [grey]| ajuda | ? | help[/]", "esta lista");
+        t.AddRow("sair [grey]| exit | quit[/]", "fecha o console (a lista fica salva)");
         AnsiConsole.Write(t);
         AnsiConsole.MarkupLine("[grey]Ctrl+C interrompe o lote em andamento e encerra o console.[/]");
     }
@@ -3391,6 +4029,16 @@ internal sealed class PhoneConsoleCommand(
             {
                 _suspensos.Add(Desserializar(linha));
             }
+            foreach (var linha in e.AgendaDeEnvios ?? [])
+            {
+                // Linha corrompida à mão no JSON não derruba o console nem apaga a agenda inteira:
+                // entra o que dá pra entender, some o que não dá.
+                if (ParseAgendamento(linha) is { Item: { } etapa })
+                {
+                    _agenda.Add(etapa);
+                }
+            }
+            _agenda.Sort((a, b) => a.Hora.CompareTo(b.Hora));
             _textos.AddRange(e.Textos);
             (_min, _max, _digitacaoHumana) = (e.MinDelay, e.MaxDelay, e.DigitacaoHumana);
             if (e.Teto is { } teto)
@@ -3414,19 +4062,39 @@ internal sealed class PhoneConsoleCommand(
                 _tetoAuto = ta;
             }
             (_conta, _chipDesde) = (e.Conta, e.ChipDesde);
-            if (e.Bloco is { } b)
-            {
-                _bloco = Math.Clamp(b, 0, 200);
-            }
-            if (e.PausaMin is { } p)
-            {
-                _pausaMin = Math.Clamp(p, 1, 720);
-            }
+            // e.Bloco e e.PausaMin são LIDOS E IGNORADOS de propósito: o ajuste saiu do console em
+            // 2026-08-20 e o campo fica no record só para sessão antiga não quebrar ao desserializar.
             // Só aceita o par se ele for coerente. Janela invertida gravada por um bug antigo deixaria
             // o console MUDO para sempre, e é o defeito que o HumanPhaseAutoSender já documenta.
             if (e.HoraInicio is { } hi && e.HoraFim is { } hf && hi >= 0 && hf <= 24 && hi < hf)
             {
                 (_horaInicio, _horaFim) = (hi, hf);
+            }
+
+            // Sessão gravada antes dos padrões de 2026-08-20: os três toggles voltam ao padrão UMA vez,
+            // com aviso. Ver Estado.Versao para o porquê de não dar pra ser mais esperto que isso.
+            if (e.Versao is null)
+            {
+                (_digitacaoHumana, _segurarNaoConfirmados, _bip) = (false, true, true);
+                AnsiConsole.MarkupLine(
+                    "[yellow]os padrões mudaram e este aparelho foi ajustado uma vez:[/] [grey]digitação "
+                    + "humana DESLIGADA (aceita acento), segurar LIGADO (não gasta em número morto), bip "
+                    + "LIGADO. os três continuam em[/] [bold]9[/][grey],[/] [bold]10[/] [grey]e[/] "
+                    + "[bold]11[/][grey], e a sua escolha a partir de agora manda.[/]");
+            }
+
+            // 🔴 O RITMO NOVO SÓ ALCANÇA QUEM NUNCA ESCOLHEU UM, e o teste de "nunca escolheu" é o valor
+            // ser exatamente o padrão anterior. É a mesma ideia que o console já usa para o preenchimento
+            // automático do teto: o valor em si responde a pergunta, sem um flag a mais para persistir.
+            // Sobrescrever um ritmo escolhido à mão seria desfazer trabalho do operador em silêncio, que
+            // é justamente o que a marca de versão existe para não fazer.
+            if (e.Versao is null or < 3 && _min == MinPadrao && _max == MaxPadraoAntigo)
+            {
+                _max = MaxPadrao;
+                AnsiConsole.MarkupLine(
+                    $"[yellow]o ritmo de fábrica mudou para {RitmoDescrito()}[/] [grey]e este aparelho "
+                    + "estava com o anterior, sem nunca ter escolhido um. mude no[/] [bold]7[/] "
+                    + "[grey]quando quiser.[/]");
             }
             if (_contatos.Count > 0 || _textos.Count > 0)
             {
@@ -3467,13 +4135,12 @@ internal sealed class PhoneConsoleCommand(
             {
                 Contatos = [.. _contatos.Select(Serializar)],
                 Suspensos = [.. _suspensos.Select(Serializar)],
+                AgendaDeEnvios = [.. _agenda.Select(a => $"{a.Hora:HH\\:mm};{a.Quantos}")],
                 Textos = [.. _textos],
                 MinDelay = _min,
                 MaxDelay = _max,
                 Teto = _teto,
                 PararEm = _pararEm,
-                Bloco = _bloco,
-                PausaMin = _pausaMin,
                 HoraInicio = _horaInicio,
                 HoraFim = _horaFim,
                 DigitacaoHumana = _digitacaoHumana,
@@ -3482,6 +4149,7 @@ internal sealed class PhoneConsoleCommand(
                 TetoAuto = _tetoAuto,
                 Conta = _conta,
                 ChipDesde = _chipDesde,
+                Versao = VersaoDosPadroes,
             };
             // 🔴 ESCREVE NUM TEMPORÁRIO E TROCA, em vez de sobrescrever direto.
             //
